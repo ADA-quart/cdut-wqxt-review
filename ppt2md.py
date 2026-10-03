@@ -79,6 +79,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="只处理前 N 张（0=全部）")
     ap.add_argument("--json", action="store_true", help="逐行输出 JSON 进度（供后端解析）")
     ap.add_argument("--no-pdf", action="store_true", help="不生成课件 PDF、不插入翻页链接")
+    ap.add_argument("--dedup", action="store_true", help="先清洗（空白帧/渐进重复），并生成人工复核页面")
     args = ap.parse_args()
 
     emit = make_emitter(args.json)
@@ -90,6 +91,20 @@ def main():
         sys.exit(1)
 
     images = collect_images(src)
+    report_path = None
+    if args.dedup:
+        import dedup as dedup_mod
+
+        state = dedup_mod.prepare(images, src)
+        kept_names = {fr["name"] for fr in state["frames"] if fr["keep"] or fr.get("restored")}
+        removed = state["total"] - len(kept_names)
+        images = [p for p in images if p.name in kept_names]
+        report_path = dedup_mod.state_paths(src)[1]
+        emit(
+            {"type": "dedup", "total": state["total"], "kept": len(images), "removed": removed,
+             "restored": len(state.get("restore", [])), "report": str(report_path)},
+            f"[i] 清洗：保留 {len(images)}/{state['total']} 帧（移除 {removed}，已恢复 {len(state.get('restore', []))}），复核页面已生成",
+        )
     if args.limit:
         images = images[: args.limit]
     if not images:
@@ -162,6 +177,7 @@ def main():
     emit(
         {"type": "done", "ok": ok, "total": len(images), "out": str(out_path),
          "assets": str(assets_dir), "pdf": str(pdf_path) if pdf_path else None,
+         "report": str(report_path) if report_path else None,
          "secs": round(time.time() - t0, 1)},
         f"[OK] 完成：{out_path}（{ok}/{len(images)} 页, 总耗时 {time.time()-t0:.1f}s）",
     )

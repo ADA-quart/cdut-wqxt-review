@@ -19,12 +19,13 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DOWNLOAD_DIR, PUBLIC_DIR, ensureDir } from './paths.mjs';
+import { spawn } from 'node:child_process';
+import { DOWNLOAD_DIR, PUBLIC_DIR, ROOT_DIR, ensureDir, ensureInside } from './paths.mjs';
 import { checkLogin, login, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
 import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
-  events as mdEvents,
+  findPython, events as mdEvents,
 } from './mdconvert.mjs';
 import { publicConfig, saveConfig } from './config.mjs';
 import {
@@ -141,6 +142,74 @@ app.post('/api/md-jobs/:id/cancel', (req, res) => {
   if (!job) return res.status(404).json({ error: '任务不存在' });
   res.json({ job });
 });
+
+// ---------- 图片清洗（去重预检 / 人工复核） ----------
+
+/** 跑 dedup.py，解析它输出的 JSON 摘要 */
+function runDedupScan(absDir) {
+  const python = findPython();
+  if (!python) throw new Error('未找到 Python 环境（先运行 setup-p2t.ps1）');
+  const script = path.join(ROOT_DIR, 'dedup.py');
+  if (!fs.existsSync(script)) throw new Error('缺少 dedup.py');
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(python, [script, absDir, '--json'], {
+      cwd: ROOT_DIR,
+      windowsHide: true,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => { try { child.kill(); } catch {} reject(new Error('清洗分析超时')); }, 180000);
+    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
+    child.stderr.on('data', (d) => { err += d.toString('utf8'); });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error((err || out || `退出码 ${code}`).slice(-300)));
+      const line = out.trim().split('\n').filter(Boolean).pop();
+      try {
+        resolve(JSON.parse(line));
+      } catch {
+        reject(new Error('清洗结果解析失败：' + out.slice(-200)));
+      }
+    });
+  });
+}
+
+app.post('/api/dedup-scan', asyncRoute(async (req, res) => {
+  const relDir = String(req.body?.dir || '').replace(/^[/\\]+/, '');
+  if (!relDir) return res.status(400).json({ error: '缺少 dir' });
+  const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
+  if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) {
+    return res.status(404).json({ error: `目录不存在：${relDir}` });
+  }
+  const summary = await runDedupScan(absDir);
+  const reportRel = path.relative(DOWNLOAD_DIR, summary.report).split(path.sep).join('/');
+  res.json({
+    lesson: summary.lesson,
+    total: summary.total,
+    kept: summary.kept,
+    removed: summary.removed,
+    restored: summary.restored,
+    report: '/files/' + reportRel.split('/').map(encodeURIComponent).join('/'),
+  });
+}));
+
+app.post('/api/dedup-decisions', asyncRoute(async (req, res) => {
+  const relDir = String(req.body?.dir || '').replace(/^[/\\]+/, '');
+  const restore = Array.isArray(req.body?.restore) ? req.body.restore.map(String) : [];
+  if (!relDir) return res.status(400).json({ error: '缺少 dir' });
+  const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
+  const jsonPath = path.join(path.dirname(absDir), `${path.basename(absDir)}.dedup.json`);
+  if (!fs.existsSync(jsonPath)) return res.status(404).json({ error: '还没有清洗数据，请先执行「清洗」' });
+
+  const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  const valid = new Set(data.frames.filter((f) => !f.keep).map((f) => f.name));
+  data.restore = restore.filter((n) => valid.has(n));
+  fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), 'utf8');
+  res.json({ ok: true, restoreCount: data.restore.length });
+}));
 
 // ---------- LLM 配置与文档操作（纠错 / 总结） ----------
 

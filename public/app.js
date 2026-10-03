@@ -407,6 +407,14 @@ function renderMdJobCard(j) {
     openPdf.textContent = '打开 PDF';
     right.append(document.createTextNode(' '), openPdf);
   }
+  if (j.status === 'done' && j.report) {
+    const openReport = document.createElement('a');
+    openReport.className = 'btn';
+    openReport.href = '/files/' + j.report.split('/').map(encodeURIComponent).join('/');
+    openReport.target = '_blank';
+    openReport.textContent = '清洗复核';
+    right.append(document.createTextNode(' '), openReport);
+  }
 
   head.append(left, right);
 
@@ -604,6 +612,13 @@ function renderTree(nodes) {
       const kids = node.children || [];
       const hasImages = kids.some((c) => c.type === 'file' && /\.(jpe?g|png|webp|bmp)$/i.test(c.name));
       if (hasImages) {
+        const clean = document.createElement('button');
+        clean.className = 'btn tiny';
+        clean.textContent = '清洗';
+        clean.title = '先做去重预检：生成「前一帧/被删帧/后一帧」复核页，可勾选恢复';
+        clean.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startDedupScan(node, clean); };
+        summary.appendChild(clean);
+
         const btn = document.createElement('button');
         btn.className = 'btn tiny';
         btn.textContent = node.hasMd ? '重新转 MD' : '转 MD';
@@ -670,10 +685,28 @@ async function startMdJob(node, btn) {
   btn.disabled = true;
   btn.textContent = '提交中…';
   try {
-    await api('/md-jobs', { method: 'POST', body: { dir: node.rel } });
-    toast(`已提交转换：${node.name}`, 'ok');
+    const dedup = $('dedupChk') ? $('dedupChk').checked : true;
+    await api('/md-jobs', { method: 'POST', body: { dir: node.rel, dedup } });
+    toast(`已提交转换：${node.name}${dedup ? '（自动去重）' : ''}`, 'ok');
   } catch (e) {
     toast('转换提交失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+async function startDedupScan(node, btn) {
+  if (!node.rel) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '分析中…';
+  try {
+    const r = await api('/dedup-scan', { method: 'POST', body: { dir: node.rel } });
+    toast(`清洗预检：保留 ${r.kept}/${r.total}，移除 ${r.removed}（已恢复 ${r.restored}）`, 'ok');
+    window.open(r.report, '_blank');
+  } catch (e) {
+    toast('清洗预检失败：' + e.message, 'err');
   } finally {
     btn.disabled = false;
     btn.textContent = original;
@@ -764,6 +797,14 @@ $('btnDownloadAll').onclick = async () => {
 };
 
 $('btnCloseSubs').onclick = () => { $('subsModal').hidden = true; };
+
+// 去重开关记忆
+try {
+  if (localStorage.getItem('wqppt_dedup') === '0') $('dedupChk').checked = false;
+} catch {}
+$('dedupChk').onchange = () => {
+  try { localStorage.setItem('wqppt_dedup', $('dedupChk').checked ? '1' : '0'); } catch {}
+};
 
 $('btnLlmConfig').onclick = openLlmConfig;
 $('btnCancelLlm').onclick = () => { $('llmModal').hidden = true; };
