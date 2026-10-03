@@ -1283,7 +1283,7 @@ async function markCurrent(kind) {
   const sec = currentVisibleSection();
   if (!sec) { toast('先翻到要标记的那一页'); return; }
   const page = Number(sec.dataset.page);
-  const text = sectionText(sec).slice(0, 600);
+  const text = (sectionMarkdown(page) || sectionText(sec)).slice(0, 600);
   try {
     const r = await fetch('/api/cards', {
       method: 'POST',
@@ -1306,6 +1306,21 @@ async function markCurrent(kind) {
   } catch (e) {
     toast('标记失败：' + String(e.message || e));
   }
+}
+
+/** 从 state.md 里取某页的原始文本（比渲染后的 innerText 干净，公式不会碎） */
+function sectionMarkdown(page) {
+  const re = /<!-- page (\d+): [^>]+ -->/g;
+  const marks = [...state.md.matchAll(re)];
+  const i = marks.findIndex((m) => Number(m[1]) === Number(page));
+  if (i < 0) return '';
+  const start = marks[i].index + marks[i][0].length;
+  const end = i + 1 < marks.length ? marks[i + 1].index : state.md.length;
+  return state.md.slice(start, end)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function openQueue() {
