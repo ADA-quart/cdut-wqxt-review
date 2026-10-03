@@ -11,11 +11,77 @@
 """
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
 import time
 from pathlib import Path
+
+
+def _enable_ort_cuda():
+    """让 ONNX Runtime 用上 GPU。
+
+    背景：文本识别（CnOCR）与公式识别（LaTeX-OCR）走 onnxruntime，
+    其 CUDA 提供者需要 cudnn64_9.dll / cublasLt64_12.dll。这两个 DLL 随 PyTorch 一起
+    打包在 torch/lib 下，默认不在 DLL 搜索路径里，会导致 ORT **静默回落到 CPU**。
+    这里把该目录加入搜索路径（必须在 import onnxruntime 之前执行）。
+    """
+    try:
+        import torch
+
+        lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+        if os.path.isdir(lib):
+            os.environ["PATH"] = lib + os.pathsep + os.environ.get("PATH", "")
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(lib)
+    except Exception:
+        pass  # 没装 torch 或没有 lib 目录时静默跳过，让 ORT 自行处理
+
+
+_enable_ort_cuda()
+
+
+def _patch_layout_device():
+    """让版面分析（DocLayout-YOLO）真正跑在 GPU 上。
+
+    背景：Pix2Text 的 DocYoloLayoutParser 存了 self.device，
+    但调用 self.predictor.predict(...) 时没把 device 传下去，
+    于是 YOLO 默认在 CPU 上推理（日志里能看到 100ms+ 的 CPU 速度）。
+    这里给 parser 的 __init__ 打个补丁：拿到 predictor 后，
+    把 device 注入后续每一次 predict 调用。
+    """
+    try:
+        from pix2text.doc_yolo_layout_parser import DocYoloLayoutParser
+    except Exception:
+        return
+    if getattr(DocYoloLayoutParser, "_device_patched", False):
+        return
+
+    orig_init = DocYoloLayoutParser.__init__
+
+    def patched_init(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        try:
+            predictor = getattr(self, "predictor", None)
+            device = getattr(self, "device", None)
+            if predictor is None or not device or str(device) == "cpu":
+                return
+            orig_predict = predictor.predict
+
+            def predict(*p_args, **p_kwargs):
+                p_kwargs.setdefault("device", device)
+                return orig_predict(*p_args, **p_kwargs)
+
+            predictor.predict = predict
+        except Exception:
+            pass
+
+    DocYoloLayoutParser.__init__ = patched_init
+    DocYoloLayoutParser._device_patched = True
+
+
+_patch_layout_device()
 
 
 def make_emitter(json_mode: bool):
