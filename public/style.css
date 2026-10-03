@@ -196,6 +196,8 @@ select { padding: 6px 8px; font-size: 13px; }
 .badge.canceled, .badge.skipped { background: #f5f0e6; color: var(--warn); }
 .badge.md.running { background: #f3edfb; color: #7c3aed; }
 .badge.llm.running { background: #eafaf3; color: #0f9d58; }
+.badge.delisted { background: #f0f1f3; color: var(--ink-3); }
+.course-item.delisted { opacity: .72; }
 
 .bar {
   height: 6px;

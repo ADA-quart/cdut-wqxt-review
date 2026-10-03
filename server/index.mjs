@@ -76,6 +76,12 @@ app.get('/api/terms', asyncRoute(async (_req, res) => {
 }));
 
 app.get('/api/courses', asyncRoute(async (req, res) => {
+  const termId = req.query.term;
+  if (termId) {
+    // 按学期查询：自动换算学期起止月份
+    res.json({ courses: await listMyCourses({ termId }) });
+    return;
+  }
   const monthsBack = Math.min(Math.max(Number(req.query.months) || 12, 1), 24);
   const months = [];
   const now = new Date();
@@ -97,10 +103,10 @@ app.get('/api/subs/:courseId/:subId/ppt', asyncRoute(async (req, res) => {
 // ---------- 下载任务 ----------
 
 app.post('/api/jobs', asyncRoute(async (req, res) => {
-  const { mode = 'course', courseId, subId, monthsBack = 12 } = req.body || {};
+  const { mode = 'course', courseId, subId, monthsBack = 12, termId } = req.body || {};
   if ((mode === 'course' || mode === 'sub') && !courseId) return res.status(400).json({ error: '缺少 courseId' });
   if (mode === 'sub' && !subId) return res.status(400).json({ error: '缺少 subId' });
-  const job = await createJob({ mode, courseId, subId, monthsBack });
+  const job = await createJob({ mode, courseId, subId, monthsBack, termId });
   res.status(201).json({ job });
 }));
 

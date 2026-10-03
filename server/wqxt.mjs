@@ -119,11 +119,21 @@ export async function listTerms() {
 }
 
 /**
- * 「我的课程」——按月查询。
- * 返回扁平课程列表（含课次课节信息），按课程去重。
+ * 「我的课程」——按月或按学期查询。
+ * - months: 直接指定月份列表（如 ['2026-09', ...]）
+ * - termId: 按学期查询（自动换算学期起止月份，并只保留属于该学期的课程）
+ * 返回扁平课程列表，按课程去重；已下架课程带 delisted 标记。
  */
-export async function listMyCourses({ months } = {}) {
-  const monthList = months && months.length ? months : recentMonths(6);
+export async function listMyCourses({ months, termId } = {}) {
+  let monthList = months && months.length ? months : recentMonths(6);
+  let filterTerm = null;
+  if (termId != null && termId !== '') {
+    const terms = await listTerms();
+    const term = terms.find((t) => String(t.id) === String(termId));
+    if (!term) throw new Error('未找到该学期');
+    monthList = monthsBetween(term.beginDate, term.endDate);
+    filterTerm = `_${term.id}_`;
+  }
   const map = new Map();
   for (const month of monthList) {
     for (let page = 1; page <= 10; page++) {
@@ -133,6 +143,7 @@ export async function listMyCourses({ months } = {}) {
       let got = 0;
       for (const sec of sections) {
         for (const c of sec.course || []) {
+          if (filterTerm && String(c.term) !== filterTerm) continue;
           got++;
           const key = String(c.id);
           if (!map.has(key)) {
@@ -145,6 +156,8 @@ export async function listMyCourses({ months } = {}) {
               kkxyName: c.kkxy_name || '',
               courseCode: c.course_code || '',
               studentNum: c.student_num || '',
+              // 已下架的课程没有 PPT 和回放（课次目录为空）
+              delisted: /【已下架】/.test(String(c.title || '')),
               sections: [],
             });
           }
@@ -170,6 +183,21 @@ function recentMonths(count) {
   for (let i = 0; i < count; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return out;
+}
+
+/** 学期起止日期 → 覆盖的月份列表（如 2026-08-31 ~ 2027-01-17 → 2026-08..2027-01） */
+function monthsBetween(beginDate, endDate) {
+  const out = [];
+  const start = new Date(beginDate);
+  const end = new Date(endDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return recentMonths(6);
+  const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+  const last = new Date(end.getFullYear(), end.getMonth(), 1);
+  while (cur <= last && out.length < 24) {
+    out.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
+    cur.setMonth(cur.getMonth() + 1);
   }
   return out;
 }

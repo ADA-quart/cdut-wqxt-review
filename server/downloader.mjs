@@ -72,19 +72,31 @@ function emit(job) {
 
 /**
  * 创建下载任务。
- * @param {{mode:'course'|'all'|'sub', courseId?:string, subId?:string, monthsBack?:number}} options
+ * @param {{mode:'course'|'all'|'sub', courseId?:string, subId?:string, monthsBack?:number, termId?:number|string}} options
  */
 export async function createJob(options) {
-  const { mode = 'course', courseId, subId, monthsBack = 6 } = options;
+  const { mode = 'course', courseId, subId, monthsBack = 6, termId } = options;
 
-  const months = [];
-  const now = new Date();
-  for (let i = 0; i < monthsBack; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  let courses;
+  if (termId != null && termId !== '') {
+    // 按学期：只处理该学期的课程
+    courses = await listMyCourses({ termId });
+  } else {
+    const months = [];
+    const now = new Date();
+    for (let i = 0; i < monthsBack; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    courses = await listMyCourses({ months });
   }
-  const courses = await listMyCourses({ months });
-  const targets = mode === 'all' ? courses : courses.filter((c) => String(c.courseId) === String(courseId));
+  // 已下架课程没有 PPT 和回放：批量模式直接跳过，单独指定时给出明确提示
+  const visible = courses.filter((c) => !c.delisted);
+  const targets = mode === 'all' ? visible : visible.filter((c) => String(c.courseId) === String(courseId));
+  if (targets.length === 0 && mode !== 'all') {
+    const delisted = courses.find((c) => String(c.courseId) === String(courseId) && c.delisted);
+    throw new Error(delisted ? '该课程已下架，没有 PPT 和回放' : '未找到目标课程');
+  }
   if (targets.length === 0) throw new Error('未找到目标课程');
 
   const job = {

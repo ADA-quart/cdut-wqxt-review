@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   loggedIn: false,
   courses: [],
+  termId: '',
   jobs: new Map(),
   mdJobs: new Map(),
   llmJobs: new Map(),
@@ -66,6 +67,35 @@ async function refreshStatus() {
 
 // ---------- 课程列表 ----------
 
+async function loadTerms() {
+  const sel = $('termSel');
+  try {
+    const { terms } = await api('/terms');
+    if (!Array.isArray(terms) || terms.length === 0) {
+      sel.innerHTML = '<option value="">无学期数据</option>';
+      return;
+    }
+    // 按开始日期倒序（最新在前）
+    terms.sort((a, b) => String(b.beginDate || '').localeCompare(String(a.beginDate || '')));
+    const prev = state.termId;
+    sel.innerHTML = '';
+    for (const t of terms) {
+      const opt = document.createElement('option');
+      opt.value = String(t.id);
+      opt.textContent = `${t.label}${t.current ? '（当前）' : ''}`;
+      sel.appendChild(opt);
+    }
+    const current = terms.find((t) => t.current);
+    const wanted = prev && terms.some((t) => String(t.id) === String(prev))
+      ? String(prev)
+      : String(current?.id ?? terms[0].id);
+    sel.value = wanted;
+    state.termId = wanted;
+  } catch (e) {
+    sel.innerHTML = '<option value="">学期加载失败</option>';
+  }
+}
+
 async function loadCourses() {
   const box = $('courseList');
   if (!state.loggedIn) {
@@ -74,8 +104,10 @@ async function loadCourses() {
   }
   box.innerHTML = '<p class="empty">加载中…</p>';
   try {
-    const months = $('monthsSel').value;
-    const { courses } = await api(`/courses?months=${months}`);
+    const termId = $('termSel').value;
+    state.termId = termId;
+    const qs = termId ? `term=${encodeURIComponent(termId)}` : 'months=12';
+    const { courses } = await api(`/courses?${qs}`);
     state.courses = courses;
     renderCourses();
   } catch (e) {
@@ -93,6 +125,7 @@ function renderCourses() {
   for (const c of state.courses) {
     const el = document.createElement('div');
     el.className = 'course-item';
+    if (c.delisted) el.classList.add('delisted');
 
     const main = document.createElement('div');
     main.className = 'course-main';
@@ -113,6 +146,12 @@ function renderCourses() {
       span.textContent = b;
       meta.appendChild(span);
     }
+    if (c.delisted) {
+      const badge = document.createElement('span');
+      badge.className = 'badge delisted';
+      badge.textContent = '已下架 · 无 PPT/回放';
+      meta.appendChild(badge);
+    }
 
     main.append(title, meta);
 
@@ -127,7 +166,12 @@ function renderCourses() {
     const btnDl = document.createElement('button');
     btnDl.className = 'btn primary';
     btnDl.textContent = '下载';
-    btnDl.onclick = () => startCourseJob(c, btnDl);
+    if (c.delisted) {
+      btnDl.disabled = true;
+      btnDl.title = '该课程已下架，没有 PPT 和回放';
+    } else {
+      btnDl.onclick = () => startCourseJob(c, btnDl);
+    }
 
     actions.append(btnSubs, btnDl);
     el.append(main, actions);
@@ -139,7 +183,7 @@ async function startCourseJob(course, btn) {
   btn.disabled = true;
   btn.textContent = '创建中…';
   try {
-    await api('/jobs', { method: 'POST', body: { mode: 'course', courseId: course.courseId } });
+    await api('/jobs', { method: 'POST', body: { mode: 'course', courseId: course.courseId, termId: state.termId } });
     toast(`已创建下载任务：${course.title}`, 'ok');
   } catch (e) {
     toast('创建失败：' + e.message, 'err');
@@ -171,7 +215,9 @@ async function openSubs(course) {
 function renderSubs(course, subs) {
   const box = $('subsList');
   if (subs.length === 0) {
-    box.innerHTML = '<p class="empty">该课程暂无可下载课次</p>';
+    box.innerHTML = course.delisted
+      ? '<p class="empty">该课程已下架，没有 PPT 和回放</p>'
+      : '<p class="empty">该课程暂无可下载课次</p>';
     return;
   }
   box.innerHTML = '';
@@ -242,7 +288,7 @@ async function startSubJob(course, sub, btn) {
   btn.disabled = true;
   btn.textContent = '创建中…';
   try {
-    await api('/jobs', { method: 'POST', body: { mode: 'sub', courseId: course.courseId, subId: sub.subId } });
+    await api('/jobs', { method: 'POST', body: { mode: 'sub', courseId: course.courseId, subId: sub.subId, termId: state.termId } });
     toast(`已创建任务：${course.title} — ${sub.title}`, 'ok');
   } catch (e) {
     toast('创建失败：' + e.message, 'err');
@@ -757,6 +803,7 @@ $('btnDoLogin').onclick = async () => {
     $('loginModal').hidden = true;
     toast('登录成功：' + (r.account || username), 'ok');
     await refreshStatus();
+    await loadTerms();
     await loadCourses();
   } catch (e) {
     toast('登录失败：' + e.message, 'err');
@@ -786,7 +833,7 @@ $('btnDownloadAll').onclick = async () => {
   btn.disabled = true;
   btn.textContent = '创建中…';
   try {
-    await api('/jobs', { method: 'POST', body: { mode: 'all' } });
+    await api('/jobs', { method: 'POST', body: { mode: 'all', termId: state.termId } });
     toast('已创建全部课程下载任务', 'ok');
   } catch (e) {
     toast('创建失败：' + e.message, 'err');
@@ -813,7 +860,7 @@ for (const [key, f] of Object.entries(LLM_FIELDS)) {
   $(f.btn).onclick = () => testLlmProfile(key);
 }
 
-$('monthsSel').onchange = loadCourses;
+$('termSel').onchange = loadCourses;
 
 // ---------- SSE 进度 ----------
 
@@ -855,7 +902,12 @@ function connectEvents() {
 
 (async function init() {
   const s = await refreshStatus();
-  if (s?.loggedIn) await loadCourses();
+  if (s?.loggedIn) {
+    await loadTerms();
+    await loadCourses();
+  } else {
+    $('termSel').innerHTML = '<option value="">未登录</option>';
+  }
   const { jobs } = await api('/jobs').catch(() => ({ jobs: [] }));
   for (const j of jobs) state.jobs.set(j.id, j);
   state.mdTool = await api('/md-tools').catch(() => null);
