@@ -146,8 +146,27 @@ OCR 会有零星错字（如「也位差」→「电位差」）。界面提供�
   作用域可选 **本课 / 本课程 / 全库**——选后两者时先做知识库检索，回答带 `[n]` 引用角标与「引用来源」列表，
   点来源/角标直接跳到对应课次的对应页（ima 式全库问答）
 - 顶栏「图谱」：全库力导向知识图谱（课程 / 课次 / `[[双链]]` / 课程关联），点节点进入对应笔记
+- 顶栏「搜索」（Ctrl+K）：全库检索（LLM 语义扩展 + 页级片段），点结果直达那一页
+- 顶栏「标签」：全库 `#标签` 汇总（标题行里的标签也算），点标签列出课次
+- 笔记里的 `[[链接]]` 悬停 0.3 秒 → 弹出目标课次的摘要 + 首图预览
+- 支持 Obsidian 块引用：行尾写 `^块名` 即为锚点，`[[课次#^块名]]` 跳转高亮，`![[课次#^块名]]` 直接嵌入内容
 - 选中笔记或对话中的文字 → 浮出「引用到提问 / 解释这段」
 - 分隔条可拖拽，布局比例记忆在本机
+
+#### 复习队列（间隔重复）
+
+课件区右上角给当前页打标：**⭐ 重点 / ❓ 错题 / ✓ 已掌握**，页面左上会出现对应角标。
+顶栏「复习」按钮上的红色数字 = 今天到期待复习的卡片数；抽屉里逐张过：
+
+| 按钮 | 排期（简化版 SM-2） |
+| --- | --- |
+| 再来一次 | 10 分钟后再来，熟练度 -0.2 |
+| 有点难 | 间隔 ×1.2，熟练度 -0.15 |
+| 记住了 | 间隔 ×熟练度（默认 2.5） |
+| 太简单 | 间隔 ×熟练度 ×1.4，熟练度 +0.15 |
+
+卡片数据存在 `downloads/.review/<课程>/<课次>.json`（不进文件树、不参与检索）。
+「导出 MD」得到可贴进 Obsidian / ima 的复习清单，「复制 CSV」可直接导入 Anki 或 Excel。
 
 复习页里的 AI 功能（使用 LLM 设置的**纯文本档**）：
 
@@ -251,8 +270,15 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | GET | `/api/llm-jobs` / `/api/llm-jobs/:id` | LLM 任务列表 / 详情（含 token 用量） |
 | POST | `/api/llm-jobs/:id/cancel` | 取消 LLM 任务 |
 | POST | `/api/chat` | 复习页对话（流式透传，`{messages, profile}`） |
-| POST | `/api/kb/search` | 知识库检索 `{q, scope:'lesson'\|'course'\|'all', dir, topK}` → 带页码的片段与得分 |
+| POST | `/api/kb/search` | 知识库检索 `{q, scope:'lesson'\|'course'\|'all', dir, topK, smart}` → 带页码的片段与得分（`smart` 默认开：LLM 语义扩展） |
 | GET | `/api/graph` | 知识图谱数据：课程 / 课次节点 + 包含 / 双链 / 课程关联边 |
+| GET | `/api/tags` | 全库 `#标签` 汇总（含每个标签下的课次） |
+| GET | `/api/preview?dir=` | 课次预览：摘要 + 首图（悬浮预览用） |
+| GET | `/api/cards?dir=&due=1` | 复习卡列表 / 今日到期卡与数量 |
+| POST | `/api/cards` | 新建卡片 `{dir, page, kind:'star'\|'wrong'\|'ok', text}` |
+| POST | `/api/cards/:id/grade` | 评分排期 `{grade:'again'\|'hard'\|'good'\|'easy'}` |
+| DELETE | `/api/cards/:id` | 删除卡片 |
+| GET | `/api/cards/export?format=md\|csv` | 导出复习清单（Markdown / CSV） |
 | GET | `/api/backlinks?dir=` | 反链：全库扫描引用某课次的 wiki 链接 |
 | POST | `/api/index-note` | 快速生成课程索引 `{dir}`（规则版，不含 AI；课程/课次目录均可，自动保留「相关课程」关联块） |
 

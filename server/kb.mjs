@@ -190,6 +190,66 @@ function countLessons() {
   return listCourses().reduce((n, c) => n + listLessons(c).length, 0);
 }
 
+/** 全库 #标签 汇总：tag → 出现在哪些课次 */
+export function listTags() {
+  const map = new Map();
+  for (const course of listCourses()) {
+    for (const lesson of listLessons(course)) {
+      const md = readMd(`${course}/${lesson}.md`);
+      if (!md) continue;
+      const text = String(md)
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+        .replace(/\[\[[^\]]*\]\]/g, ' ')
+        .replace(/`[^`]*`/g, ' ')
+        .replace(/https?:\/\/\S+/g, ' ')
+        .split('\n')
+        // 去掉标题记号本身，但保留标题里的 #标签（## 标题 #重点）
+        .map((l) => l.replace(/^\s*#{1,6}\s+/, ''))
+        .join('\n');
+      for (const m of text.matchAll(/(^|\s)#([\p{L}\p{N}_/-]{1,32})/gu)) {
+        const tag = m[2];
+        if (/^\d+$/.test(tag)) continue;
+        if (!map.has(tag)) map.set(tag, new Map());
+        map.get(tag).set(`${course}/${lesson}`, { rel: `${course}/${lesson}`, course, lesson });
+      }
+    }
+  }
+  return [...map.entries()]
+    .map(([tag, lessons]) => ({ tag, count: lessons.size, lessons: [...lessons.values()] }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'zh'));
+}
+
+/** 悬浮预览：课次的摘要 + 首图 */
+export function getPreview(rel) {
+  const parts = String(rel || '').split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  const [course, lesson] = parts;
+  const md = readMd(`${course}/${lesson}.md`);
+  if (md == null) return null;
+
+  const sum = /<!-- llm-summary:start -->([\s\S]*?)<!-- llm-summary:end -->/.exec(md);
+  const src = stripForIndex((sum ? sum[1] : md.slice(0, 1500)).replace(/<!-- page [^>]*-->/g, ' '));
+  const summary = src.slice(0, 240) + (src.length > 240 ? '…' : '');
+
+  let thumb = null;
+  try {
+    const dirPath = path.join(DOWNLOAD_DIR, course, lesson);
+    const img = fs.readdirSync(dirPath).filter((f) => /\.(jpe?g|png)$/i.test(f)).sort()[0];
+    if (img) thumb = `/files/${[course, lesson, img].map(encodeURIComponent).join('/')}`;
+  } catch { /* 没有原图就只显示文字 */ }
+
+  return {
+    rel: `${course}/${lesson}`,
+    course,
+    lesson,
+    summary,
+    thumb,
+    pages: (md.match(/<!-- page \d+:/g) || []).length,
+  };
+}
+
 function normalizeLink(raw) {
   return String(raw || '')
     .trim()

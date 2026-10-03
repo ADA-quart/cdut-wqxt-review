@@ -18,12 +18,18 @@
     </div>
   </div>
   <div class="actions">
+    <div class="search-wrap">
+      <input id="searchInput" class="search-input" type="search" placeholder="全库搜索 Ctrl+K" autocomplete="off">
+      <div class="search-results" id="searchResults" hidden></div>
+    </div>
     <button class="btn" id="btnSummarize" title="LLM 整理这节课的重点，写回笔记顶部">整理重点</button>
     <button class="btn" id="btnCopyMd">复制 Markdown</button>
     <a class="btn" id="linkDownloadMd" download>下载 md</a>
     <a class="btn" id="linkOpenMd" target="_blank">原文</a>
     <button class="btn" id="btnIndex">生成课程索引</button>
+    <button class="btn" id="btnTags" title="全库 #标签">标签</button>
     <button class="btn" id="btnGraph" title="全库知识图谱：课程 / 课次 / 双链">图谱</button>
+    <button class="btn" id="btnQueue" title="复习队列（间隔重复）">复习<span class="badge" id="dueBadge" hidden>0</span></button>
     <button class="btn primary" id="btnChain">知识链</button>
   </div>
 </header>
@@ -45,6 +51,9 @@
           <label class="chk" title="滚动左侧内容时自动切换对应页">
             <input type="checkbox" id="followScroll"> 跟随滚动
           </label>
+          <button class="btn tiny" id="btnMarkStar" title="把当前页加入复习队列（重点）">⭐ 重点</button>
+          <button class="btn tiny" id="btnMarkWrong" title="把当前页加入复习队列（错题/没掌握）">❓ 错题</button>
+          <button class="btn tiny" id="btnMarkOk" title="标记当前页为已掌握">✓ 掌握</button>
           <button class="btn tiny" id="btnPrev" title="上一页（←）">◀</button>
           <span id="imgCounter" class="counter">0/0</span>
           <button class="btn tiny" id="btnNext" title="下一页（→）">▶</button>
@@ -111,6 +120,26 @@
     <h4>反链 · 谁引用了本课</h4>
     <div id="backLinks" class="links"><p class="empty">加载中…</p></div>
   </div>
+</aside>
+
+<aside class="drawer" id="tagsDrawer" hidden>
+  <div class="drawer-head">
+    <h3>标签</h3>
+    <button class="btn tiny" id="btnCloseTags">×</button>
+  </div>
+  <div class="drawer-body" id="tagsBody"><p class="empty">加载中…</p></div>
+</aside>
+
+<aside class="drawer" id="queueDrawer" hidden>
+  <div class="drawer-head">
+    <h3>复习队列 <span class="due-note" id="queueNote"></span></h3>
+    <div class="tools">
+      <button class="btn tiny" id="btnExportMd" title="导出 Markdown 清单（可贴进 Obsidian / ima）">导出 MD</button>
+      <button class="btn tiny" id="btnCopyCsv" title="复制 CSV（可导入 Anki / 表格）">复制 CSV</button>
+      <button class="btn tiny" id="btnCloseQueue">×</button>
+    </div>
+  </div>
+  <div class="drawer-body" id="queueBody"><p class="empty">加载中…</p></div>
 </aside>
 
 <aside class="drawer graph-drawer" id="graphDrawer" hidden>

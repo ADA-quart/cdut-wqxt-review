@@ -96,15 +96,20 @@ function renderFullMd() {
   const container = $('mdContent');
   container.innerHTML = '';
 
+  // ![[笔记#^块]] → 占位 div，渲染后再异步填充（块引用 / 嵌入）
+  const source = state.md.replace(
+    /!\[\[([^\]]+)\]\]/g,
+    (_m, target) => `\n\n<div class="embed" data-embed="${escapeHtml(String(target).trim())}"></div>\n\n`
+  );
   const re = /<!-- page (\d+): ([^>]+) -->/g;
   const marks = [];
   let m;
-  while ((m = re.exec(state.md))) marks.push({ idx: m.index, end: re.lastIndex, n: Number(m[1]), name: m[2].trim() });
+  while ((m = re.exec(source))) marks.push({ idx: m.index, end: re.lastIndex, n: Number(m[1]), name: m[2].trim() });
 
   if (marks.length === 0) {
-    container.innerHTML = renderMarkdown(state.md);
+    container.innerHTML = renderMarkdown(source);
   } else {
-    const head = state.md.slice(0, marks[0].idx);
+    const head = source.slice(0, marks[0].idx);
     if (head.trim()) {
       const headDiv = document.createElement('div');
       headDiv.className = 'md-head';
@@ -112,7 +117,7 @@ function renderFullMd() {
       container.appendChild(headDiv);
     }
     marks.forEach((mk, i) => {
-      const body = state.md.slice(mk.end, i + 1 < marks.length ? marks[i + 1].idx : state.md.length);
+      const body = source.slice(mk.end, i + 1 < marks.length ? marks[i + 1].idx : source.length);
       const sec = document.createElement('section');
       sec.className = 'page-sec';
       sec.dataset.page = String(mk.n);
@@ -124,9 +129,79 @@ function renderFullMd() {
   }
 
   transformWikilinks(container);
+  hydrateBlockIds(container);
   resolveMdAssets(container);
   renderMath(container);
   container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = '_blank'; a.rel = 'noreferrer'; });
+  hydrateEmbeds(container);
+}
+
+/** 行尾 ^id → 元素 id=blk-id + 小徽章（Obsidian 块锚点） */
+function hydrateBlockIds(root) {
+  root.querySelectorAll('p, li, blockquote, h1, h2, h3, h4').forEach((el) => {
+    const m = /\s\^([\w-]{2,32})\s*$/.exec(el.textContent || '');
+    if (!m) return;
+    const id = m[1];
+    el.id = 'blk-' + id;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const marker = '^' + id;
+      const i = node.nodeValue.lastIndexOf(marker);
+      if (i < 0) continue;
+      node.nodeValue = node.nodeValue.slice(0, i);
+      const span = document.createElement('span');
+      span.className = 'block-id';
+      span.textContent = marker;
+      node.parentNode.insertBefore(span, node.nextSibling);
+      break;
+    }
+  });
+}
+
+function jumpToBlock(id) {
+  const el = document.getElementById('blk-' + String(id).replace(/^\^/, ''));
+  if (!el) return false;
+  const sec = el.closest('.page-sec');
+  if (sec && sec.dataset.page) showPage(Number(sec.dataset.page) - 1);
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1600);
+  return true;
+}
+
+/** 渲染 ![[笔记]] / ![[笔记#^块]] 嵌入 */
+async function hydrateEmbeds(root) {
+  const nodes = [...root.querySelectorAll('.embed[data-embed]')];
+  for (const el of nodes) {
+    const target = el.dataset.embed;
+    const [pathPart, hash = ''] = target.split('#');
+    const note = pathPart.trim().replace(/\.md$/i, '');
+    const rel = note.includes('/') ? note : `${courseDir}/${note}`;
+    try {
+      const res = await fetch(fileUrl(`${rel}.md`));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const md = await res.text();
+      let text;
+      if (hash.startsWith('^')) {
+        const id = hash.slice(1);
+        const re = new RegExp(`\\s*\\^${id}\\s*$`);
+        const line = md.split('\n').find((l) => re.test(l));
+        if (!line) throw new Error(`找不到块 ^${id}`);
+        text = line.replace(re, '');
+      } else {
+        text = md.slice(0, 800);
+      }
+      el.innerHTML =
+        `<div class="embed-head">嵌入自 ${escapeHtml(rel)}${hash ? ' ' + escapeHtml(hash) : ''}</div>` +
+        `<div class="embed-body">${renderMarkdown(text)}</div>`;
+      transformWikilinks(el);
+      hydrateBlockIds(el);
+      renderMath(el);
+    } catch (e) {
+      el.innerHTML = `<div class="embed-error">嵌入失败：${escapeHtml(String(e.message || e))}</div>`;
+    }
+  }
 }
 
 // ---------- 课件图片 ----------
@@ -229,6 +304,16 @@ function openWikilink(target) {
   const [pathPart, hash] = target.split('#');
   const clean = pathPart.trim();
   const pageMatch = /page=(\d+)/.exec(hash || '');
+
+  // 块引用 [[#^id]] / [[笔记#^id]]
+  if ((hash || '').startsWith('^')) {
+    const id = hash.slice(1);
+    const note = clean.replace(/\.md$/i, '');
+    if (!note || note === lessonName || note === dir) { jumpToBlock(id); return; }
+    const rel = note.includes('/') ? note : `${courseDir}/${note}`;
+    location.href = `/review.html?dir=${encodeURIComponent(rel)}&blk=${encodeURIComponent(id)}`;
+    return;
+  }
 
   // PDF 页码链接 → 切换右侧图片
   if (/\.pdf$/i.test(clean) && pageMatch) {
@@ -807,6 +892,49 @@ function setupEvents() {
   $('btnCloseChain').onclick = () => { $('chainDrawer').hidden = true; };
   $('btnGraph').onclick = openGraph;
   $('btnCloseGraph').onclick = () => { $('graphDrawer').hidden = true; };
+  $('btnTags').onclick = openTags;
+  $('btnCloseTags').onclick = () => { $('tagsDrawer').hidden = true; };
+  $('btnQueue').onclick = openQueue;
+  $('btnCloseQueue').onclick = () => { $('queueDrawer').hidden = true; };
+  $('btnMarkStar').onclick = () => markCurrent('star');
+  $('btnMarkWrong').onclick = () => markCurrent('wrong');
+  $('btnMarkOk').onclick = () => markCurrent('ok');
+  $('btnExportMd').onclick = () => window.open('/api/cards/export?format=md', '_blank');
+  $('btnCopyCsv').onclick = async () => {
+    try {
+      const text = await fetch('/api/cards/export?format=csv').then((r) => r.text());
+      await navigator.clipboard.writeText(text);
+      toast('已复制 CSV，可直接导入 Anki / Excel');
+    } catch {
+      toast('复制失败，可改用「导出 MD」');
+    }
+  };
+  $('queueBody').addEventListener('click', async (e) => {
+    const card = e.target.closest('.q-card');
+    if (!card) return;
+    const id = card.dataset.id;
+    if (e.target.closest('[data-del]')) {
+      await fetch('/api/cards/' + encodeURIComponent(id), { method: 'DELETE' });
+      await renderQueue();
+      return;
+    }
+    const btn = e.target.closest('[data-g]');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/cards/${encodeURIComponent(id)}/grade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grade: btn.dataset.g }),
+      });
+      const data = await r.json();
+      toast(`下次复习：${data.card && data.card.interval ? data.card.interval + ' 天后' : '稍后'}`);
+    } catch { /* 忽略 */ }
+    await renderQueue();
+  });
+
+  setupSearch();
+  setupHoverPreview();
 
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
@@ -979,6 +1107,271 @@ async function openGraph() {
   }
 }
 
+// ---------- 标签（Obsidian 式 #tag）----------
+
+async function openTags() {
+  const body = $('tagsBody');
+  $('tagsDrawer').hidden = false;
+  body.innerHTML = '<p class="empty">加载中…</p>';
+  try {
+    const { tags } = await fetch('/api/tags').then((r) => r.json());
+    if (!tags.length) {
+      body.innerHTML = '<p class="empty">还没有标签。在 md 里写 #重点、#公式 之类的标记即可（行内任意位置都行）。</p>' +
+        '<p class="empty">提示：标题行开头的 # 不会被当成标签。</p>';
+      return;
+    }
+    body.innerHTML = '';
+    for (const t of tags) {
+      const box = document.createElement('div');
+      box.className = 'tag-group';
+      const head = document.createElement('div');
+      head.className = 'tag-head';
+      head.innerHTML = `<span class="tag-chip">#${escapeHtml(t.tag)}</span><span class="tag-count">${t.count} 个课次</span>`;
+      box.appendChild(head);
+      const links = document.createElement('div');
+      links.className = 'links';
+      for (const l of t.lessons) {
+        const a = document.createElement('a');
+        a.className = 'link-item';
+        a.href = `/review.html?dir=${encodeURIComponent(l.rel)}`;
+        a.innerHTML = `<div class="name">${escapeHtml(l.lesson)}</div><div class="snip">${escapeHtml(l.course)}</div>`;
+        links.appendChild(a);
+      }
+      box.appendChild(links);
+      body.appendChild(box);
+    }
+  } catch (e) {
+    body.innerHTML = `<p class="empty">加载失败：${escapeHtml(String(e.message || e))}</p>`;
+  }
+}
+
+// ---------- 全库搜索（Ctrl+K）----------
+
+function setupSearch() {
+  const input = $('searchInput');
+  const box = $('searchResults');
+  let timer = null;
+  let seq = 0;
+
+  const run = async () => {
+    const q = input.value.trim();
+    if (!q) { box.hidden = true; return; }
+    const mine = ++seq;
+    box.hidden = false;
+    box.innerHTML = '<div class="sr-empty">检索中…</div>';
+    try {
+      const r = await fetch('/api/kb/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q, scope: 'all', topK: 12, smart: true }),
+      });
+      const data = await r.json();
+      if (mine !== seq) return;
+      const list = data.passages || [];
+      if (!list.length) { box.innerHTML = '<div class="sr-empty">没有匹配的页面</div>'; return; }
+      box.innerHTML = '';
+      for (const p of list) {
+        const a = document.createElement('a');
+        a.className = 'sr-item';
+        a.href = p.page
+          ? `/review.html?dir=${encodeURIComponent(`${p.course}/${p.lesson}`)}&page=${p.page}`
+          : fileUrl(p.rel);
+        a.innerHTML =
+          `<div class="sr-name">${escapeHtml(p.course)} · ${escapeHtml(p.lesson)}${p.page ? ` · 第 ${p.page} 页` : ''}</div>` +
+          `<div class="sr-snip">${escapeHtml(p.snippet || '')}</div>`;
+        box.appendChild(a);
+      }
+      if (data.expanded?.length) {
+        const hint = document.createElement('div');
+        hint.className = 'sr-expanded';
+        hint.textContent = '语义扩展：' + data.expanded.join(' · ');
+        box.appendChild(hint);
+      }
+    } catch (e) {
+      if (mine === seq) box.innerHTML = `<div class="sr-empty">失败：${escapeHtml(String(e.message || e))}</div>`;
+    }
+  };
+
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 350); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { clearTimeout(timer); run(); }
+    if (e.key === 'Escape') { box.hidden = true; input.blur(); }
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.search-wrap')) box.hidden = true; });
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'k') {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+}
+
+// ---------- 悬浮预览 ----------
+
+function setupHoverPreview() {
+  const card = document.createElement('div');
+  card.className = 'hover-card';
+  card.hidden = true;
+  document.body.appendChild(card);
+  let showTimer = null;
+  let hideTimer = null;
+  let want = '';
+
+  const show = async (a) => {
+    const target = String(a.dataset.target || '');
+    if (/\.pdf(#|$)/i.test(target)) return; // PDF 页链接：不弹笔记预览
+    const [pathPart] = target.split('#');
+    const note = pathPart.trim().replace(/\.md$/i, '');
+    if (!note) return; // [[#^块]] 这类同页引用
+    const rel = note.includes('/') ? note : `${courseDir}/${note}`;
+    want = rel;
+    try {
+      const r = await fetch('/api/preview?dir=' + encodeURIComponent(rel));
+      if (!r.ok || want !== rel) return;
+      const p = await r.json();
+      card.innerHTML =
+        `<div class="hc-head">${escapeHtml(p.course)} · ${escapeHtml(p.lesson)}</div>` +
+        (p.thumb ? `<img class="hc-thumb" src="${p.thumb}" alt="" loading="lazy">` : '') +
+        `<div class="hc-body">${escapeHtml(p.summary || '（还没有摘要）')}</div>` +
+        `<div class="hc-foot">${p.pages} 页 · 点击打开</div>`;
+      const rect = a.getBoundingClientRect();
+      card.style.left = Math.max(8, Math.min(window.innerWidth - 340, rect.left)) + 'px';
+      card.style.top = Math.min(window.innerHeight - 280, rect.bottom + 8) + 'px';
+      card.hidden = false;
+    } catch { /* 忽略 */ }
+  };
+  const hide = () => { want = ''; card.hidden = true; };
+
+  document.addEventListener('mouseover', (e) => {
+    const a = e.target.closest('a.wikilink');
+    if (!a) return;
+    clearTimeout(showTimer);
+    clearTimeout(hideTimer);
+    showTimer = setTimeout(() => show(a), 320);
+  });
+  document.addEventListener('mouseout', (e) => {
+    if (!e.target.closest('a.wikilink')) return;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hide, 280);
+  });
+  card.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  card.addEventListener('mouseleave', () => { clearTimeout(hideTimer); hideTimer = setTimeout(hide, 160); });
+}
+
+// ---------- 复习队列（间隔重复）----------
+
+const KIND_META = {
+  star: { icon: '⭐', label: '重点' },
+  wrong: { icon: '❓', label: '错题' },
+  ok: { icon: '✅', label: '已掌握' },
+};
+
+async function refreshDueBadge() {
+  try {
+    const { dueCount } = await fetch('/api/cards?due=1&limit=1').then((r) => r.json());
+    const badge = $('dueBadge');
+    badge.textContent = String(dueCount);
+    badge.hidden = !dueCount;
+    return dueCount;
+  } catch {
+    return 0;
+  }
+}
+
+async function markCurrent(kind) {
+  const sec = currentVisibleSection();
+  if (!sec) { toast('先翻到要标记的那一页'); return; }
+  const page = Number(sec.dataset.page);
+  const text = sectionText(sec).slice(0, 600);
+  try {
+    const r = await fetch('/api/cards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir, page, kind, text }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { dueCount } = await r.json();
+    const badge = $('dueBadge');
+    badge.textContent = String(dueCount);
+    badge.hidden = !dueCount;
+    if (!sec.querySelector('.page-badge')) {
+      const b = document.createElement('span');
+      b.className = 'page-badge';
+      b.textContent = KIND_META[kind].icon;
+      b.title = KIND_META[kind].label;
+      sec.prepend(b);
+    }
+    toast(`${KIND_META[kind].icon} 第 ${page} 页已加入复习队列`);
+  } catch (e) {
+    toast('标记失败：' + String(e.message || e));
+  }
+}
+
+async function openQueue() {
+  $('queueDrawer').hidden = false;
+  await renderQueue();
+}
+
+async function renderQueue() {
+  const body = $('queueBody');
+  body.innerHTML = '<p class="empty">加载中…</p>';
+  let data;
+  try {
+    data = await fetch('/api/cards?due=1').then((r) => r.json());
+  } catch (e) {
+    body.innerHTML = `<p class="empty">加载失败：${escapeHtml(String(e.message || e))}</p>`;
+    return;
+  }
+  const cards = data.cards || [];
+  $('queueNote').textContent = cards.length ? `待复习 ${cards.length} 张` : '';
+  const badge = $('dueBadge');
+  badge.textContent = String(data.dueCount || 0);
+  badge.hidden = !data.dueCount;
+  if (!cards.length) {
+    body.innerHTML = '<p class="empty">今天没有待复习的卡片 🎉<br>在课件右上角用「⭐ 重点 / ❓ 错题 / ✓ 掌握」给页面打标，到期的卡片会出现在这里。</p>';
+    return;
+  }
+  body.innerHTML = '';
+  for (const c of cards) {
+    const meta = KIND_META[c.kind] || KIND_META.star;
+    const [course, lesson] = c.dir.split('/');
+    const el = document.createElement('div');
+    el.className = 'q-card';
+    el.dataset.id = c.id;
+    el.innerHTML =
+      `<div class="q-head"><span class="q-kind q-${escapeHtml(c.kind)}">${meta.icon} ${meta.label}</span>` +
+      `<a class="q-link" href="/review.html?dir=${encodeURIComponent(c.dir)}${c.page ? `&page=${c.page}` : ''}">` +
+      `${escapeHtml(course)} · ${escapeHtml(lesson)}${c.page ? ` · 第 ${c.page} 页` : ''}</a></div>` +
+      (c.text ? `<div class="q-text">${escapeHtml(c.text.slice(0, 220))}</div>` : '') +
+      `<div class="q-actions">` +
+      `<button class="btn tiny" data-g="again">再来一次</button>` +
+      `<button class="btn tiny" data-g="hard">有点难</button>` +
+      `<button class="btn tiny primary" data-g="good">记住了</button>` +
+      `<button class="btn tiny" data-g="easy">太简单</button>` +
+      `<button class="btn tiny danger" data-del="1">移除</button>` +
+      `</div>`;
+    body.appendChild(el);
+  }
+}
+
+/** 页面上的卡片角标（⭐/❓/✅） */
+async function markCardBadges() {
+  try {
+    const { cards } = await fetch('/api/cards?dir=' + encodeURIComponent(dir)).then((r) => r.json());
+    for (const c of cards || []) {
+      if (!c.page) continue;
+      const sec = document.getElementById('sec-' + c.page);
+      if (!sec || sec.querySelector('.page-badge')) continue;
+      const b = document.createElement('span');
+      b.className = 'page-badge';
+      b.textContent = (KIND_META[c.kind] || KIND_META.star).icon;
+      b.title = (KIND_META[c.kind] || {}).label || '';
+      sec.prepend(b);
+    }
+  } catch { /* 忽略 */ }
+}
+
 // ---------- 启动 ----------
 
 (async function init() {
@@ -1015,5 +1408,9 @@ async function openGraph() {
     const sec = document.getElementById('sec-' + pageParam);
     if (sec) setTimeout(() => sec.scrollIntoView({ block: 'start' }), 80);
   }
+  const blkParam = params.get('blk');
+  if (blkParam) setTimeout(() => jumpToBlock(blkParam), 160);
+  markCardBadges();
+  refreshDueBadge();
   renderOutLinks();
 })();

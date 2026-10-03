@@ -738,3 +738,18 @@ export async function testProfile(profile) {
   const { content } = await chat([{ role: 'user', content: '请只回复两个字：正常' }], { profile, maxTokens: 32 });
   return { ok: true, ms: Date.now() - t0, reply: content.slice(0, 40) };
 }
+
+/**
+ * 检索用的「语义扩展」：让 LLM 把问题改写成同义关键词，
+ * 弥补词面检索（BM25 风格）召回不足——不需要额外 embedding 服务。
+ */
+export async function expandQuery(q) {
+  const { content } = await chat([
+    {
+      role: 'user',
+      content: '把下面的问题改写成 8~14 个中文检索关键词/同义词（可含英文术语），' +
+        '只输出关键词，空格分隔，不要解释、不要标点、不要编号：\n' + String(q).slice(0, 400),
+    },
+  ], { profile: 'text', maxTokens: 120, temperature: 0.1 });
+  return content.split(/[\s,，、;；]+/).filter((t) => t.length >= 2).slice(0, 16);
+}

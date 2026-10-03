@@ -29,10 +29,11 @@ import {
 } from './mdconvert.mjs';
 import { publicConfig, saveConfig } from './config.mjs';
 import { streamChat } from './chat.mjs';
-import { searchKb, buildGraph } from './kb.mjs';
+import { searchKb, buildGraph, listTags, getPreview } from './kb.mjs';
+import { listCards, dueCount, addCard, gradeCard, deleteCard, exportCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
-  testProfile,
+  testProfile, expandQuery,
   events as llmEvents,
 } from './llm.mjs';
 import { closeBrowser, edgeStatus, getWorkPage, WQ_BASE } from './browser.mjs';
@@ -417,21 +418,78 @@ app.get('/api/backlinks', asyncRoute(async (req, res) => {
   res.json({ backlinks: results });
 }));
 
-/** 知识库检索（全库问答用）：按课程/课次/全库返回最相关的页片段 */
+/** 知识库检索（全库问答用）：按课程/课次/全库返回最相关的页片段；smart=LLM 语义扩展 */
 app.post('/api/kb/search', asyncRoute(async (req, res) => {
-  const { q, scope = 'all', dir = '', topK } = req.body || {};
-  if (!String(q || '').trim()) return res.status(400).json({ error: '缺少 q' });
-  res.json(searchKb({
-    q: String(q),
-    scope: ['lesson', 'course', 'all'].includes(scope) ? scope : 'all',
+  const { q, scope = 'all', dir = '', topK, smart } = req.body || {};
+  const query = String(q || '').trim();
+  if (!query) return res.status(400).json({ error: '缺少 q' });
+  const useScope = ['lesson', 'course', 'all'].includes(scope) ? scope : 'all';
+
+  let expanded = [];
+  if (smart !== false && useScope !== 'lesson') {
+    try { expanded = await expandQuery(query); } catch { expanded = []; }
+  }
+  const result = searchKb({
+    q: expanded.length ? `${query} ${expanded.join(' ')}` : query,
+    scope: useScope,
     dir: String(dir || '').replace(/^[/\\]+/, ''),
     topK: Number(topK) || 6,
-  }));
+  });
+  res.json({ ...result, expanded });
 }));
 
 /** 知识图谱：课程 / 课次 / 双链 节点与边 */
 app.get('/api/graph', asyncRoute(async (_req, res) => {
   res.json(buildGraph());
+}));
+
+/** 全库 #标签 汇总 */
+app.get('/api/tags', asyncRoute(async (_req, res) => {
+  res.json({ tags: listTags() });
+}));
+
+/** 悬浮预览：课次摘要 + 首图 */
+app.get('/api/preview', asyncRoute(async (req, res) => {
+  const p = getPreview(String(req.query.dir || '').replace(/^[/\\]+/, ''));
+  if (!p) return res.status(404).json({ error: '没有这个课次的 Markdown' });
+  res.json(p);
+}));
+
+/** 复习卡（间隔重复） */
+app.get('/api/cards', asyncRoute(async (req, res) => {
+  const dir = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  const dueOnly = req.query.due === '1';
+  const limit = Number(req.query.limit) || 0;
+  res.json({ cards: listCards({ dir, dueOnly, limit }), dueCount: dueCount() });
+}));
+
+app.post('/api/cards', asyncRoute(async (req, res) => {
+  const { dir, page, kind, text } = req.body || {};
+  if (!dir) return res.status(400).json({ error: '缺少 dir' });
+  const card = addCard({ dir: String(dir), page, kind: kind || 'star', text });
+  res.status(201).json({ card, dueCount: dueCount() });
+}));
+
+app.post('/api/cards/:id/grade', asyncRoute(async (req, res) => {
+  const grade = String(req.body?.grade || 'good');
+  const card = gradeCard(String(req.params.id), grade);
+  if (!card) return res.status(404).json({ error: '卡片不存在' });
+  res.json({ card, dueCount: dueCount() });
+}));
+
+app.delete('/api/cards/:id', asyncRoute(async (req, res) => {
+  const removed = deleteCard(String(req.params.id));
+  if (!removed) return res.status(404).json({ error: '卡片不存在' });
+  res.json({ ok: true, dueCount: dueCount() });
+}));
+
+app.get('/api/cards/export', asyncRoute(async (req, res) => {
+  const format = req.query.format === 'csv' ? 'csv' : 'md';
+  const dir = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  const text = exportCards({ dir, format });
+  res.setHeader('Content-Type', format === 'csv' ? 'text/csv; charset=utf-8' : 'text/markdown; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="review-${Date.now()}.${format}"`);
+  res.send('\uFEFF' + text);
 }));
 
 /** 生成/更新课程索引笔记（课程 → 课次的 wiki 链接） */
