@@ -20,6 +20,7 @@
     <span id="statusText">检查中…</span>
     <button class="btn ghost" id="btnLogin" hidden>登录</button>
     <button class="btn ghost" id="btnLogout" hidden>退出</button>
+    <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（纠错 / 总结用）">LLM 设置</button>
   </div>
 </header>
 
@@ -98,6 +99,69 @@
     <div class="subs-list" id="subsList"></div>
     <div class="modal-actions">
       <button class="btn ghost" id="btnCloseSubs">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- LLM 设置弹窗（任意 OpenAI 兼容接口） -->
+<div class="modal-mask" id="llmModal" hidden>
+  <div class="modal wide">
+    <h3>LLM 设置</h3>
+    <p class="hint">纠错支持三档模式，各自独立配置（均为 OpenAI 兼容接口）。密钥只保存在本机 config.json。</p>
+    <div class="modal-body-scroll">
+      <section class="profile-section">
+        <h4>① 纯文本 <span class="tag">最省 token</span></h4>
+        <p class="hint">只发送 OCR 文字做纠错/总结。推荐 DeepSeek 等文本模型。</p>
+        <label class="field"><span>接口地址</span><input type="text" id="pTextBaseUrl" placeholder="https://api.deepseek.com/v1"></label>
+        <label class="field"><span>模型</span><input type="text" id="pTextModel" placeholder="deepseek-chat"></label>
+        <label class="field"><span>API Key</span><input type="password" id="pTextKey" placeholder="留空保持原样"></label>
+        <div class="test-row"><button class="btn tiny" id="btnTestText">测试连接</button><span class="test-result" id="testText"></span></div>
+      </section>
+
+      <section class="profile-section">
+        <h4>② 图片上云 <span class="tag">精度最高</span></h4>
+        <p class="hint">页面截图 + 文字一起发给云端视觉模型，按截图校对术语和公式。token 消耗约为纯文本的 5~10 倍。</p>
+        <label class="field"><span>接口地址</span><input type="text" id="pCloudBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"></label>
+        <label class="field"><span>模型</span><input type="text" id="pCloudModel" placeholder="qwen-vl-max"></label>
+        <label class="field"><span>API Key</span><input type="password" id="pCloudKey" placeholder="留空保持原样"></label>
+        <div class="test-row"><button class="btn tiny" id="btnTestCloud">测试连接</button><span class="test-result" id="testCloud"></span></div>
+      </section>
+
+      <section class="profile-section">
+        <h4>③ 图片本地 <span class="tag">零 API 费用</span></h4>
+        <p class="hint">发给本机推理服务（Ollama / vLLM 跑 Qwen-VL 等）。你的 V100 16G 可跑 7B 量化模型。</p>
+        <label class="field"><span>接口地址</span><input type="text" id="pLocalBaseUrl" placeholder="http://127.0.0.1:11434/v1"></label>
+        <label class="field"><span>模型</span><input type="text" id="pLocalModel" placeholder="qwen2.5vl:7b"></label>
+        <label class="field"><span>API Key</span><input type="password" id="pLocalKey" placeholder="Ollama 随便填（如 ollama）"></label>
+        <div class="test-row"><button class="btn tiny" id="btnTestLocal">测试连接</button><span class="test-result" id="testLocal"></span></div>
+      </section>
+
+      <section class="profile-section">
+        <h4>通用</h4>
+        <div class="toolbar">
+          <label class="field compact">
+            <span>默认纠错模式</span>
+            <select id="llmDefaultMode">
+              <option value="text">纯文本</option>
+              <option value="visionCloud">图片上云</option>
+              <option value="visionLocal">图片本地</option>
+            </select>
+          </label>
+          <label class="field compact">
+            <span>并发</span>
+            <select id="llmConcurrency">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+              <option value="8">8</option>
+            </select>
+          </label>
+        </div>
+      </section>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnCancelLlm">取消</button>
+      <button class="btn primary" id="btnSaveLlm">保存</button>
     </div>
   </div>
 </div>

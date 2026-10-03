@@ -26,6 +26,12 @@ import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
   events as mdEvents,
 } from './mdconvert.mjs';
+import { publicConfig, saveConfig } from './config.mjs';
+import {
+  createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
+  testProfile,
+  events as llmEvents,
+} from './llm.mjs';
 import { closeBrowser, edgeStatus, getWorkPage, WQ_BASE } from './browser.mjs';
 
 const PORT = Number(process.env.PORT || 3901);
@@ -136,6 +142,58 @@ app.post('/api/md-jobs/:id/cancel', (req, res) => {
   res.json({ job });
 });
 
+// ---------- LLM 配置与文档操作（纠错 / 总结） ----------
+
+app.get('/api/llm-config', (_req, res) => res.json(publicConfig()));
+
+app.put('/api/llm-config', asyncRoute(async (req, res) => {
+  const body = req.body || {};
+  const patch = { llm: {} };
+  if (body.profiles && typeof body.profiles === 'object') {
+    patch.llm.profiles = {};
+    for (const [key, prof] of Object.entries(body.profiles)) {
+      if (!prof || typeof prof !== 'object') continue;
+      const p = {};
+      if (typeof prof.baseUrl === 'string') p.baseUrl = prof.baseUrl.trim();
+      if (typeof prof.model === 'string') p.model = prof.model.trim();
+      if ('apiKey' in prof) p.apiKey = prof.apiKey === null ? null : String(prof.apiKey).trim();
+      patch.llm.profiles[key] = p;
+    }
+  }
+  if (body.temperature !== undefined) patch.llm.temperature = Number(body.temperature) || 0;
+  if (body.concurrency !== undefined) patch.llm.concurrency = Math.min(Math.max(Number(body.concurrency) || 3, 1), 8);
+  if (body.defaultMode !== undefined) patch.llm.defaultMode = body.defaultMode;
+  saveConfig(patch);
+  res.json(publicConfig());
+}));
+
+app.post('/api/llm-test', asyncRoute(async (req, res) => {
+  const { profile } = req.body || {};
+  const r = await testProfile(profile || 'text');
+  res.json(r);
+}));
+
+app.post('/api/llm-jobs', asyncRoute(async (req, res) => {
+  const { op, dir, mode } = req.body || {};
+  if (!op || !dir) return res.status(400).json({ error: '缺少 op 或 dir' });
+  const job = createLlmJob({ op, dir, mode });
+  res.status(201).json({ job });
+}));
+
+app.get('/api/llm-jobs', (_req, res) => res.json({ jobs: listLlmJobs() }));
+
+app.get('/api/llm-jobs/:id', (req, res) => {
+  const job = getLlmJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  res.json({ job });
+});
+
+app.post('/api/llm-jobs/:id/cancel', (req, res) => {
+  const job = cancelLlmJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  res.json({ job });
+});
+
 // ---------- SSE 进度 ----------
 
 app.get('/api/events', (req, res) => {
@@ -146,15 +204,19 @@ app.get('/api/events', (req, res) => {
   });
   res.write('data: ' + JSON.stringify({ type: 'hello', jobs: listJobs() }) + '\n\n');
   res.write('data: ' + JSON.stringify({ type: 'hello-md', jobs: listMdJobs() }) + '\n\n');
+  res.write('data: ' + JSON.stringify({ type: 'hello-llm', jobs: listLlmJobs() }) + '\n\n');
   const onUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'job', job }) + '\n\n');
   const onMdUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'md-job', job }) + '\n\n');
+  const onLlmUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'llm-job', job }) + '\n\n');
   events.on('update', onUpdate);
   mdEvents.on('update', onMdUpdate);
+  llmEvents.on('update', onLlmUpdate);
   const keepAlive = setInterval(() => res.write(': ping\n\n'), 15000);
   req.on('close', () => {
     clearInterval(keepAlive);
     events.off('update', onUpdate);
     mdEvents.off('update', onMdUpdate);
+    llmEvents.off('update', onLlmUpdate);
   });
 });
 

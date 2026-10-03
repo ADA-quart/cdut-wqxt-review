@@ -67,6 +67,7 @@ function publicMdJob(j) {
     progress: j.progress,      // { done, total, current }
     device: j.device,
     outMd: j.outMd,            // 相对 downloads 的 md 路径
+    pdf: j.pdfRel,             // 相对 downloads 的课件 PDF 路径
     assets: j.assets,
     error: j.error,
     log: j.log.slice(-8),
@@ -113,6 +114,7 @@ export function createMdJob(opts) {
     progress: { done: 0, total: 0, current: '' },
     device: opts.device || 'auto',
     outMd: null,
+    pdfRel: null,
     assets: null,
     error: null,
     log: [],
@@ -182,8 +184,13 @@ async function runMdJob(job) {
         job.progress.current = msg.name;
       } else if (msg.type === 'skip') {
         job.log.push(`跳过 ${msg.name}: ${msg.error}`);
+      } else if (msg.type === 'pdf') {
+        job.log.push(`课件 PDF 已生成（${msg.pages} 页, ${msg.secs}s）`);
+      } else if (msg.type === 'warn') {
+        job.log.push(String(msg.error || '').slice(0, 200));
       } else if (msg.type === 'done') {
         job.outMd = path.relative(DOWNLOAD_DIR, msg.out).split(path.sep).join('/');
+        if (msg.pdf) job.pdfRel = path.relative(DOWNLOAD_DIR, msg.pdf).split(path.sep).join('/');
         job.assets = path.relative(DOWNLOAD_DIR, msg.assets).split(path.sep).join('/');
         job.log.push(`完成 ${msg.ok}/${msg.total} 页，耗时 ${msg.secs}s`);
       } else if (msg.type === 'error') {

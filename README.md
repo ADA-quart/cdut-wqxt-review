@@ -42,8 +42,38 @@ powershell -ExecutionPolicy Bypass -File setup-p2t.ps1   # 一次性建环境（
 downloads/电法勘探原理与方法/
 ├── 2026-09-28第3-4节/            # 原始图片
 ├── 2026-09-28第3-4节.md          # 转换出的 Markdown（公式为 $...$ / $$...$$）
+├── 2026-09-28第3-4节.pdf         # 课件图合成的 PDF（Obsidian 侧边翻页 / 传 ima 用）
 └── 2026-09-28第3-4节_assets/     # 版面中的图形元素（按页分目录）
 ```
+
+Markdown 每页顶部带有 `[[课次.pdf#page=N|第 N 页]]` 翻页链接：在 Obsidian 里分屏打开 PDF 后，
+点链接即可让右侧 PDF 跳到对应页（配合 PDF++ 插件还有悬浮预览与页级反链）。
+
+### 可选：LLM 纠错与重点总结
+
+OCR 会有零星错字（如「也位差」→「电位差」）。界面提供两个操作（每个课次目录旁）：
+
+- **纠错**：逐页让 LLM 修正 OCR 错字，公式/图片/链接/结构一律不动；结构校验不通过的页自动保留原文。
+  首次执行会备份原始 OCR 结果到 `课次.ocr-backup.md`（可随时用「转 MD」重新生成）。
+- **总结**：分块提取要点再合并，生成「重点总结」插入 md 顶部（`<!-- llm-summary:start/end -->` 区块，可反复重新生成）。
+
+纠错有三档模式（右上角「LLM 设置」里配置，每档独立填 API Key）：
+
+| 模式 | 说明 | token 量级（77 页/节） |
+| --- | --- | --- |
+| 纯文本（默认） | 只发 OCR 文字 | 约 5–8 万 |
+| 图片上云 | 页面截图 + 文字发云端视觉模型，按截图校对术语/公式 | 约 15–18 万（5–10×） |
+| 图片本地 | 发给本机推理服务（Ollama / vLLM），零 API 费用 | —— |
+
+任务卡片会实时显示 token 用量（输入+输出）。配置示例：
+
+```
+纯文本    https://api.deepseek.com/v1            deepseek-chat
+图片上云  https://dashscope.aliyuncs.com/compatible-mode/v1   qwen-vl-max
+图片本地  http://127.0.0.1:11434/v1              qwen2.5vl:7b   （Ollama，key 随便填）
+```
+
+每档都有「测试连接」按钮（会先保存再发一条探测请求）。配置保存在本机 `config.json`（已 gitignore）。
 
 ## 架构
 
@@ -124,6 +154,11 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | POST | `/api/md-jobs` | 创建转换任务 `{dir}`（downloads 下相对目录） |
 | GET | `/api/md-jobs` / `/api/md-jobs/:id` | 转换任务列表 / 详情 |
 | POST | `/api/md-jobs/:id/cancel` | 取消转换 |
+| GET/PUT | `/api/llm-config` | LLM 三档配置（不回传明文密钥） |
+| POST | `/api/llm-test` | 测试某档连通性 `{profile}` |
+| POST | `/api/llm-jobs` | 纠错/总结任务 `{op:'proofread'|'summarize', dir, mode?}` |
+| GET | `/api/llm-jobs` / `/api/llm-jobs/:id` | LLM 任务列表 / 详情（含 token 用量） |
+| POST | `/api/llm-jobs/:id/cancel` | 取消 LLM 任务 |
 
 ## 已验证结果
 

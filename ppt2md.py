@@ -5,6 +5,9 @@
     python ppt2md.py "downloads/电法勘探原理与方法/2026-09-28第3-4节"
     python ppt2md.py <dir> [-o out.md] [--device cuda] [--limit N]
     python ppt2md.py <dir> --json      # 逐行输出 JSON 进度（供后端调用）
+
+默认同时把课件图合成同名 PDF，并在 Markdown 每页顶部插入
+`[[课次.pdf#page=N|第 N 页]]` 翻页链接（Obsidian + PDF++ 使用）。
 """
 import argparse
 import json
@@ -51,6 +54,23 @@ def collect_images(src: Path):
     return sorted(files, key=key)
 
 
+def build_pdf(images, pdf_path: Path):
+    """把课次图片按序合成一个 PDF（供 Obsidian / ima 侧边展示）。返回页数。"""
+    import pymupdf
+
+    doc = pymupdf.open()
+    try:
+        for f in images:
+            with pymupdf.open(str(f)) as img:
+                rect = img[0].rect
+                page = doc.new_page(width=rect.width, height=rect.height)
+                page.insert_image(rect, filename=str(f))
+        doc.save(str(pdf_path))
+        return doc.page_count
+    finally:
+        doc.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", help="课次图片目录")
@@ -58,6 +78,7 @@ def main():
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"], help="推理设备（auto=有 CUDA 就用）")
     ap.add_argument("--limit", type=int, default=0, help="只处理前 N 张（0=全部）")
     ap.add_argument("--json", action="store_true", help="逐行输出 JSON 进度（供后端解析）")
+    ap.add_argument("--no-pdf", action="store_true", help="不生成课件 PDF、不插入翻页链接")
     args = ap.parse_args()
 
     emit = make_emitter(args.json)
@@ -82,6 +103,19 @@ def main():
         shutil.rmtree(assets_dir)
 
     emit({"type": "start", "total": len(images), "out": str(out_path)}, f"[i] 共 {len(images)} 张图 -> {out_path}")
+
+    # 先合成课件 PDF（百页约 0.5s），供 Obsidian 侧边预览与翻页链接使用
+    pdf_path = None
+    if not args.no_pdf:
+        pdf_path = out_path.parent / f"{out_path.stem}.pdf"
+        t_pdf = time.time()
+        try:
+            n_pages = build_pdf(images, pdf_path)
+            emit({"type": "pdf", "pages": n_pages, "secs": round(time.time() - t_pdf, 2), "path": str(pdf_path)},
+                 f"[i] 课件 PDF 已生成：{pdf_path.name}（{n_pages} 页, {time.time()-t_pdf:.2f}s）")
+        except Exception as e:
+            pdf_path = None
+            emit({"type": "warn", "error": f"PDF 生成失败：{e}"}, f"[!] PDF 生成失败：{e}")
 
     from pix2text import Pix2Text
 
@@ -115,6 +149,8 @@ def main():
         except OSError:
             pass
         parts.append(f"\n<!-- page {i}: {img.name} -->\n")
+        if pdf_path is not None:
+            parts.append(f"📄 [[{pdf_path.name}#page={i}|第 {i} 页]]\n")
         parts.append(md.strip() + "\n")
         ok += 1
         emit(
@@ -125,7 +161,8 @@ def main():
     out_path.write_text("\n".join(parts), encoding="utf-8")
     emit(
         {"type": "done", "ok": ok, "total": len(images), "out": str(out_path),
-         "assets": str(assets_dir), "secs": round(time.time() - t0, 1)},
+         "assets": str(assets_dir), "pdf": str(pdf_path) if pdf_path else None,
+         "secs": round(time.time() - t0, 1)},
         f"[OK] 完成：{out_path}（{ok}/{len(images)} 页, 总耗时 {time.time()-t0:.1f}s）",
     )
     emit(None, f"[i] 图素材：{assets_dir}")

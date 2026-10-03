@@ -6,6 +6,8 @@ const state = {
   courses: [],
   jobs: new Map(),
   mdJobs: new Map(),
+  llmJobs: new Map(),
+  llmConfig: null,
   mdTool: null,
   subsCache: new Map(),
 };
@@ -256,7 +258,8 @@ function renderJobs() {
   const box = $('jobList');
   const dl = [...state.jobs.values()].map((j) => ({ ...j, kind: 'download' }));
   const md = [...state.mdJobs.values()].map((j) => ({ ...j, kind: 'md' }));
-  const all = [...dl, ...md].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const llm = [...state.llmJobs.values()].map((j) => ({ ...j, kind: 'llm' }));
+  const all = [...dl, ...md, ...llm].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   if (all.length === 0) {
     box.innerHTML = '<p class="empty">暂无任务</p>';
     return;
@@ -265,6 +268,10 @@ function renderJobs() {
   for (const j of all) {
     if (j.kind === 'md') {
       box.appendChild(renderMdJobCard(j));
+      continue;
+    }
+    if (j.kind === 'llm') {
+      box.appendChild(renderLlmJobCard(j));
       continue;
     }
     const el = document.createElement('div');
@@ -392,6 +399,14 @@ function renderMdJobCard(j) {
     open.textContent = '打开 md';
     right.append(document.createTextNode(' '), open);
   }
+  if (j.status === 'done' && j.pdf) {
+    const openPdf = document.createElement('a');
+    openPdf.className = 'btn';
+    openPdf.href = '/files/' + j.pdf.split('/').map(encodeURIComponent).join('/');
+    openPdf.target = '_blank';
+    openPdf.textContent = '打开 PDF';
+    right.append(document.createTextNode(' '), openPdf);
+  }
 
   head.append(left, right);
 
@@ -403,6 +418,152 @@ function renderMdJobCard(j) {
 
   el.append(head, bar);
   return el;
+}
+
+function renderLlmJobCard(j) {
+  const el = document.createElement('div');
+  el.className = 'job';
+
+  const head = document.createElement('div');
+  head.className = 'job-head';
+
+  const left = document.createElement('div');
+  const title = document.createElement('p');
+  title.className = 'job-title';
+  const modeLabel = LLM_FIELDS[j.mode]?.label || '';
+  title.textContent = `#${j.id} ${j.op === 'proofread' ? '纠错' : '总结'} · ${j.title}${j.op === 'proofread' && modeLabel ? `（${modeLabel}）` : ''}`;
+  const stats = document.createElement('div');
+  stats.className = 'job-stats';
+  const tokenText = j.usage && (j.usage.prompt || j.usage.completion)
+    ? ` · tokens ${j.usage.prompt}+${j.usage.completion}`
+    : '';
+  stats.textContent = j.status === 'running'
+    ? `进度 ${j.progress.done}/${j.progress.total || '…'}${j.progress.current ? ' · ' + j.progress.current : ''}${tokenText}`
+    : j.status === 'done'
+      ? (j.log[j.log.length - 1] || '完成')
+      : j.status === 'error'
+        ? (j.error || '失败')
+        : j.status === 'canceled' ? '已取消' : '排队中…';
+  left.append(title, stats);
+
+  const right = document.createElement('div');
+  const badge = document.createElement('span');
+  badge.className = 'badge ' + j.status + ' llm';
+  badge.textContent = j.status === 'running' ? '处理中' : statusLabel(j.status);
+  right.appendChild(badge);
+
+  if (j.status === 'running' || j.status === 'pending') {
+    const cancel = document.createElement('button');
+    cancel.className = 'btn danger';
+    cancel.textContent = '取消';
+    cancel.onclick = async () => {
+      try { await api(`/llm-jobs/${j.id}/cancel`, { method: 'POST' }); } catch {}
+    };
+    right.append(document.createTextNode(' '), cancel);
+  }
+  if (j.status === 'done' && j.outMd) {
+    const open = document.createElement('a');
+    open.className = 'btn';
+    open.href = '/files/' + j.outMd.split('/').map(encodeURIComponent).join('/');
+    open.target = '_blank';
+    open.textContent = '查看 md';
+    right.append(document.createTextNode(' '), open);
+  }
+
+  head.append(left, right);
+
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const fill = document.createElement('i');
+  fill.style.width = pct(j.progress.done, j.progress.total) + '%';
+  bar.appendChild(fill);
+
+  el.append(head, bar);
+  return el;
+}
+
+// ---------- LLM 设置 ----------
+
+const LLM_FIELDS = {
+  text: { base: 'pTextBaseUrl', model: 'pTextModel', key: 'pTextKey', test: 'testText', btn: 'btnTestText', label: '纯文本' },
+  visionCloud: { base: 'pCloudBaseUrl', model: 'pCloudModel', key: 'pCloudKey', test: 'testCloud', btn: 'btnTestCloud', label: '图片上云' },
+  visionLocal: { base: 'pLocalBaseUrl', model: 'pLocalModel', key: 'pLocalKey', test: 'testLocal', btn: 'btnTestLocal', label: '图片本地' },
+};
+
+async function loadLlmConfig() {
+  try {
+    state.llmConfig = await api('/llm-config');
+  } catch {
+    state.llmConfig = null;
+  }
+  const btn = $('btnLlmConfig');
+  if (btn) {
+    const mode = state.llmConfig?.defaultMode || 'text';
+    const prof = state.llmConfig?.profiles?.[mode];
+    btn.title = prof?.hasKey
+      ? `默认模式：${LLM_FIELDS[mode]?.label || mode} · ${prof.model}`
+      : '未配置 LLM（点此设置）';
+    btn.textContent = prof?.hasKey ? 'LLM 设置 ●' : 'LLM 设置';
+  }
+  return state.llmConfig;
+}
+
+function openLlmConfig() {
+  const c = state.llmConfig || {};
+  for (const [key, f] of Object.entries(LLM_FIELDS)) {
+    const p = c.profiles?.[key] || {};
+    $(f.base).value = p.baseUrl || '';
+    $(f.model).value = p.model || '';
+    $(f.key).value = '';
+    $(f.key).placeholder = p.hasKey ? `已保存 ${p.apiKeyMasked}（留空不变）` : '留空保持原样';
+    $(f.test).textContent = '';
+    $(f.test).className = 'test-result';
+  }
+  $('llmDefaultMode').value = c.defaultMode || 'text';
+  $('llmConcurrency').value = String(c.concurrency || 3);
+  $('llmModal').hidden = false;
+}
+
+function collectLlmForm() {
+  const profiles = {};
+  for (const [key, f] of Object.entries(LLM_FIELDS)) {
+    const prof = { baseUrl: $(f.base).value.trim(), model: $(f.model).value.trim() };
+    const k = $(f.key).value;
+    if (k) prof.apiKey = k;
+    profiles[key] = prof;
+  }
+  return {
+    profiles,
+    defaultMode: $('llmDefaultMode').value,
+    concurrency: Number($('llmConcurrency').value) || 3,
+  };
+}
+
+async function saveLlmConfig() {
+  try {
+    state.llmConfig = await api('/llm-config', { method: 'PUT', body: collectLlmForm() });
+    $('llmModal').hidden = true;
+    toast('LLM 设置已保存', 'ok');
+    await loadLlmConfig();
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+
+async function testLlmProfile(key) {
+  const f = LLM_FIELDS[key];
+  const span = $(f.test);
+  span.textContent = '保存并测试中…';
+  span.className = 'test-result';
+  try {
+    state.llmConfig = await api('/llm-config', { method: 'PUT', body: collectLlmForm() });
+    const r = await api('/llm-test', { method: 'POST', body: { profile: key } });
+    span.textContent = `✓ ${r.ms}ms：${r.reply}`;
+    span.className = 'test-result ok';
+  } catch (e) {
+    span.textContent = '✗ ' + String(e.message || e).slice(0, 90);
+    span.className = 'test-result err';
+  }
 }
 
 function estimateTotal(job) {
@@ -450,6 +611,21 @@ function renderTree(nodes) {
         btn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startMdJob(node, btn); };
         summary.appendChild(btn);
       }
+      if (node.hasMd) {
+        const proof = document.createElement('button');
+        proof.className = 'btn tiny';
+        proof.textContent = '纠错';
+        proof.title = '用 LLM 修正 OCR 错别字（公式与链接不动）';
+        proof.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startLlmJob(node, 'proofread', proof); };
+        summary.appendChild(proof);
+
+        const sum = document.createElement('button');
+        sum.className = 'btn tiny';
+        sum.textContent = '总结';
+        sum.title = '用 LLM 生成重点总结（插到 md 顶部）';
+        sum.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startLlmJob(node, 'summarize', sum); };
+        summary.appendChild(sum);
+      }
       details.appendChild(summary);
       if (kids.length) details.appendChild(renderTree(kids));
       root.appendChild(details);
@@ -480,7 +656,7 @@ function renderTree(nodes) {
       const a = document.createElement('a');
       a.href = node.url;
       a.target = '_blank';
-      a.textContent = '📎 ' + node.name;
+      a.textContent = (/\.pdf$/i.test(node.name) ? '📕 ' : '📎 ') + node.name;
       row.appendChild(a);
       root.appendChild(row);
     }
@@ -498,6 +674,29 @@ async function startMdJob(node, btn) {
     toast(`已提交转换：${node.name}`, 'ok');
   } catch (e) {
     toast('转换提交失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+async function startLlmJob(node, op, btn) {
+  if (!node.rel) return;
+  const cfg = state.llmConfig;
+  const mode = cfg?.defaultMode || 'text';
+  if (!cfg?.profiles?.[mode]?.hasKey) {
+    toast(`请先在「LLM 设置」里配置「${LLM_FIELDS[mode]?.label || mode}」的 API Key`, 'err');
+    openLlmConfig();
+    return;
+  }
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    await api('/llm-jobs', { method: 'POST', body: { op, dir: node.rel, mode } });
+    toast(`已提交${op === 'proofread' ? '纠错' : '总结'}：${node.name}（${LLM_FIELDS[mode]?.label || mode}）`, 'ok');
+  } catch (e) {
+    toast('提交失败：' + e.message, 'err');
   } finally {
     btn.disabled = false;
     btn.textContent = original;
@@ -566,6 +765,13 @@ $('btnDownloadAll').onclick = async () => {
 
 $('btnCloseSubs').onclick = () => { $('subsModal').hidden = true; };
 
+$('btnLlmConfig').onclick = openLlmConfig;
+$('btnCancelLlm').onclick = () => { $('llmModal').hidden = true; };
+$('btnSaveLlm').onclick = saveLlmConfig;
+for (const [key, f] of Object.entries(LLM_FIELDS)) {
+  $(f.btn).onclick = () => testLlmProfile(key);
+}
+
 $('monthsSel').onchange = loadCourses;
 
 // ---------- SSE 进度 ----------
@@ -589,6 +795,12 @@ function connectEvents() {
         state.mdJobs.set(msg.job.id, msg.job);
         renderJobs();
         if (msg.job.status === 'done' && msg.job.finishedAt) loadFiles();
+      } else if (msg.type === 'hello-llm') {
+        for (const j of msg.jobs) state.llmJobs.set(j.id, j);
+        renderJobs();
+      } else if (msg.type === 'llm-job') {
+        state.llmJobs.set(msg.job.id, msg.job);
+        renderJobs();
       }
     } catch {}
   };
@@ -608,6 +820,9 @@ function connectEvents() {
   state.mdTool = await api('/md-tools').catch(() => null);
   const md = await api('/md-jobs').catch(() => ({ jobs: [] }));
   for (const j of md.jobs || []) state.mdJobs.set(j.id, j);
+  await loadLlmConfig();
+  const llm = await api('/llm-jobs').catch(() => ({ jobs: [] }));
+  for (const j of llm.jobs || []) state.llmJobs.set(j.id, j);
   renderJobs();
   loadFiles();
   connectEvents();
