@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>问渠学堂 PPT 下载器</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">问</span>
+    <div>
+      <h1>问渠学堂 PPT 下载器</h1>
+      <p class="sub">按课程和课次批量下载录播课件图片</p>
+    </div>
+  </div>
+  <div class="session" id="session">
+    <span class="dot offline" id="statusDot"></span>
+    <span id="statusText">检查中…</span>
+    <button class="btn ghost" id="btnLogin" hidden>登录</button>
+    <button class="btn ghost" id="btnLogout" hidden>退出</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- 左栏：课程 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>我的课程</h2>
+      <div class="toolbar">
+        <label class="field compact">
+          <span>回溯月数</span>
+          <select id="monthsSel">
+            <option value="2">2 个月</option>
+            <option value="6">6 个月</option>
+            <option value="12" selected>12 个月</option>
+            <option value="24">24 个月</option>
+          </select>
+        </label>
+        <button class="btn" id="btnRefresh">刷新</button>
+        <button class="btn primary" id="btnDownloadAll">全部下载</button>
+      </div>
+    </div>
+    <div class="panel-body" id="courseList">
+      <p class="empty">登录后加载课程列表</p>
+    </div>
+  </section>
+
+  <!-- 右栏：任务与文件 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>下载任务</h2>
+      <div class="toolbar">
+        <button class="btn" id="btnRefreshJobs">刷新</button>
+      </div>
+    </div>
+    <div class="panel-body" id="jobList">
+      <p class="empty">暂无任务</p>
+    </div>
+
+    <div class="panel-head sub-head">
+      <h2>已下载文件</h2>
+      <div class="toolbar">
+        <button class="btn" id="btnRefreshFiles">刷新</button>
+      </div>
+    </div>
+    <div class="panel-body scroll" id="fileTree">
+      <p class="empty">downloads/ 目录为空</p>
+    </div>
+  </section>
+</main>
+
+<!-- 登录弹窗 -->
+<div class="modal-mask" id="loginModal" hidden>
+  <div class="modal">
+    <h3>登录问渠学堂</h3>
+    <p class="hint">通过成都理工大学统一认证登录。首次点击后会在本机拉起一个 Edge 窗口，若需要验证码请在该窗口中完成。</p>
+    <label class="field">
+      <span>学号</span>
+      <input type="text" id="inpUser" placeholder="例如 202405060130" autocomplete="username">
+    </label>
+    <label class="field">
+      <span>密码</span>
+      <input type="password" id="inpPass" placeholder="统一认证密码" autocomplete="current-password">
+    </label>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnCancelLogin">取消</button>
+      <button class="btn primary" id="btnDoLogin">登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- 课次弹窗 -->
+<div class="modal-mask" id="subsModal" hidden>
+  <div class="modal wide">
+    <h3 id="subsTitle">课次</h3>
+    <div class="subs-list" id="subsList"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnCloseSubs">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

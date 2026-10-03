@@ -1,0 +1,5 @@
+node_modules/
+.edge-profile/
+downloads/
+*.log
+.DS_Store
