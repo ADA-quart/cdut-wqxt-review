@@ -461,6 +461,14 @@ function renderMdJobCard(j) {
     openReport.textContent = '清洗复核';
     right.append(document.createTextNode(' '), openReport);
   }
+  if (j.status === 'done' && j.dir) {
+    const review = document.createElement('a');
+    review.className = 'btn';
+    review.href = '/review.html?dir=' + encodeURIComponent(j.dir);
+    review.target = '_blank';
+    review.textContent = '复习';
+    right.append(document.createTextNode(' '), review);
+  }
 
   head.append(left, right);
 
@@ -673,6 +681,17 @@ function renderTree(nodes) {
         summary.appendChild(btn);
       }
       if (node.hasMd) {
+        const review = document.createElement('button');
+        review.className = 'btn tiny';
+        review.textContent = '复习';
+        review.title = '打开复习工作台：左看笔记 / 右上翻课件 / 右下问 AI';
+        review.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          window.open('/review.html?dir=' + encodeURIComponent(node.rel), '_blank');
+        };
+        summary.appendChild(review);
+
         const proof = document.createElement('button');
         proof.className = 'btn tiny';
         proof.textContent = '纠错';

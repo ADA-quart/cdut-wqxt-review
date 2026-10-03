@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>复习 · 问渠学堂</title>
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="/review.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <a class="back" href="/" title="返回下载器">← 返回</a>
+    <div class="titles">
+      <h1 id="lessonTitle">加载中…</h1>
+      <p class="sub" id="lessonSub"></p>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn" id="btnSummarize" title="LLM 整理这节课的重点，写回笔记顶部">整理重点</button>
+    <button class="btn" id="btnCopyMd">复制 Markdown</button>
+    <a class="btn" id="linkDownloadMd" download>下载 md</a>
+    <a class="btn" id="linkOpenMd" target="_blank">原文</a>
+    <button class="btn" id="btnIndex">生成课程索引</button>
+    <button class="btn primary" id="btnChain">知识链</button>
+  </div>
+</header>
+
+<main class="layout" id="layout">
+  <section class="pane md-pane" id="mdPane">
+    <div class="md-scroll" id="mdScroll">
+      <div id="mdContent" class="markdown"><p class="empty">加载中…</p></div>
+    </div>
+  </section>
+
+  <div class="splitter v" id="splitV" title="拖动调整宽度"></div>
+
+  <section class="right-col" id="rightCol">
+    <section class="pane img-pane" id="imgPane">
+      <div class="pane-head">
+        <span class="pane-title">课件</span>
+        <div class="tools">
+          <label class="chk" title="滚动左侧内容时自动切换对应页">
+            <input type="checkbox" id="followScroll"> 跟随滚动
+          </label>
+          <button class="btn tiny" id="btnPrev" title="上一页（←）">◀</button>
+          <span id="imgCounter" class="counter">0/0</span>
+          <button class="btn tiny" id="btnNext" title="下一页（→）">▶</button>
+          <a class="btn tiny" id="btnRaw" target="_blank">原图</a>
+        </div>
+      </div>
+      <div class="img-stage" id="imgStage"><div class="empty">暂无图片</div></div>
+      <div class="thumbs" id="thumbs"></div>
+    </section>
+
+    <div class="splitter h" id="splitH" title="拖动调整高度"></div>
+
+    <section class="pane chat-pane" id="chatPane">
+      <div class="pane-head">
+        <span class="pane-title">AI 对话</span>
+        <div class="tools">
+          <label class="chk" title="发送时附带当前页的 OCR 文字">
+            <input type="checkbox" id="attachPage" checked> 附带当前页
+          </label>
+          <button class="btn tiny" id="btnClearChat">清空</button>
+        </div>
+      </div>
+      <div class="chat-msgs" id="chatMsgs">
+        <div class="chat-hint">选中左侧笔记或对话里的文字，可「引用到提问」或让它「解释这段」。<br>
+        对话使用的模型在下载器右上角「LLM 设置」里配置（默认纯文本档）。</div>
+      </div>
+      <div class="chat-input">
+        <textarea id="chatInput" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
+        <button class="btn primary" id="btnSend">发送</button>
+      </div>
+    </section>
+  </section>
+</main>
+
+<div id="selMenu" class="sel-menu" hidden>
+  <button data-act="quote">引用到提问</button>
+  <button data-act="explain">解释这段</button>
+</div>
+
+<aside class="drawer" id="chainDrawer" hidden>
+  <div class="drawer-head">
+    <h3>知识链</h3>
+    <button class="btn tiny" id="btnCloseChain">×</button>
+  </div>
+  <div class="drawer-body">
+    <h4>AI 织知识链</h4>
+    <div class="links">
+      <div class="link-item" id="btnWeaveCourse">
+        <div class="name">本课程知识链</div>
+        <div class="snip">AI 读全部课次的重点，生成课程索引（按主题分组），并给每节课补「相关课次」</div>
+      </div>
+      <div class="link-item" id="btnWeaveAll">
+        <div class="name">课程间知识链</div>
+        <div class="snip">AI 找出课程之间的关联（同一方向/先修后继），互相链接并生成「知识链.md」总览</div>
+      </div>
+    </div>
+    <h4>本课链接到</h4>
+    <div id="outLinks" class="links"><p class="empty">无</p></div>
+    <h4>反链 · 谁引用了本课</h4>
+    <div id="backLinks" class="links"><p class="empty">加载中…</p></div>
+  </div>
+</aside>
+
+<script src="/vendor/marked/marked.umd.js"></script>
+<script src="/vendor/katex/katex.min.js"></script>
+<script src="/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="/review.js"></script>
+</body>
+</html>

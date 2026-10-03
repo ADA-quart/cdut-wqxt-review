@@ -349,6 +349,240 @@ async function runSummarize(job) {
   return { chunks: chunks.length };
 }
 
+// ---------- 知识链（AI 织网）----------
+
+/** 收集某课程下已转 MD 的课次 */
+function collectLessonMds(courseAbs) {
+  const out = [];
+  let entries = [];
+  try { entries = fs.readdirSync(courseAbs, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.') || e.name.endsWith('_assets')) continue;
+    const mdPath = path.join(courseAbs, `${e.name}.md`);
+    if (fs.existsSync(mdPath)) out.push({ name: e.name, mdPath });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+}
+
+/** 课次摘要：优先用重点总结块，其次正文前段 */
+function lessonSummaryText(md) {
+  const m = /<!-- llm-summary:start -->([\s\S]*?)<!-- llm-summary:end -->/.exec(md);
+  const src = m ? m[1] : stripForSummary(md);
+  return src.replace(/^##\s*重点总结\s*$/m, '').trim().slice(0, 600);
+}
+
+function parseJsonLoose(text) {
+  let t = String(text).trim().replace(/^```(?:json)?/i, '').replace(/```\s*$/, '').trim();
+  const s = t.indexOf('{');
+  const e = t.lastIndexOf('}');
+  if (s >= 0 && e > s) t = t.slice(s, e + 1);
+  return JSON.parse(t);
+}
+
+function extractBlock(text, marker) {
+  const re = new RegExp(`<!-- ${marker}:start -->[\\s\\S]*?<!-- ${marker}:end -->`);
+  const m = re.exec(text);
+  return m ? m[0] : '';
+}
+
+/** 替换/插入带标记的块；block 为 null 时移除 */
+function upsertBlock(text, marker, block) {
+  const re = new RegExp(`<!-- ${marker}:start -->[\\s\\S]*?<!-- ${marker}:end -->\\n?`);
+  if (!block) return text.replace(re, '');
+  if (re.test(text)) return text.replace(re, block);
+  const summaryRe = /<!-- llm-summary:start -->[\s\S]*?<!-- llm-summary:end -->\n?/;
+  const sm = summaryRe.exec(text);
+  if (sm) {
+    const pos = sm.index + sm[0].length;
+    return text.slice(0, pos) + '\n' + block + text.slice(pos);
+  }
+  const t = /^#\s.*\n/m.exec(text);
+  const pos = t ? t.index + t[0].length : 0;
+  return text.slice(0, pos) + '\n' + block + text.slice(pos);
+}
+
+const relOf = (p) => path.relative(DOWNLOAD_DIR, p).split(path.sep).join('/');
+
+/** 课程内知识链：生成课程索引 + 每个课次的「相关课次」块 */
+async function runWeaveCourse(job) {
+  const courseAbs = job.absDir;
+  const courseName = path.basename(courseAbs);
+  const lessons = collectLessonMds(courseAbs);
+  if (lessons.length === 0) throw new Error('该课程还没有已转 MD 的课次');
+
+  job.progress.total = 2;
+  job.progress.current = '读取课次摘要';
+  emit(job);
+  const items = lessons.map((l) => ({
+    name: l.name,
+    summary: lessonSummaryText(fs.readFileSync(l.mdPath, 'utf8')),
+  }));
+  job.progress.done = 1;
+  emit(job);
+
+  const payload = items.map((it) => `【${it.name}】\n${it.summary}`).join('\n\n');
+  const { content, usage } = await chatRetry(
+    [
+      {
+        role: 'system',
+        content: `你是课程知识地图助手。给定一门课的课次与摘要，请输出 JSON（不要代码块）：
+{"groups":[{"topic":"主题名","lessons":["课次名"]}],"related":[{"from":"课次名","to":"课次名","reason":"一句话说明关系"}]}
+要求：
+- 课次名必须与给定名称完全一致
+- groups 按知识主题分组，覆盖所有课次
+- related 只列真正有知识关联的课次对（每课最多 2 条），reason 用中文、20 字以内
+只输出 JSON。`,
+      },
+      { role: 'user', content: payload },
+    ],
+    { profile: 'text', temperature: 0.2, maxTokens: 2000 },
+  );
+  addUsage(job, usage);
+
+  const parsed = parseJsonLoose(content);
+  const names = new Set(lessons.map((l) => l.name));
+  const groups = (parsed.groups || [])
+    .map((g) => ({
+      topic: String(g.topic || '').trim(),
+      lessons: (g.lessons || []).map(String).filter((n) => names.has(n)),
+    }))
+    .filter((g) => g.topic && g.lessons.length);
+  const related = (parsed.related || [])
+    .map((r) => ({ from: String(r.from || '').trim(), to: String(r.to || '').trim(), reason: String(r.reason || '').trim() }))
+    .filter((r) => names.has(r.from) && names.has(r.to) && r.from !== r.to);
+
+  const inGroups = new Set(groups.flatMap((g) => g.lessons));
+  const rest = lessons.map((l) => l.name).filter((n) => !inGroups.has(n));
+  if (rest.length) groups.push({ topic: '其他课次', lessons: rest });
+
+  // 课程索引（保留课程间关联块）
+  const idxPath = path.join(courseAbs, `${courseName}.md`);
+  const lines = [`# ${courseName}`, '', '> 课程索引（AI 生成，重新生成会覆盖本文件）', '', '## 知识结构', ''];
+  for (const g of groups) {
+    lines.push(`### ${g.topic}`, '');
+    for (const n of g.lessons) lines.push(`- [[${n}]]`);
+    lines.push('');
+  }
+  lines.push('## 课次索引', '');
+  for (const l of lessons) lines.push(`- [[${l.name}]]`);
+  lines.push('');
+  let idxMd = lines.join('\n');
+  if (fs.existsSync(idxPath)) {
+    const kept = extractBlock(fs.readFileSync(idxPath, 'utf8'), 'llm-courses');
+    if (kept) idxMd = idxMd.trimEnd() + '\n\n' + kept + '\n';
+  }
+  fs.writeFileSync(idxPath, idxMd, 'utf8');
+  job.resultRel = relOf(idxPath);
+
+  // 双向「相关课次」
+  const byLesson = new Map();
+  const push = (a, b, reason) => {
+    if (!byLesson.has(a)) byLesson.set(a, []);
+    byLesson.get(a).push({ to: b, reason });
+  };
+  for (const r of related) { push(r.from, r.to, r.reason); push(r.to, r.from, r.reason); }
+  for (const l of lessons) {
+    const rels = byLesson.get(l.name) || [];
+    const block = rels.length
+      ? `<!-- llm-related:start -->\n## 相关课次\n\n${rels.map((r) => `- [[${r.to}]] — ${r.reason}`).join('\n')}\n<!-- llm-related:end -->\n`
+      : null;
+    fs.writeFileSync(l.mdPath, upsertBlock(fs.readFileSync(l.mdPath, 'utf8'), 'llm-related', block), 'utf8');
+  }
+
+  job.progress.done = 2;
+  emit(job);
+  return { lessons: lessons.length, groups: groups.length, related: related.length };
+}
+
+/** 课程间知识链：课程索引互链 + 根目录「知识链.md」 */
+async function runWeaveCourses(job) {
+  const courses = [];
+  let entries = [];
+  try { entries = fs.readdirSync(DOWNLOAD_DIR, { withFileTypes: true }); } catch { entries = []; }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.')) continue;
+    const courseAbs = path.join(DOWNLOAD_DIR, e.name);
+    const lessons = collectLessonMds(courseAbs);
+    if (lessons.length > 0) courses.push({ name: e.name, abs: courseAbs, lessons });
+  }
+  if (courses.length < 2) throw new Error('至少需要两门已转 MD 的课程，才能生成课程间知识链');
+
+  job.progress.total = 2;
+  job.progress.current = '分析课程结构';
+  emit(job);
+  const payload = courses
+    .map((c) => {
+      const idxPath = path.join(c.abs, `${c.name}.md`);
+      const idxText = fs.existsSync(idxPath) ? stripForSummary(fs.readFileSync(idxPath, 'utf8')).slice(0, 300) : '';
+      return `【${c.name}】课次：${c.lessons.map((l) => l.name).join('、')}${idxText ? `\n概述：${idxText}` : ''}`;
+    })
+    .join('\n\n');
+  job.progress.done = 1;
+  emit(job);
+
+  const { content, usage } = await chatRetry(
+    [
+      {
+        role: 'system',
+        content: `你是课程体系地图助手。给定一位学生学过的课程（课程名 + 课次列表 + 概述），请找出课程之间的知识关联（如：同一学科方向、先修-后续关系、方法论相通）。输出 JSON（不要代码块）：
+{"related":[{"from":"课程A","to":"课程B","reason":"一句话说明关联"}]}
+要求：
+- 课程名必须与给定名称完全一致
+- 只列真正相关的课程对，宁缺毋滥；每门课最多 2 条
+- reason 用中文、20-30 字
+只输出 JSON。`,
+      },
+      { role: 'user', content: payload },
+    ],
+    { profile: 'text', temperature: 0.2, maxTokens: 1500 },
+  );
+  addUsage(job, usage);
+
+  const parsed = parseJsonLoose(content);
+  const names = new Set(courses.map((c) => c.name));
+  const related = (parsed.related || [])
+    .map((r) => ({ from: String(r.from || '').trim(), to: String(r.to || '').trim(), reason: String(r.reason || '').trim() }))
+    .filter((r) => names.has(r.from) && names.has(r.to) && r.from !== r.to);
+
+  const byCourse = new Map();
+  const push = (a, b, reason) => {
+    if (!byCourse.has(a)) byCourse.set(a, []);
+    byCourse.get(a).push({ to: b, reason });
+  };
+  for (const r of related) { push(r.from, r.to, r.reason); push(r.to, r.from, r.reason); }
+
+  for (const c of courses) {
+    const idxPath = path.join(c.abs, `${c.name}.md`);
+    let md = fs.existsSync(idxPath)
+      ? fs.readFileSync(idxPath, 'utf8')
+      : `# ${c.name}\n\n> 课程索引（AI 生成）\n\n## 课次索引\n\n${c.lessons.map((l) => `- [[${l.name}]]`).join('\n')}\n`;
+    const rels = byCourse.get(c.name) || [];
+    const body = rels.length
+      ? rels.map((r) => `- [[${r.to}]] — ${r.reason}`).join('\n')
+      : '（暂未识别到明显关联）';
+    const block = `<!-- llm-courses:start -->\n## 相关课程\n\n${body}\n<!-- llm-courses:end -->\n`;
+    fs.writeFileSync(idxPath, upsertBlock(md, 'llm-courses', block), 'utf8');
+  }
+
+  const rootLines = ['# 知识链', '', '> AI 生成的课程关系总览', '', '## 课程', ''];
+  for (const c of courses) rootLines.push(`- [[${c.name}]]`);
+  rootLines.push('', '## 课程关系', '');
+  if (related.length) rootLines.push(...related.map((r) => `- [[${r.from}]] ↔ [[${r.to}]] — ${r.reason}`));
+  else rootLines.push('（暂未识别出明确的课程关联）');
+  rootLines.push('');
+  const rootPath = path.join(DOWNLOAD_DIR, '知识链.md');
+  fs.writeFileSync(rootPath, rootLines.join('\n'), 'utf8');
+  job.resultRel = relOf(rootPath);
+
+  job.progress.done = 2;
+  emit(job);
+  return { courses: courses.length, related: related.length };
+}
+
+async function runWeave(job) {
+  return job.scope === 'all' ? runWeaveCourses(job) : runWeaveCourse(job);
+}
+
 // ---------- 任务管理 ----------
 
 function publicJob(j) {
@@ -365,6 +599,8 @@ function publicJob(j) {
     finishedAt: j.finishedAt,
     progress: j.progress,
     outMd: j.outMd,
+    scope: j.scope || null,
+    result: j.resultRel || null,
     usage: j.usage,
     error: j.error,
     log: j.log.slice(-8),
@@ -384,15 +620,27 @@ export function getLlmJob(id) {
   return j ? publicJob(j) : null;
 }
 
-export function createLlmJob({ op, dir, mode }) {
-  if (!['proofread', 'summarize'].includes(op)) throw new Error(`不支持的操作：${op}`);
+export function createLlmJob({ op, dir, mode, scope }) {
+  if (!['proofread', 'summarize', 'weave'].includes(op)) throw new Error(`不支持的操作：${op}`);
   const relDir = String(dir || '').replace(/^[/\\]+/, '');
-  const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
-  if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) throw new Error(`目录不存在：${relDir}`);
+  let absDir = null;
+  let mdPath = null;
+  let title = '';
 
-  const name = path.basename(absDir);
-  const mdPath = path.join(path.dirname(absDir), `${name}.md`);
-  if (!fs.existsSync(mdPath)) throw new Error('还没有 Markdown——先对该课次「转 MD」');
+  if (op === 'weave' && scope === 'all') {
+    title = '课程间知识链';
+  } else {
+    absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
+    if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) throw new Error(`目录不存在：${relDir}`);
+    if (op === 'weave') {
+      title = path.basename(absDir);
+    } else {
+      const name = path.basename(absDir);
+      mdPath = path.join(path.dirname(absDir), `${name}.md`);
+      if (!fs.existsSync(mdPath)) throw new Error('还没有 Markdown——先对该课次「转 MD」');
+      title = name;
+    }
+  }
 
   const cfg = loadConfig().llm;
   const useMode = op === 'proofread'
@@ -403,12 +651,14 @@ export function createLlmJob({ op, dir, mode }) {
     id: nextJobId++,
     op,
     mode: useMode,
+    scope: scope === 'all' ? 'all' : 'course',
     status: 'pending',
     relDir,
-    title: name,
+    title,
     mdPath,
+    absDir,
     mediaDir: absDir,
-    outMd: path.relative(DOWNLOAD_DIR, mdPath).split(path.sep).join('/'),
+    outMd: mdPath ? path.relative(DOWNLOAD_DIR, mdPath).split(path.sep).join('/') : null,
     createdAt: Date.now(),
     startedAt: null,
     finishedAt: null,
@@ -432,14 +682,20 @@ export function createLlmJob({ op, dir, mode }) {
     job.startedAt = Date.now();
     emit(job);
     try {
-      const r = op === 'proofread' ? await runProofread(job) : await runSummarize(job);
+      const r = op === 'proofread'
+        ? await runProofread(job)
+        : op === 'summarize'
+          ? await runSummarize(job)
+          : await runWeave(job);
       if (job.canceled) {
         job.status = 'canceled';
       } else {
         job.status = 'done';
         const tok = `tokens 输入 ${job.usage.prompt} / 输出 ${job.usage.completion}`;
         if (op === 'proofread') job.log.push(`完成：${r.pages} 页，保留原文 ${r.kept} 页；${tok}`);
-        else job.log.push(`完成：分 ${r.chunks} 块提取并汇总；${tok}`);
+        else if (op === 'summarize') job.log.push(`完成：分 ${r.chunks} 块提取并汇总；${tok}`);
+        else if (job.scope === 'all') job.log.push(`完成：${r.courses} 门课，识别关联 ${r.related} 对；${tok}`);
+        else job.log.push(`完成：${r.lessons} 个课次，关联 ${r.related} 对；${tok}`);
         job.progress.done = job.progress.total;
       }
     } catch (e) {

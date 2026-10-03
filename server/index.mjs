@@ -28,6 +28,7 @@ import {
   findPython, events as mdEvents,
 } from './mdconvert.mjs';
 import { publicConfig, saveConfig } from './config.mjs';
+import { streamChat } from './chat.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
   testProfile,
@@ -249,9 +250,11 @@ app.post('/api/llm-test', asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/llm-jobs', asyncRoute(async (req, res) => {
-  const { op, dir, mode } = req.body || {};
-  if (!op || !dir) return res.status(400).json({ error: '缺少 op 或 dir' });
-  const job = createLlmJob({ op, dir, mode });
+  const { op, dir, mode, scope } = req.body || {};
+  if (!op) return res.status(400).json({ error: '缺少 op' });
+  if (op !== 'weave' && !dir) return res.status(400).json({ error: '缺少 dir' });
+  if (op === 'weave' && scope !== 'all' && !dir) return res.status(400).json({ error: '缺少 dir' });
+  const job = createLlmJob({ op, dir, mode, scope });
   res.status(201).json({ job });
 }));
 
@@ -337,6 +340,114 @@ app.use('/files', (req, res, next) => {
 });
 
 app.use(express.static(PUBLIC_DIR));
+
+// 前端渲染库（marked / KaTeX），直接从 node_modules 提供
+app.use('/vendor/marked', express.static(path.join(ROOT_DIR, 'node_modules/marked/lib')));
+app.use('/vendor/katex', express.static(path.join(ROOT_DIR, 'node_modules/katex/dist')));
+
+// ---------- 复习工作台：对话 / 反链 / 课程索引 ----------
+
+app.post('/api/chat', asyncRoute(async (req, res) => {
+  const { messages, profile = 'text', temperature } = req.body || {};
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: '缺少 messages' });
+  }
+  const trimmed = messages
+    .filter((m) => m && typeof m.content === 'string' && ['system', 'user', 'assistant'].includes(m.role))
+    .slice(-24);
+
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+  try {
+    await streamChat({ messages: trimmed, profile, temperature }, (delta) => res.write(delta));
+    res.end();
+  } catch (e) {
+    res.write(`\n[错误] ${String(e?.message || e)}`);
+    res.end();
+  }
+}));
+
+/** 反链：扫描 downloads 下所有 .md，找引用某课次的 wiki 链接 */
+app.get('/api/backlinks', asyncRoute(async (req, res) => {
+  const relDir = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  if (!relDir) return res.status(400).json({ error: '缺少 dir' });
+  const target = path.basename(relDir);
+  const results = [];
+  const MAX_FILES = 500;
+  let scanned = 0;
+
+  const walk = (dir) => {
+    if (scanned > MAX_FILES || results.length >= 20) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (results.length >= 20 || scanned > MAX_FILES) return;
+      if (e.name.startsWith('.') || e.name.endsWith('_assets')) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!e.name.toLowerCase().endsWith('.md')) continue;
+      if (e.name === `${target}.md`) continue;
+      scanned++;
+      let text = '';
+      try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
+      const re = /\[\[([^\]]+)\]\]/g;
+      let m;
+      let snippet = null;
+      while ((m = re.exec(text))) {
+        const linkTarget = m[1].split('|')[0].split('#')[0].trim();
+        const base = path.basename(linkTarget).replace(/\.md$/i, '');
+        if (base === target) {
+          const idx = Math.max(0, m.index - 40);
+          snippet = text.slice(idx, Math.min(text.length, m.index + m[0].length + 60)).replace(/\s+/g, ' ');
+          break;
+        }
+      }
+      if (snippet) {
+        results.push({
+          rel: path.relative(DOWNLOAD_DIR, full).split(path.sep).join('/'),
+          name: e.name,
+          snippet,
+        });
+      }
+    }
+  };
+  walk(DOWNLOAD_DIR);
+  res.json({ backlinks: results });
+}));
+
+/** 生成/更新课程索引笔记（课程 → 课次的 wiki 链接） */
+app.post('/api/index-note', asyncRoute(async (req, res) => {
+  const relDir = String(req.body?.dir || '').replace(/^[/\\]+/, '');
+  if (!relDir) return res.status(400).json({ error: '缺少 dir' });
+  const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
+  if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) {
+    return res.status(404).json({ error: `目录不存在：${relDir}` });
+  }
+  const courseName = path.basename(absDir);
+  const lessons = fs.readdirSync(absDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .map((e) => e.name)
+    .filter((name) => fs.existsSync(path.join(absDir, `${name}.md`)))
+    .sort((a, b) => a.localeCompare(b, 'zh'));
+  if (lessons.length === 0) return res.status(400).json({ error: '该课程还没有已转 MD 的课次' });
+
+  const md = [
+    `# ${courseName}`,
+    '',
+    '> 课程索引（自动生成）',
+    '',
+    ...lessons.map((l) => `- [[${l}]]`),
+    '',
+  ].join('\n');
+  const outPath = path.join(absDir, `${courseName}.md`);
+  fs.writeFileSync(outPath, md, 'utf8');
+  res.json({
+    ok: true,
+    rel: path.relative(DOWNLOAD_DIR, outPath).split(path.sep).join('/'),
+    lessons: lessons.length,
+  });
+}));
 
 // 统一错误处理
 app.use((err, _req, res, _next) => {
