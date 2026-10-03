@@ -29,6 +29,7 @@ import {
 } from './mdconvert.mjs';
 import { publicConfig, saveConfig } from './config.mjs';
 import { streamChat } from './chat.mjs';
+import { searchKb, buildGraph } from './kb.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
   testProfile,
@@ -414,6 +415,23 @@ app.get('/api/backlinks', asyncRoute(async (req, res) => {
   };
   walk(DOWNLOAD_DIR);
   res.json({ backlinks: results });
+}));
+
+/** 知识库检索（全库问答用）：按课程/课次/全库返回最相关的页片段 */
+app.post('/api/kb/search', asyncRoute(async (req, res) => {
+  const { q, scope = 'all', dir = '', topK } = req.body || {};
+  if (!String(q || '').trim()) return res.status(400).json({ error: '缺少 q' });
+  res.json(searchKb({
+    q: String(q),
+    scope: ['lesson', 'course', 'all'].includes(scope) ? scope : 'all',
+    dir: String(dir || '').replace(/^[/\\]+/, ''),
+    topK: Number(topK) || 6,
+  }));
+}));
+
+/** 知识图谱：课程 / 课次 / 双链 节点与边 */
+app.get('/api/graph', asyncRoute(async (_req, res) => {
+  res.json(buildGraph());
 }));
 
 /** 生成/更新课程索引笔记（课程 → 课次的 wiki 链接） */

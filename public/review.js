@@ -276,6 +276,93 @@ function renderAssistantHtml(text) {
   return div.innerHTML;
 }
 
+// ---------- 知识库（ima 式「全库问答 + 引用来源」）----------
+
+const SCOPE_LABELS = { lesson: '本课', course: '本课程', all: '全库' };
+
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function kbSearch(q, scope, topK = 8) {
+  const res = await fetch('/api/kb/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q, scope, dir, topK }),
+  });
+  if (!res.ok) throw new Error(`检索失败 HTTP ${res.status}`);
+  return res.json();
+}
+
+function sourceHref(s) {
+  if (!s.page) return fileUrl(s.rel);
+  return `/review.html?dir=${encodeURIComponent(`${s.course}/${s.lesson}`)}&page=${s.page}`;
+}
+
+/** 把回答里的 [n] 变成可点击的引用角标 */
+function decorateCitations(root, sources) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (!/\[\d+\]/.test(node.nodeValue)) continue;
+    if (node.parentElement?.closest('a, code, pre')) continue;
+    targets.push(node);
+  }
+  for (const node of targets) {
+    const text = node.nodeValue;
+    const frag = document.createDocumentFragment();
+    const re = /\[(\d+)\]/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const n = Number(m[1]);
+      const src = sources[n - 1];
+      if (!src) { frag.appendChild(document.createTextNode(m[0])); last = re.lastIndex; continue; }
+      const a = document.createElement('a');
+      a.className = 'cite';
+      a.dataset.n = String(n);
+      a.href = sourceHref(src);
+      a.textContent = m[0];
+      frag.appendChild(a);
+      last = re.lastIndex;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+function appendSources(bubble, sources) {
+  if (!sources.length) return;
+  const box = document.createElement('div');
+  box.className = 'sources';
+  const title = document.createElement('div');
+  title.className = 'sources-title';
+  title.textContent = `引用来源（${sources.length}）`;
+  box.appendChild(title);
+  sources.forEach((s, i) => {
+    const a = document.createElement('a');
+    a.className = 'source';
+    a.href = sourceHref(s);
+    a.dataset.n = String(i + 1);
+    a.innerHTML =
+      `<span class="src-idx">[${i + 1}]</span>` +
+      `<span class="src-name">${escapeHtml(s.course)} · ${escapeHtml(s.lesson)}${s.page ? ` · 第 ${s.page} 页` : ''}</span>` +
+      `<span class="src-snip">${escapeHtml(s.snippet || '')}</span>`;
+    box.appendChild(a);
+  });
+  bubble.appendChild(box);
+}
+
+/** 跳到某页：左侧滚动 + 右侧课件翻页 */
+function jumpToPage(n) {
+  const page = Number(n);
+  if (!page || page < 1 || page > state.pages.length) return;
+  showPage(page - 1);
+  const sec = document.getElementById('sec-' + page);
+  if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 async function send(text, { display } = {}) {
   const q = String(text || '').trim();
   if (!q || state.sending) return;
@@ -289,14 +376,33 @@ async function send(text, { display } = {}) {
   const bubble = addMessage('assistant', '思考中…');
   let acc = '';
   try {
+    const scope = $('chatScope').value;
+    let sources = [];
+    if (scope !== 'lesson') {
+      bubble.textContent = '检索知识库…';
+      const found = await kbSearch(q, scope, 8);
+      sources = found.passages || [];
+      bubble.textContent = sources.length ? '思考中…' : '没检索到片段，直接用模型知识回答…';
+    }
+
     const attach = $('attachPage').checked;
     const sec = currentVisibleSection();
     const payload = [];
     const lessonTitle = $('lessonTitle').textContent;
-    payload.push({
-      role: 'system',
-      content: `你是《${lessonTitle}》这门课的复习助手。用中文回答，尽量简洁准确；涉及公式时用 LaTeX（$...$ 或 $$...$$）。`,
-    });
+    let sys = `你是《${lessonTitle}》复习工作台的助手（提问范围：${SCOPE_LABELS[scope] || '本课'}）。` +
+      '用中文回答，尽量简洁准确；涉及公式时用 LaTeX（$...$ 或 $$...$$）。';
+    if (sources.length) {
+      sys += '\n\n下面是知识库检索到的片段，编号即出处。要求：\n' +
+        '- 优先依据片段回答；引用片段内容时必须在句末标注编号，例如 [1]；\n' +
+        '- 片段不足以回答时直接说明，不要编造；用你自己的知识补充时要与片段区分；\n' +
+        '- 不要输出片段原文的长段落，用要点归纳。\n\n片段：\n' +
+        sources
+          .map((s, i) => `[${i + 1}]《${s.course}》${s.lesson}${s.page ? ` 第 ${s.page} 页` : ''}：\n${String(s.text || '').slice(0, 1200)}`)
+          .join('\n\n');
+    } else if (scope !== 'lesson') {
+      sys += '\n\n（知识库没有检索到相关片段，请基于你的知识回答，并在开头说明这不是来自课程资料。）';
+    }
+    payload.push({ role: 'system', content: sys });
     for (const m of state.messages.slice(-13, -1)) {
       payload.push({ role: m.role, content: m.content });
     }
@@ -331,6 +437,9 @@ async function send(text, { display } = {}) {
     if (isError) {
       bubble.textContent = acc;
       bubble.classList.add('error');
+    } else {
+      decorateCitations(bubble, sources);
+      appendSources(bubble, sources);
     }
     state.messages.push({ role: 'assistant', content: acc });
   } catch (e) {
@@ -628,6 +737,34 @@ function setupEvents() {
     openWikilink(a.dataset.target);
   });
 
+  // 引用角标 / 来源条目：指向本课的按住不发新页面，直接跳页
+  $('chatMsgs').addEventListener('click', (e) => {
+    const a = e.target.closest('a.cite, a.source');
+    if (!a) return;
+    let url;
+    try { url = new URL(a.href, location.href); } catch { return; }
+    if (!url.pathname.endsWith('/review.html')) return;
+    const target = url.searchParams.get('dir') || '';
+    if (target === dir) {
+      e.preventDefault();
+      jumpToPage(url.searchParams.get('page') || a.dataset.n);
+    }
+  });
+
+  const scopeSel = $('chatScope');
+  const syncScope = () => {
+    const lessonScope = scopeSel.value === 'lesson';
+    $('attachPage').disabled = !lessonScope;
+    $('attachWrap').style.opacity = lessonScope ? '' : '.45';
+    try { localStorage.setItem('wqppt_scope', scopeSel.value); } catch { /* 忽略 */ }
+  };
+  try {
+    const saved = localStorage.getItem('wqppt_scope');
+    if (saved && ['lesson', 'course', 'all'].includes(saved)) scopeSel.value = saved;
+  } catch { /* 忽略 */ }
+  scopeSel.onchange = syncScope;
+  syncScope();
+
   $('btnPrev').onclick = () => showPage(state.pageIndex - 1);
   $('btnNext').onclick = () => showPage(state.pageIndex + 1);
   $('mdScroll').addEventListener('scroll', onMdScroll);
@@ -668,6 +805,8 @@ function setupEvents() {
     loadBacklinks();
   };
   $('btnCloseChain').onclick = () => { $('chainDrawer').hidden = true; };
+  $('btnGraph').onclick = openGraph;
+  $('btnCloseGraph').onclick = () => { $('graphDrawer').hidden = true; };
 
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
@@ -675,6 +814,169 @@ function setupEvents() {
     if (e.key === 'ArrowLeft') showPage(state.pageIndex - 1);
     if (e.key === 'ArrowRight') showPage(state.pageIndex + 1);
   });
+}
+
+// ---------- 知识图谱（Obsidian 式）----------
+
+let graphData = null;
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(name, attrs = {}) {
+  const el = document.createElementNS(SVG_NS, name);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+  return el;
+}
+
+/** 简易力导向布局：斥力 + 弹簧 + 向心，迭代若干轮（节点几百个以内足够） */
+function layoutGraph(nodes, edges, W = 980, H = 660) {
+  const n = nodes.length;
+  const pos = nodes.map((_, i) => {
+    const a = i * 2.399963;
+    const r = 80 + (i % 6) * 44;
+    return { x: W / 2 + Math.cos(a) * r, y: H / 2 + Math.sin(a) * r, vx: 0, vy: 0 };
+  });
+  const idx = new Map(nodes.map((node, i) => [node.id, i]));
+  const links = edges
+    .map((e) => ({ a: idx.get(e.source), b: idx.get(e.target), type: e.type }))
+    .filter((e) => e.a !== undefined && e.b !== undefined);
+
+  for (let step = 0; step < 300; step++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = pos[j].x - pos[i].x;
+        let dy = pos[j].y - pos[i].y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+        const d = Math.sqrt(d2);
+        const f = 2600 / d2;
+        const fx = (dx / d) * f;
+        const fy = (dy / d) * f;
+        pos[i].vx -= fx; pos[i].vy -= fy;
+        pos[j].vx += fx; pos[j].vy += fy;
+      }
+    }
+    for (const l of links) {
+      const A = pos[l.a];
+      const B = pos[l.b];
+      const dx = B.x - A.x;
+      const dy = B.y - A.y;
+      const d = Math.max(1, Math.hypot(dx, dy));
+      const target = l.type === 'contain' ? 92 : 165;
+      const strength = l.type === 'contain' ? 0.018 : 0.03;
+      const f = (d - target) * strength;
+      const fx = (dx / d) * f;
+      const fy = (dy / d) * f;
+      A.vx += fx; A.vy += fy;
+      B.vx -= fx; B.vy -= fy;
+    }
+    for (const p of pos) {
+      p.vx += (W / 2 - p.x) * 0.002;
+      p.vy += (H / 2 - p.y) * 0.002;
+      p.vx *= 0.82; p.vy *= 0.82;
+      p.x = Math.max(34, Math.min(W - 34, p.x + Math.max(-18, Math.min(18, p.vx))));
+      p.y = Math.max(30, Math.min(H - 30, p.y + Math.max(-18, Math.min(18, p.vy))));
+    }
+  }
+  return pos;
+}
+
+function renderGraph({ nodes, edges, stats }) {
+  const svg = $('graphSvg');
+  svg.innerHTML = '';
+  if (!nodes.length) {
+    $('graphStats').textContent = '还没有已转 MD 的课次';
+    return;
+  }
+  const W = 980;
+  const H = 660;
+  const pos = layoutGraph(nodes, edges, W, H);
+  // 自适应缩放居中，让小规模图谱也铺得开
+  const xs = pos.map((p) => p.x);
+  const ys = pos.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const pad = 90;
+  const scale = Math.min(
+    (W - pad * 2) / Math.max(1, maxX - minX),
+    (H - pad * 2) / Math.max(1, maxY - minY),
+    2.4
+  );
+  const ox = (W - (maxX - minX) * scale) / 2 - minX * scale;
+  const oy = (H - (maxY - minY) * scale) / 2 - minY * scale;
+  for (const p of pos) { p.x = p.x * scale + ox; p.y = p.y * scale + oy; }
+  const idx = new Map(nodes.map((node, i) => [node.id, i]));
+
+  const lineLayer = svgEl('g');
+  const nodeLayer = svgEl('g');
+  svg.appendChild(lineLayer);
+  svg.appendChild(nodeLayer);
+
+  for (const e of edges) {
+    const a = idx.get(e.source);
+    const b = idx.get(e.target);
+    if (a === undefined || b === undefined) continue;
+    lineLayer.appendChild(svgEl('line', {
+      x1: pos[a].x, y1: pos[a].y, x2: pos[b].x, y2: pos[b].y,
+      stroke: e.type === 'course' ? '#c9a26b' : '#d7dee8',
+      'stroke-width': e.type === 'contain' ? 1 : 1.6,
+      'stroke-dasharray': e.type === 'contain' ? '3 4' : '',
+    }));
+  }
+
+  const go = (node) => {
+    if (node.type === 'course') window.open(fileUrl(`${node.id}/${node.id}.md`), '_blank');
+    else location.href = '/review.html?dir=' + encodeURIComponent(node.id);
+  };
+
+  for (const node of nodes) {
+    const i = idx.get(node.id);
+    const isCurrent = node.id === dir;
+    const isCourse = node.type === 'course';
+    const g = svgEl('g', { class: 'graph-node', tabindex: '0' });
+    g.style.cursor = 'pointer';
+    const circle = svgEl('circle', {
+      cx: pos[i].x, cy: pos[i].y,
+      r: isCourse ? 13 : isCurrent ? 10.5 : 8,
+      fill: isCourse ? '#2f6fed' : isCurrent ? '#ff8a3d' : '#9dbdf5',
+      stroke: '#fff', 'stroke-width': 2,
+    });
+    const title = svgEl('title');
+    title.textContent = isCourse ? `课程：${node.label}` : `课次：${node.course} / ${node.label}`;
+    const label = svgEl('text', {
+      x: pos[i].x, y: pos[i].y - (isCourse ? 18 : 13),
+      'text-anchor': 'middle',
+      'font-size': isCourse ? 13 : 11,
+      'font-weight': isCourse ? 600 : 400,
+      fill: isCurrent ? '#c2410c' : '#3a4657',
+      'paint-order': 'stroke', stroke: '#fff', 'stroke-width': 3, 'stroke-linejoin': 'round',
+    });
+    label.textContent = node.label;
+    g.appendChild(circle);
+    g.appendChild(title);
+    g.appendChild(label);
+    g.addEventListener('click', () => go(node));
+    g.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(node); });
+    nodeLayer.appendChild(g);
+  }
+
+  $('graphStats').textContent =
+    `${stats.courses} 门课 · ${stats.lessons} 个课次 · ${stats.passages} 片段 · ${stats.links} 条关联`;
+}
+
+async function openGraph() {
+  $('graphDrawer').hidden = false;
+  const svg = $('graphSvg');
+  if (svg.dataset.ready === '1') return;
+  $('graphStats').textContent = '加载中…';
+  try {
+    if (!graphData) graphData = await fetch('/api/graph').then((r) => r.json());
+    renderGraph(graphData);
+    svg.dataset.ready = '1';
+  } catch (e) {
+    $('graphStats').textContent = '加载失败：' + String(e.message || e);
+  }
 }
 
 // ---------- 启动 ----------
@@ -707,6 +1009,11 @@ function setupEvents() {
   renderFullMd();
   buildPages();
   renderThumbs();
-  if (state.pages.length) showPage(0);
+  const pageParam = Number(params.get('page')) || 0;
+  if (state.pages.length) showPage(pageParam > 0 ? Math.min(pageParam, state.pages.length) - 1 : 0);
+  if (pageParam > 0) {
+    const sec = document.getElementById('sec-' + pageParam);
+    if (sec) setTimeout(() => sec.scrollIntoView({ block: 'start' }), 80);
+  }
   renderOutLinks();
 })();

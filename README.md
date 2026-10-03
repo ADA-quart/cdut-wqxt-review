@@ -142,7 +142,10 @@ OCR 会有零星错字（如「也位差」→「电位差」）。界面提供�
 
 - 左侧渲染 Markdown（KaTeX 公式、`[[wiki 链接]]` 可点击、页链接联动右侧课件）
 - 右上课件翻页：缩略图 / 上一页下一页 / ← → 快捷键 / 「跟随滚动」自动切页
-- 右下 AI 对话：流式输出，可勾选「附带当前页」把正在读的那页内容一起发给模型
+- 右下 AI 对话：流式输出，可勾选「附带当前页」把正在读的那页内容一起发给模型；
+  作用域可选 **本课 / 本课程 / 全库**——选后两者时先做知识库检索，回答带 `[n]` 引用角标与「引用来源」列表，
+  点来源/角标直接跳到对应课次的对应页（ima 式全库问答）
+- 顶栏「图谱」：全库力导向知识图谱（课程 / 课次 / `[[双链]]` / 课程关联），点节点进入对应笔记
 - 选中笔记或对话中的文字 → 浮出「引用到提问 / 解释这段」
 - 分隔条可拖拽，布局比例记忆在本机
 
@@ -169,6 +172,7 @@ server/
   browser.mjs      Edge 会话管理（见下方「为什么要用真实浏览器」）
   wqxt.mjs         业务层：登录 / 课程 / 课次 / PPT 清单
   downloader.mjs   下载任务管理：目录归类、并发下载、进度事件
+  kb.mjs           知识库：按页切片的 BM25 风格检索 + 双链知识图谱
   paths.mjs        路径与文件名校验（防目录穿越）
 .edge-profile/     独立 Edge 配置目录（登录态持久化，已 gitignore）
 downloads/         下载产物（已 gitignore）
@@ -247,6 +251,8 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | GET | `/api/llm-jobs` / `/api/llm-jobs/:id` | LLM 任务列表 / 详情（含 token 用量） |
 | POST | `/api/llm-jobs/:id/cancel` | 取消 LLM 任务 |
 | POST | `/api/chat` | 复习页对话（流式透传，`{messages, profile}`） |
+| POST | `/api/kb/search` | 知识库检索 `{q, scope:'lesson'\|'course'\|'all', dir, topK}` → 带页码的片段与得分 |
+| GET | `/api/graph` | 知识图谱数据：课程 / 课次节点 + 包含 / 双链 / 课程关联边 |
 | GET | `/api/backlinks?dir=` | 反链：全库扫描引用某课次的 wiki 链接 |
 | POST | `/api/index-note` | 快速生成课程索引 `{dir}`（规则版，不含 AI；课程/课次目录均可，自动保留「相关课程」关联块） |
 

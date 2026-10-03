@@ -23,6 +23,7 @@
     <a class="btn" id="linkDownloadMd" download>下载 md</a>
     <a class="btn" id="linkOpenMd" target="_blank">原文</a>
     <button class="btn" id="btnIndex">生成课程索引</button>
+    <button class="btn" id="btnGraph" title="全库知识图谱：课程 / 课次 / 双链">图谱</button>
     <button class="btn primary" id="btnChain">知识链</button>
   </div>
 </header>
@@ -60,7 +61,12 @@
       <div class="pane-head">
         <span class="pane-title">AI 对话</span>
         <div class="tools">
-          <label class="chk" title="发送时附带当前页的 OCR 文字">
+          <select id="chatScope" class="tiny-sel" title="提问范围：本课 / 本课程 / 全库（检索后回答并给出来源）">
+            <option value="lesson">本课</option>
+            <option value="course">本课程</option>
+            <option value="all">全库</option>
+          </select>
+          <label class="chk" id="attachWrap" title="发送时附带当前页的 OCR 文字">
             <input type="checkbox" id="attachPage" checked> 附带当前页
           </label>
           <button class="btn tiny" id="btnClearChat">清空</button>
@@ -104,6 +110,26 @@
     <div id="outLinks" class="links"><p class="empty">无</p></div>
     <h4>反链 · 谁引用了本课</h4>
     <div id="backLinks" class="links"><p class="empty">加载中…</p></div>
+  </div>
+</aside>
+
+<aside class="drawer graph-drawer" id="graphDrawer" hidden>
+  <div class="drawer-head">
+    <h3>知识图谱</h3>
+    <div class="tools">
+      <span class="graph-stats" id="graphStats"></span>
+      <button class="btn tiny" id="btnCloseGraph">×</button>
+    </div>
+  </div>
+  <div class="graph-wrap" id="graphWrap">
+    <svg id="graphSvg" viewBox="0 0 980 660" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+  <div class="graph-legend">
+    <span><i class="dot course"></i>课程</span>
+    <span><i class="dot lesson"></i>课次</span>
+    <span><i class="dot current"></i>当前课次</span>
+    <span><i class="line"></i>wiki 双链 / 课程关联</span>
+    <span class="muted">点击节点进入对应笔记</span>
   </div>
 </aside>
 
