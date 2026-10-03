@@ -21,6 +21,30 @@ npm start
 
 浏览器打开 <http://127.0.0.1:3901> → 点右上角「登录」→ 输入统一认证学号密码 → 选择课程下载。
 
+### 可选：启用「转 Markdown」（复习/喂 AI 用）
+
+把下载的课件图片转成带 LaTeX 公式的 Markdown（Pix2Text），供 Obsidian / AI agent 使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-p2t.ps1   # 一次性建环境（需 uv + Python 3.12）
+```
+
+装好后，界面上每个课次目录旁会出现 **「转 MD」** 按钮，点击即转换（有 N 卡自动走 CUDA，否则 CPU）。
+
+```bash
+# 也可以直接命令行用
+.venv-p2t\Scripts\python.exe ppt2md.py "downloads/电波…/2026-09-28第3-4节" --device auto
+```
+
+产物：
+
+```
+downloads/电法勘探原理与方法/
+├── 2026-09-28第3-4节/            # 原始图片
+├── 2026-09-28第3-4节.md          # 转换出的 Markdown（公式为 $...$ / $$...$$）
+└── 2026-09-28第3-4节_assets/     # 版面中的图形元素（按页分目录）
+```
+
 ## 架构
 
 ```
@@ -66,6 +90,12 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 
 业务接口全部在浏览器页面上下文内 `fetch`（同源、自动带 cookie，实测无需前端签名参数）；PPT 图片托管在独立域名，可直接 HTTP 并发下载。
 
+### 2.1 PPT 图片 → Markdown（Pix2Text）
+
+[Pix2Text](https://github.com/breezedeus/Pix2Text) 做版面分析 + 公式识别（MFD/MFR）+ 中文 OCR，
+把整页课件图转成 Markdown，公式保留为 LaTeX。后端 `server/mdconvert.mjs` 以子进程方式调度
+`ppt2md.py`，串行执行、逐行解析 JSONL 进度并通过 SSE 透传到前端。
+
 ### 3. 任务模型
 
 - 粒度：一个「课程 × 课次」= 一个下载分组，一次批量提交为一个 Job
@@ -90,6 +120,10 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | POST | `/api/jobs/:id/cancel` | 取消任务 |
 | GET | `/api/events` | SSE 进度推送 |
 | GET | `/api/files` | 已下载文件树（`/files/*` 直接预览图片） |
+| GET | `/api/md-tools` | 转换环境可用性（python / 脚本路径） |
+| POST | `/api/md-jobs` | 创建转换任务 `{dir}`（downloads 下相对目录） |
+| GET | `/api/md-jobs` / `/api/md-jobs/:id` | 转换任务列表 / 详情 |
+| POST | `/api/md-jobs/:id/cancel` | 取消转换 |
 
 ## 已验证结果
 
@@ -102,6 +136,9 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 - 整课下载：`电法勘探原理与方法` → 4 个课次共 197 张图，0 失败
 - 图片规格：1280×720 JPEG，单张约 60–140 KB
 - 前端：课程列表、课次弹窗、任务进度、文件缩略图均正常渲染
+- Markdown 转换：`2026-09-28第3-4节` 全量 77 页转换成功（V100 CUDA，约 9.6 分钟，平均 7.5s/页），
+  产出 44 KB Markdown：48 个块公式 + 53 个行内公式（LaTeX）、97 处图形引用；公式识别准确率高，
+  正文存在零星 OCR 笔误（如「电位差」→「也位差」），复习场景可读
 
 ## 注意事项
 

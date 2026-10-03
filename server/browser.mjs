@@ -30,6 +30,7 @@ let edgeChild = null;
 let browser = null;
 let workPage = null;
 let launching = null;
+let navPromise = null;
 
 function findEdge() {
   for (const p of EDGE_CANDIDATES) {
@@ -106,16 +107,25 @@ export async function ensureBrowser() {
 /** 取一个位于问渠学堂域下的工作页面（离屏 API 调用均在此页面内执行） */
 export async function getWorkPage() {
   const b = await ensureBrowser();
-  if (workPage && !workPage.isClosed()) return workPage;
+  if (workPage && !workPage.isClosed() && workPage.url().startsWith(WQ_BASE)) return workPage;
 
-  const ctx = b.contexts()[0];
-  // 优先复用已打开的问渠学堂标签
-  const existing = ctx.pages().find((p) => p.url().startsWith(WQ_BASE));
-  workPage = existing ?? (await ctx.newPage());
-  if (!workPage.url().startsWith(WQ_BASE)) {
-    await workPage.goto(WQ_BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-  }
-  return workPage;
+  // 并发保护：页面初始化/导航期间，多个请求共享同一个 promise，
+  // 避免第二个请求在导航中途执行页面脚本（否则报 Execution context was destroyed）
+  if (navPromise) return navPromise;
+
+  navPromise = (async () => {
+    const ctx = b.contexts()[0];
+    // 优先复用已打开的问渠学堂标签
+    const existing = ctx.pages().find((p) => p.url().startsWith(WQ_BASE));
+    const page = existing ?? (await ctx.newPage());
+    if (!page.url().startsWith(WQ_BASE)) {
+      await page.goto(WQ_BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
+    workPage = page;
+    return page;
+  })().finally(() => { navPromise = null; });
+
+  return navPromise;
 }
 
 /**
@@ -124,7 +134,7 @@ export async function getWorkPage() {
  */
 export async function apiGet(endpoint, params = {}, timeoutMs = 30000) {
   const page = await getWorkPage();
-  return page.evaluate(
+  const run = () => page.evaluate(
     async ({ endpoint, params, timeoutMs }) => {
       const qs = new URLSearchParams(
         Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''),
@@ -144,6 +154,18 @@ export async function apiGet(endpoint, params = {}, timeoutMs = 30000) {
     },
     { endpoint, params, timeoutMs },
   );
+
+  try {
+    return await run();
+  } catch (e) {
+    // 页面恰好发生导航时重试一次
+    if (/Execution context was destroyed|Target closed|Cannot find context/i.test(String(e?.message || e))) {
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await new Promise((r) => setTimeout(r, 800));
+      return run();
+    }
+    throw e;
+  }
 }
 
 /** 当前页面 URL（用于登录流程判断） */

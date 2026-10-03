@@ -22,6 +22,10 @@ import path from 'node:path';
 import { DOWNLOAD_DIR, PUBLIC_DIR, ensureDir } from './paths.mjs';
 import { checkLogin, login, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
+import {
+  createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
+  events as mdEvents,
+} from './mdconvert.mjs';
 import { closeBrowser, edgeStatus, getWorkPage, WQ_BASE } from './browser.mjs';
 
 const PORT = Number(process.env.PORT || 3901);
@@ -107,6 +111,31 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
   res.json({ job });
 });
 
+// ---------- PPT → Markdown 转换 ----------
+
+app.get('/api/md-tools', (_req, res) => res.json(mdToolStatus()));
+
+app.post('/api/md-jobs', asyncRoute(async (req, res) => {
+  const { dir, device = 'auto' } = req.body || {};
+  if (!dir) return res.status(400).json({ error: '缺少 dir（downloads 下的相对目录）' });
+  const job = createMdJob({ dir, device });
+  res.status(201).json({ job });
+}));
+
+app.get('/api/md-jobs', (_req, res) => res.json({ jobs: listMdJobs() }));
+
+app.get('/api/md-jobs/:id', (req, res) => {
+  const job = getMdJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  res.json({ job });
+});
+
+app.post('/api/md-jobs/:id/cancel', (req, res) => {
+  const job = cancelMdJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  res.json({ job });
+});
+
 // ---------- SSE 进度 ----------
 
 app.get('/api/events', (req, res) => {
@@ -116,12 +145,16 @@ app.get('/api/events', (req, res) => {
     Connection: 'keep-alive',
   });
   res.write('data: ' + JSON.stringify({ type: 'hello', jobs: listJobs() }) + '\n\n');
+  res.write('data: ' + JSON.stringify({ type: 'hello-md', jobs: listMdJobs() }) + '\n\n');
   const onUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'job', job }) + '\n\n');
+  const onMdUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'md-job', job }) + '\n\n');
   events.on('update', onUpdate);
+  mdEvents.on('update', onMdUpdate);
   const keepAlive = setInterval(() => res.write(': ping\n\n'), 15000);
   req.on('close', () => {
     clearInterval(keepAlive);
     events.off('update', onUpdate);
+    mdEvents.off('update', onMdUpdate);
   });
 });
 
@@ -142,13 +175,16 @@ function readTree(dir, depth) {
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
     .map((e) => {
       const full = path.join(dir, e.name);
+      const rel = path.relative(DOWNLOAD_DIR, full).split(path.sep).join('/');
       if (e.isDirectory()) {
-        return { name: e.name, type: 'dir', children: readTree(full, depth - 1) };
+        // 同名 .md 存在 = 这个课次已转过 Markdown
+        const hasMd = fs.existsSync(full + '.md');
+        return { name: e.name, type: 'dir', rel, hasMd, children: readTree(full, depth - 1) };
       }
       const stat = fs.statSync(full);
       return {
-        name: e.name, type: 'file', size: stat.size,
-        url: '/files/' + path.relative(DOWNLOAD_DIR, full).split(path.sep).map(encodeURIComponent).join('/'),
+        name: e.name, type: 'file', size: stat.size, rel,
+        url: '/files/' + rel.split('/').map(encodeURIComponent).join('/'),
       };
     });
 }

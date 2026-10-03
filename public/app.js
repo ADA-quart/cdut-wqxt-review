@@ -5,6 +5,8 @@ const state = {
   loggedIn: false,
   courses: [],
   jobs: new Map(),
+  mdJobs: new Map(),
+  mdTool: null,
   subsCache: new Map(),
 };
 
@@ -252,13 +254,19 @@ async function startSubJob(course, sub, btn) {
 
 function renderJobs() {
   const box = $('jobList');
-  const jobs = [...state.jobs.values()].sort((a, b) => b.id - a.id);
-  if (jobs.length === 0) {
+  const dl = [...state.jobs.values()].map((j) => ({ ...j, kind: 'download' }));
+  const md = [...state.mdJobs.values()].map((j) => ({ ...j, kind: 'md' }));
+  const all = [...dl, ...md].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  if (all.length === 0) {
     box.innerHTML = '<p class="empty">暂无任务</p>';
     return;
   }
   box.innerHTML = '';
-  for (const j of jobs) {
+  for (const j of all) {
+    if (j.kind === 'md') {
+      box.appendChild(renderMdJobCard(j));
+      continue;
+    }
     const el = document.createElement('div');
     el.className = 'job';
 
@@ -339,6 +347,64 @@ function statusLabel(s) {
   return { pending: '等待中', running: '下载中', done: '已完成', error: '有错误', canceled: '已取消' }[s] || s;
 }
 
+function renderMdJobCard(j) {
+  const el = document.createElement('div');
+  el.className = 'job';
+
+  const head = document.createElement('div');
+  head.className = 'job-head';
+
+  const left = document.createElement('div');
+  const title = document.createElement('p');
+  title.className = 'job-title';
+  title.textContent = `#${j.id} 转 Markdown · ${j.title}`;
+  const stats = document.createElement('div');
+  stats.className = 'job-stats';
+  stats.textContent = j.status === 'running'
+    ? `进度 ${j.progress.done}/${j.progress.total || '…'}${j.progress.current ? ' · ' + j.progress.current : ''}`
+    : j.status === 'done'
+      ? `完成：${j.outMd || ''}`
+      : j.status === 'error'
+        ? (j.error || '失败')
+        : j.status === 'canceled' ? '已取消' : '排队中…';
+  left.append(title, stats);
+
+  const right = document.createElement('div');
+  const badge = document.createElement('span');
+  badge.className = 'badge ' + j.status + ' md';
+  badge.textContent = j.status === 'running' ? '转换中' : statusLabel(j.status);
+  right.appendChild(badge);
+
+  if (j.status === 'running' || j.status === 'pending') {
+    const cancel = document.createElement('button');
+    cancel.className = 'btn danger';
+    cancel.textContent = '取消';
+    cancel.onclick = async () => {
+      try { await api(`/md-jobs/${j.id}/cancel`, { method: 'POST' }); } catch {}
+    };
+    right.append(document.createTextNode(' '), cancel);
+  }
+  if (j.status === 'done' && j.outMd) {
+    const open = document.createElement('a');
+    open.className = 'btn';
+    open.href = '/files/' + j.outMd.split('/').map(encodeURIComponent).join('/');
+    open.target = '_blank';
+    open.textContent = '打开 md';
+    right.append(document.createTextNode(' '), open);
+  }
+
+  head.append(left, right);
+
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const fill = document.createElement('i');
+  fill.style.width = pct(j.progress.done, j.progress.total) + '%';
+  bar.appendChild(fill);
+
+  el.append(head, bar);
+  return el;
+}
+
 function estimateTotal(job) {
   let total = 0;
   for (const t of job.tasks) total += t.total || 0;
@@ -370,11 +436,34 @@ function renderTree(nodes) {
       const details = document.createElement('details');
       details.className = 'dir';
       const summary = document.createElement('summary');
-      summary.textContent = '📁 ' + node.name;
+      const label = document.createElement('span');
+      label.textContent = '📁 ' + node.name;
+      summary.appendChild(label);
+      // 目录内直接含图片（= 一个课次）→ 提供「转 Markdown」
+      const kids = node.children || [];
+      const hasImages = kids.some((c) => c.type === 'file' && /\.(jpe?g|png|webp|bmp)$/i.test(c.name));
+      if (hasImages) {
+        const btn = document.createElement('button');
+        btn.className = 'btn tiny';
+        btn.textContent = node.hasMd ? '重新转 MD' : '转 MD';
+        btn.title = state.mdTool && !state.mdTool.available ? state.mdTool.hint : '把这些图片转成带公式的 Markdown';
+        btn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startMdJob(node, btn); };
+        summary.appendChild(btn);
+      }
       details.appendChild(summary);
-      if (node.children?.length) details.appendChild(renderTree(node.children));
+      if (kids.length) details.appendChild(renderTree(kids));
       root.appendChild(details);
-    } else {
+    } else if (/\.md$/i.test(node.name)) {
+      const row = document.createElement('div');
+      row.className = 'file-row';
+      const a = document.createElement('a');
+      a.href = node.url;
+      a.target = '_blank';
+      a.textContent = '📄 ' + node.name;
+      a.title = '打开 Markdown';
+      row.appendChild(a);
+      root.appendChild(row);
+    } else if (/\.(jpe?g|png|webp|bmp)$/i.test(node.name)) {
       const fig = document.createElement('figure');
       fig.className = 'thumb';
       const img = document.createElement('img');
@@ -385,9 +474,34 @@ function renderTree(nodes) {
       cap.textContent = node.name.replace(/\.jpg$/, '');
       fig.append(img, cap);
       root.appendChild(fig);
+    } else {
+      const row = document.createElement('div');
+      row.className = 'file-row';
+      const a = document.createElement('a');
+      a.href = node.url;
+      a.target = '_blank';
+      a.textContent = '📎 ' + node.name;
+      row.appendChild(a);
+      root.appendChild(row);
     }
   }
   return root;
+}
+
+async function startMdJob(node, btn) {
+  if (!node.rel) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    await api('/md-jobs', { method: 'POST', body: { dir: node.rel } });
+    toast(`已提交转换：${node.name}`, 'ok');
+  } catch (e) {
+    toast('转换提交失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 // ---------- 事件绑定 ----------
@@ -464,8 +578,15 @@ function connectEvents() {
       if (msg.type === 'hello') {
         for (const j of msg.jobs) state.jobs.set(j.id, j);
         renderJobs();
+      } else if (msg.type === 'hello-md') {
+        for (const j of msg.jobs) state.mdJobs.set(j.id, j);
+        renderJobs();
       } else if (msg.type === 'job') {
         state.jobs.set(msg.job.id, msg.job);
+        renderJobs();
+        if (msg.job.status === 'done' && msg.job.finishedAt) loadFiles();
+      } else if (msg.type === 'md-job') {
+        state.mdJobs.set(msg.job.id, msg.job);
         renderJobs();
         if (msg.job.status === 'done' && msg.job.finishedAt) loadFiles();
       }
@@ -484,6 +605,9 @@ function connectEvents() {
   if (s?.loggedIn) await loadCourses();
   const { jobs } = await api('/jobs').catch(() => ({ jobs: [] }));
   for (const j of jobs) state.jobs.set(j.id, j);
+  state.mdTool = await api('/md-tools').catch(() => null);
+  const md = await api('/md-jobs').catch(() => ({ jobs: [] }));
+  for (const j of md.jobs || []) state.mdJobs.set(j.id, j);
   renderJobs();
   loadFiles();
   connectEvents();

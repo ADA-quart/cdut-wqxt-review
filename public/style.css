@@ -117,6 +117,7 @@ body {
 .btn.primary:hover { background: #1746a8; }
 .btn.ghost { background: transparent; }
 .btn.danger { color: var(--err); border-color: #f0c8c6; }
+.btn.tiny { padding: 2px 8px; font-size: 11px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
 
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
@@ -193,6 +194,7 @@ select { padding: 6px 8px; font-size: 13px; }
 .badge.done { background: #e8f5ee; color: var(--ok); }
 .badge.error { background: #fdecea; color: var(--err); }
 .badge.canceled, .badge.skipped { background: #f5f0e6; color: var(--warn); }
+.badge.md.running { background: #f3edfb; color: #7c3aed; }
 
 .bar {
   height: 6px;
@@ -242,6 +244,13 @@ select { padding: 6px 8px; font-size: 13px; }
 
 .tree .thumb img { width: 100%; display: block; }
 .tree .thumb figcaption { font-size: 10px; color: var(--ink-3); text-align: center; padding: 2px 0; }
+
+.tree .file-row { padding: 3px 0 3px 20px; }
+.tree .file-row a { color: var(--brand); text-decoration: none; font-size: 12px; }
+.tree .file-row a:hover { text-decoration: underline; }
+
+.tree summary { display: flex; align-items: center; }
+.tree summary > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .empty { color: var(--ink-3); font-size: 13px; margin: 8px 0; }
 
