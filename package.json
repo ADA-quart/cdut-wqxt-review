@@ -1,16 +1,23 @@
 {
   "name": "wqppt",
   "version": "0.1.0",
-  "description": "CDUT 网络学堂 PPT 批量下载工具",
+  "description": "成都理工大学问渠学堂 PPT 整理复习系统：课件下载 → Markdown/LaTeX → 去重清洗 → AI 纠错/重点/知识链 → 复习工作台",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server/index.mjs",
     "dev": "node server/index.mjs"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "cdut",
+    "wqxt",
+    "ppt",
+    "markdown",
+    "pix2text",
+    "obsidian"
+  ],
+  "author": "ADA-quart",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "dependencies": {
     "express": "^5.2.1",

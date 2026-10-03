@@ -1,4 +1,19 @@
-# 问渠学堂 PPT 下载器
+<div align="center">
+
+<h1>成都理工大学问渠学堂 PPT 整理复习系统</h1>
+
+<h3>课件下载 → Markdown/LaTeX → 去重清洗 → AI 纠错 · 重点总结 · 知识链 → 复习工作台</h3>
+
+<p>把问渠学堂录播课的 PPT 抓成本地图片，转成带公式的 Markdown，<br>
+在自带工作台里对着课件复习、划词提问、织知识链；同一份文件丢进 Obsidian / ima 即可用</p>
+
+<p>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange.svg"></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Web-informational">
+  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-18%2B-339933">
+</p>
+
+</div>
 
 按「课程 → 课次」批量下载成都理工大学问渠学堂（classroom.wqxt.cdut.edu.cn）录播课件的 PPT 图片，自动归类到本地目录。
 
@@ -274,3 +289,14 @@ LLM 功能（2026-10-04，真实 DeepSeek `deepseek-chat`）：
 - 端口默认 `3901`，可用环境变量覆盖：`PORT=xxxx npm start`
 - 下载目录可用软链接或直接拷贝 `downloads/`
 - 仅用于下载本人账号有权访问的课件，请遵守学校相关使用规定
+- 非官方工具，与成都理工大学无关
+
+## 许可证
+
+[PolyForm Noncommercial License 1.0.0](LICENSE) © 2026 ADA-quart
+
+**个人使用与非商业用途免费**：个人学习、研究、实验、业余项目，以及学校、慈善机构、
+公共研究机构等非营利组织，都可以自由使用、修改和分发。
+
+**商业用途需另行授权**：包括但不限于在公司内部部署、作为付费产品或服务的一部分、
+以及其他以商业获利为目的的使用。有商业授权需求请联系维护者。
