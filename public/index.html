@@ -20,7 +20,7 @@
     <span id="statusText">检查中…</span>
     <button class="btn ghost" id="btnLogin" hidden>登录</button>
     <button class="btn ghost" id="btnLogout" hidden>退出</button>
-    <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（纠错 / 总结用）">LLM 设置</button>
+    <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（纠错 / 整理重点 / AI 知识链 / 复习页对话）">LLM 设置</button>
   </div>
 </header>
 
@@ -108,7 +108,7 @@
 <div class="modal-mask" id="llmModal" hidden>
   <div class="modal wide">
     <h3>LLM 设置</h3>
-    <p class="hint">纠错支持三档模式，各自独立配置（均为 OpenAI 兼容接口）。密钥只保存在本机 config.json。</p>
+    <p class="hint">纠错支持三档模式，各自独立配置（均为 OpenAI 兼容接口）。纯文本档还负责「整理重点」「AI 知识链」和复习页对话。密钥只保存在本机 config.json。</p>
     <div class="modal-body-scroll">
       <section class="profile-section">
         <h4>① 纯文本 <span class="tag">最省 token</span></h4>

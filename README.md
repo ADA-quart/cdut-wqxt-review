@@ -95,6 +95,30 @@ OCR 会有零星错字（如「也位差」→「电位差」）。界面提供�
 
 每档都有「测试连接」按钮（会先保存再发一条探测请求）。配置保存在本机 `config.json`（已 gitignore）。
 
+### 复习工作台（左笔记 / 右课件 / 右下 AI 对话）
+
+课次转完 MD 后，在文件树点「复习」（或任务卡片的「复习」）打开 `/review.html?dir=<课程/课次>`。
+
+- 左侧渲染 Markdown（KaTeX 公式、`[[wiki 链接]]` 可点击、页链接联动右侧课件）
+- 右上课件翻页：缩略图 / 上一页下一页 / ← → 快捷键 / 「跟随滚动」自动切页
+- 右下 AI 对话：流式输出，可勾选「附带当前页」把正在读的那页内容一起发给模型
+- 选中笔记或对话中的文字 → 浮出「引用到提问 / 解释这段」
+- 分隔条可拖拽，布局比例记忆在本机
+
+复习页里的 AI 功能（使用 LLM 设置的**纯文本档**）：
+
+| 按钮 | 作用 |
+| --- | --- |
+| 整理重点 | 整节课交给 LLM，生成「重点总结」写回笔记顶部（核心概念 / 关键公式 / 易错点） |
+| 知识链 → 本课程知识链 | AI 读全部课次摘要 → 生成按主题分组的课程索引，并给每节课补双向「相关课次」 |
+| 知识链 → 课程间知识链 | AI 找课程间关联（同一方向 / 先修后继）→ 各课程索引互加「相关课程」，根目录生成「知识链.md」总览 |
+
+知识链抽屉同时显示**出链**（本课引用了谁）与**反链**（谁引用了本课，全库扫描 wiki 链接）。
+所有链接都是标准 `[[...]]`，同一份文件放进 Obsidian 即获得双链与图谱。
+
+> 知识链由纯 LLM 生成：先把课次压缩成摘要，再让模型在单次调用里做全局关系推理（当前规模几千 token，成本极低）。
+> 当课程/课次数百上千、摘要放不进上下文时，再引入 embedding 召回候选对 + LLM 复核（尚不需要）。
+
 ## 架构
 
 ```
@@ -178,9 +202,12 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | POST | `/api/dedup-decisions` | 保存人工恢复选择 `{dir, restore:[...]}` |
 | GET/PUT | `/api/llm-config` | LLM 三档配置（不回传明文密钥） |
 | POST | `/api/llm-test` | 测试某档连通性 `{profile}` |
-| POST | `/api/llm-jobs` | 纠错/总结任务 `{op:'proofread'|'summarize', dir, mode?}` |
+| POST | `/api/llm-jobs` | LLM 任务 `{op:'proofread'|'summarize'|'weave', dir?, mode?, scope?}`（weave 织知识链） |
 | GET | `/api/llm-jobs` / `/api/llm-jobs/:id` | LLM 任务列表 / 详情（含 token 用量） |
 | POST | `/api/llm-jobs/:id/cancel` | 取消 LLM 任务 |
+| POST | `/api/chat` | 复习页对话（流式透传，`{messages, profile}`） |
+| GET | `/api/backlinks?dir=` | 反链：全库扫描引用某课次的 wiki 链接 |
+| POST | `/api/index-note` | 快速生成课程索引 `{dir}`（规则版，不含 AI） |
 
 ## 已验证结果
 

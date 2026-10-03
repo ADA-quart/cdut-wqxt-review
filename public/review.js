@@ -175,6 +175,18 @@ function currentSection() {
   return active || null;
 }
 
+/** 按左侧滚动位置判断"当前正在读的页"（与图片面板是否跟随无关） */
+function currentVisibleSection() {
+  const scroll = $('mdScroll');
+  const top = scroll.scrollTop + 80;
+  const secs = [...document.querySelectorAll('.page-sec')];
+  let best = null;
+  for (const s of secs) {
+    if (s.offsetTop <= top) best = s; else break;
+  }
+  return best || secs[0] || currentSection();
+}
+
 // 跟随滚动：左侧滚到哪一节，右侧切到对应页
 let followRaf = null;
 function onMdScroll() {
@@ -265,7 +277,7 @@ async function send(text, { display } = {}) {
   let acc = '';
   try {
     const attach = $('attachPage').checked;
-    const sec = currentSection();
+    const sec = currentVisibleSection();
     const payload = [];
     const lessonTitle = $('lessonTitle').textContent;
     payload.push({

@@ -239,6 +239,7 @@ body.dragging { user-select: none; cursor: col-resize; }
   display: flex;
   flex-direction: column;
 }
+.drawer[hidden] { display: none; }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .drawer-head h3 { margin: 0; font-size: 14px; }
 .drawer-body { padding: 14px 16px; overflow: auto; }
