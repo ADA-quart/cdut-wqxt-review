@@ -248,7 +248,7 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | POST | `/api/llm-jobs/:id/cancel` | 取消 LLM 任务 |
 | POST | `/api/chat` | 复习页对话（流式透传，`{messages, profile}`） |
 | GET | `/api/backlinks?dir=` | 反链：全库扫描引用某课次的 wiki 链接 |
-| POST | `/api/index-note` | 快速生成课程索引 `{dir}`（规则版，不含 AI） |
+| POST | `/api/index-note` | 快速生成课程索引 `{dir}`（规则版，不含 AI；课程/课次目录均可，自动保留「相关课程」关联块） |
 
 ## 已验证结果
 

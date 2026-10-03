@@ -20,6 +20,18 @@ const state = {
 const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
 const fileUrl = (p) => '/files/' + enc(p);
 const imgUrl = (name) => fileUrl(`${dir}/${name}`);
+// md 文件在 downloads/<课程>/<课次>.md，其中的相对资源（xxx_assets/figures/…）按课程目录解析
+const mdBaseUrl = '/files/' + (courseDir ? enc(courseDir) + '/' : '');
+
+/** 把 md 里的相对图片地址改写成 /files/ 下的真实地址 */
+function resolveMdAssets(root) {
+  root.querySelectorAll('img[src]').forEach((img) => {
+    let src = img.getAttribute('src') || '';
+    if (!src || /^([a-z][a-z0-9+.-]*:|\/\/|\/|#|data:)/i.test(src)) return;
+    try { src = decodeURIComponent(src); } catch { /* 保持原样 */ }
+    img.src = mdBaseUrl + enc(src.replace(/^\.\//, ''));
+  });
+}
 
 // ---------- Markdown 渲染 ----------
 
@@ -112,6 +124,7 @@ function renderFullMd() {
   }
 
   transformWikilinks(container);
+  resolveMdAssets(container);
   renderMath(container);
   container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = '_blank'; a.rel = 'noreferrer'; });
 }

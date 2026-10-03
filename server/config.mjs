@@ -111,7 +111,7 @@ function maskKey(key) {
   return `${k.slice(0, 5)}****${k.slice(-4)}`;
 }
 
-const PROFILE_LABELS = {
+export const PROFILE_LABELS = {
   text: '纯文本',
   visionCloud: '图片上云',
   visionLocal: '图片本地',

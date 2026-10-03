@@ -14,6 +14,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { DOWNLOAD_DIR, ensureInside } from './paths.mjs';
 import { loadConfig, getProfile, PROFILE_KEYS } from './config.mjs';
+import { describeFetchError } from './net.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -45,15 +46,20 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
   };
   if (maxTokens) body.max_tokens = maxTokens;
 
-  const res = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${prof.apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(180000),
-  });
+  let res;
+  try {
+    res = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${prof.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(180000),
+    });
+  } catch (err) {
+    throw describeFetchError(err, { base, label, timeoutSec: 180 });
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`LLM 接口 ${res.status}：${text.slice(0, 300)}`);

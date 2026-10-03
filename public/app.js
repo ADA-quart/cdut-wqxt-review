@@ -922,20 +922,24 @@ function connectEvents() {
 (async function init() {
   const s = await refreshStatus();
   if (s?.loggedIn) {
-    await loadTerms();
-    await loadCourses();
+    // 学期 + 课程列表可能较慢（首次要拉起 Edge，冷启动可达 1~2 分钟），
+    // 不阻塞任务列表 / 文件树 / SSE 的初始化
+    loadTerms().then(loadCourses);
   } else {
     $('termSel').innerHTML = '<option value="">未登录</option>';
   }
-  const { jobs } = await api('/jobs').catch(() => ({ jobs: [] }));
+  const [{ jobs }, mdTool, md, llm] = await Promise.all([
+    api('/jobs').catch(() => ({ jobs: [] })),
+    api('/md-tools').catch(() => null),
+    api('/md-jobs').catch(() => ({ jobs: [] })),
+    api('/llm-jobs').catch(() => ({ jobs: [] })),
+  ]);
   for (const j of jobs) state.jobs.set(j.id, j);
-  state.mdTool = await api('/md-tools').catch(() => null);
-  const md = await api('/md-jobs').catch(() => ({ jobs: [] }));
+  state.mdTool = mdTool;
   for (const j of md.jobs || []) state.mdJobs.set(j.id, j);
-  await loadLlmConfig();
-  const llm = await api('/llm-jobs').catch(() => ({ jobs: [] }));
   for (const j of llm.jobs || []) state.llmJobs.set(j.id, j);
   renderJobs();
   loadFiles();
   connectEvents();
+  loadLlmConfig();
 })();

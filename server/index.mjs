@@ -420,27 +420,55 @@ app.get('/api/backlinks', asyncRoute(async (req, res) => {
 app.post('/api/index-note', asyncRoute(async (req, res) => {
   const relDir = String(req.body?.dir || '').replace(/^[/\\]+/, '');
   if (!relDir) return res.status(400).json({ error: '缺少 dir' });
-  const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
+  let absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
   if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) {
     return res.status(404).json({ error: `目录不存在：${relDir}` });
   }
-  const courseName = path.basename(absDir);
-  const lessons = fs.readdirSync(absDir, { withFileTypes: true })
+
+  const lessonsOf = (dir) => fs.readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
     .map((e) => e.name)
-    .filter((name) => fs.existsSync(path.join(absDir, `${name}.md`)))
+    .filter((name) => fs.existsSync(path.join(dir, `${name}.md`)))
     .sort((a, b) => a.localeCompare(b, 'zh'));
-  if (lessons.length === 0) return res.status(400).json({ error: '该课程还没有已转 MD 的课次' });
+
+  let lessons = lessonsOf(absDir);
+  if (lessons.length === 0) {
+    // 允许传课次目录：自动上溯一层到课程目录
+    const parent = path.dirname(absDir);
+    if (parent !== DOWNLOAD_DIR && parent.startsWith(DOWNLOAD_DIR + path.sep)) {
+      const fromParent = lessonsOf(parent);
+      if (fromParent.length > 0) {
+        absDir = parent;
+        lessons = fromParent;
+      }
+    }
+  }
+  if (lessons.length === 0) {
+    return res.status(400).json({
+      error: `「${path.basename(absDir)}」下没有已转 MD 的课次；请传课程目录（例如 downloads/<课程名>）`,
+    });
+  }
+
+  const courseName = path.basename(absDir);
+  const outPath = path.join(absDir, `${courseName}.md`);
+
+  // 保留「课程间知识链」写入的关联课程块，避免被规则版索引覆盖掉
+  let related = '';
+  if (fs.existsSync(outPath)) {
+    const m = fs.readFileSync(outPath, 'utf8')
+      .match(/<!-- llm-courses:start -->[\s\S]*?<!-- llm-courses:end -->/);
+    if (m) related = `${m[0]}\n\n`;
+  }
 
   const md = [
     `# ${courseName}`,
     '',
+    ...(related ? [related.trimEnd(), ''] : []),
     '> 课程索引（自动生成）',
     '',
     ...lessons.map((l) => `- [[${l}]]`),
     '',
   ].join('\n');
-  const outPath = path.join(absDir, `${courseName}.md`);
   fs.writeFileSync(outPath, md, 'utf8');
   res.json({
     ok: true,
