@@ -165,6 +165,9 @@ OCR 会有零星错字（如「也位差」→「电位差」）。界面提供�
 | 记住了 | 间隔 ×熟练度（默认 2.5） |
 | 太简单 | 间隔 ×熟练度 ×1.4，熟练度 +0.15 |
 
+课件区还有 **🧠 出题**：AI 按当前页生成「先问后答」问答卡（检索练习），自动入队。
+问答卡在复习抽屉里默认只显示问题，点「显示答案」再核对；还可点「我来复述（费曼）」——用自己的话讲一遍，AI 对照课件指出**缺漏 / 不准确 / 追问**。
+
 卡片数据存在 `downloads/.review/<课程>/<课次>.json`（不进文件树、不参与检索）。
 「导出 MD」得到可贴进 Obsidian / ima 的复习清单，「复制 CSV」可直接导入 Anki 或 Excel。
 
@@ -276,6 +279,8 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | GET | `/api/preview?dir=` | 课次预览：摘要 + 首图（悬浮预览用） |
 | GET | `/api/cards?dir=&due=1` | 复习卡列表 / 今日到期卡与数量 |
 | POST | `/api/cards` | 新建卡片 `{dir, page, kind:'star'\|'wrong'\|'ok', text}` |
+| POST | `/api/cards/gen-qa` | AI 出题：`{dir, page?, count?}` → 生成问答卡入库 |
+| POST | `/api/cards/feynman` | 费曼回评：`{cardId|dir, page, answer}` → 缺漏/纠错/追问 |
 | POST | `/api/cards/:id/grade` | 评分排期 `{grade:'again'\|'hard'\|'good'\|'easy'}` |
 | DELETE | `/api/cards/:id` | 删除卡片 |
 | GET | `/api/cards/export?format=md\|csv` | 导出复习清单（Markdown / CSV） |
