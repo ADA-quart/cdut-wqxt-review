@@ -821,6 +821,12 @@ $('btnDoLogin').onclick = async () => {
     const r = await api('/login', { method: 'POST', body: { username, password } });
     $('loginModal').hidden = true;
     toast('登录成功：' + (r.account || username), 'ok');
+    // 登录完成，把窗口挪回屏幕外
+    try {
+      const w = await api('/browser/hide', { method: 'POST' });
+      browserVisible = !!w.visible;
+      renderBrowserBtn();
+    } catch { /* 忽略 */ }
     await refreshStatus();
     await loadTerms();
     await loadCourses();
@@ -838,6 +844,44 @@ $('btnLogout').onclick = async () => {
   await refreshStatus();
   $('courseList').innerHTML = '<p class="empty">登录后加载课程列表</p>';
 };
+
+// Edge 窗口控制：平时躲在屏幕外；登录/验证码时唤出
+let browserVisible = false;
+let browserBusy = false;
+
+function renderBrowserBtn() {
+  const btn = $('btnBrowser');
+  btn.textContent = browserVisible ? '隐藏浏览器' : '显示浏览器';
+  btn.title = browserVisible
+    ? '把 Edge 窗口挪回屏幕外（不影响后台请求）'
+    : 'Edge 窗口平时躲在屏幕外；需要输验证码或手动操作时唤出';
+}
+
+$('btnBrowser').onclick = async () => {
+  const btn = $('btnBrowser');
+  btn.disabled = true;
+  browserBusy = true;
+  try {
+    const r = await api(browserVisible ? '/browser/hide' : '/browser/show', { method: 'POST' });
+    browserVisible = !!r.visible;
+    renderBrowserBtn();
+    if (browserVisible) toast('已唤出浏览器窗口，用完点「隐藏浏览器」', 'ok');
+  } catch (e) {
+    toast('操作失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    browserBusy = false;
+  }
+};
+
+async function syncBrowserBtn() {
+  try {
+    const r = await api('/browser/window');
+    // 冷启动时这个响应可能很慢，别覆盖用户已经点过的结果
+    if (!browserBusy) browserVisible = !!r.visible;
+  } catch { /* 服务未启动时忽略 */ }
+  if (!browserBusy) renderBrowserBtn();
+}
 
 $('btnRefresh').onclick = loadCourses;
 $('btnRefreshJobs').onclick = async () => {
@@ -942,4 +986,5 @@ function connectEvents() {
   loadFiles();
   connectEvents();
   loadLlmConfig();
+  syncBrowserBtn();
 })();

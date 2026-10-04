@@ -31,6 +31,33 @@ let browser = null;
 let workPage = null;
 let launching = null;
 let navPromise = null;
+/** 窗口是否被挪到可见区域（登录需要输验证码时唤出） */
+let windowVisible = false;
+/** 首次拿到工作页面后，把窗口挪到屏幕外（--window-position 部分版本会被忽略） */
+let positioned = false;
+/** 窗口被移出屏幕时的坐标（屏幕外，避免打扰用户） */
+const OFFSCREEN = { left: -32000, top: -32000 };
+const ONSCREEN = { left: 120, top: 80, width: 1280, height: 860 };
+
+/** 连接后立刻把窗口挪出屏幕（不等页面加载，避免启动瞬间闪窗） */
+async function nudgeOffscreen(b) {
+  let session = null;
+  try {
+    session = await b.newBrowserCDPSession();
+    const { targetInfos } = await session.send('Target.getTargets');
+    const page = targetInfos.find((t) => t.type === 'page');
+    if (!page) return false;
+    const { windowId } = await session.send('Browser.getWindowForTarget', { targetId: page.targetId });
+    await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } });
+    await session.send('Browser.setWindowBounds', { windowId, bounds: { left: OFFSCREEN.left, top: OFFSCREEN.top } });
+    positioned = true;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (session) await session.detach().catch(() => {});
+  }
+}
 
 function findEdge() {
   for (const p of EDGE_CANDIDATES) {
@@ -69,6 +96,10 @@ async function launchEdge() {
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-features=msEdgeFirstRunExperience',
+      // 窗口默认放到屏幕外：真实 Edge 内核保持不变（绕开 WAF 指纹检测），
+      // 但用户不会被每次弹出的窗口打扰；需要输验证码时再一键唤出。
+      '--window-position=-32000,-32000',
+      '--window-size=1280,860',
       WQ_BASE + '/',
     ],
     { stdio: 'ignore', windowsHide: false },
@@ -98,6 +129,8 @@ export async function ensureBrowser() {
     }
     browser = await chromium.connectOverCDP(CDP_URL);
     browser.on('disconnected', () => { browser = null; workPage = null; });
+    // 立刻把窗口挪出屏幕，避免启动瞬间闪一下
+    await nudgeOffscreen(browser).catch(() => {});
     return browser;
   })().finally(() => { launching = null; });
 
@@ -122,6 +155,10 @@ export async function getWorkPage() {
       await page.goto(WQ_BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     }
     workPage = page;
+    if (!positioned) {
+      positioned = true;
+      setWindowBounds({ windowState: 'normal', ...OFFSCREEN }).catch(() => {});
+    }
     return page;
   })().finally(() => { navPromise = null; });
 
@@ -183,10 +220,57 @@ export async function closeBrowser() {
   try { if (browser) await browser.close().catch(() => {}); } catch {}
   browser = null;
   workPage = null;
+  windowVisible = false;
+  positioned = false;
   if (edgeChild && !edgeChild.killed) {
     try { edgeChild.kill(); } catch {}
     edgeChild = null;
   }
+}
+
+/** 用 CDP 设置浏览器窗口位置（Edge 没有"最小化启动"开关，只能连上后挪） */
+async function setWindowBounds(bounds) {
+  const page = await getWorkPage();
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { windowId } = await session.send('Browser.getWindowForTarget');
+    if (bounds.windowState) {
+      await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: bounds.windowState } });
+    }
+    const { windowState, ...rest } = bounds;
+    await session.send('Browser.setWindowBounds', { windowId, bounds: rest });
+    return true;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+/** 把 Edge 窗口唤到屏幕上（登录、输验证码时用） */
+export async function showBrowserWindow() {
+  try {
+    await setWindowBounds({ windowState: 'normal', ...ONSCREEN });
+    const page = await getWorkPage();
+    await page.bringToFront().catch(() => {});
+    windowVisible = true;
+    return { ok: true, visible: true };
+  } catch (e) {
+    return { ok: false, visible: windowVisible, error: String(e?.message || e) };
+  }
+}
+
+/** 把 Edge 窗口挪回屏幕外（平时不打扰用户） */
+export async function hideBrowserWindow() {
+  try {
+    await setWindowBounds({ windowState: 'normal', ...OFFSCREEN });
+    windowVisible = false;
+    return { ok: true, visible: false };
+  } catch (e) {
+    return { ok: false, visible: windowVisible, error: String(e?.message || e) };
+  }
+}
+
+export function browserWindowVisible() {
+  return windowVisible;
 }
 
 export function edgeStatus() {
@@ -194,5 +278,6 @@ export function edgeStatus() {
     edgeRunning: !!edgeChild,
     cdpPort: CDP_PORT,
     profileDir: PROFILE_DIR,
+    windowVisible,
   };
 }

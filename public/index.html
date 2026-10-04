@@ -21,6 +21,7 @@
     <span id="statusText">检查中…</span>
     <button class="btn ghost" id="btnLogin" hidden>登录</button>
     <button class="btn ghost" id="btnLogout" hidden>退出</button>
+    <button class="btn ghost" id="btnBrowser" title="Edge 窗口平时躲在屏幕外；需要输验证码或手动操作时唤出">显示浏览器</button>
     <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（纠错 / 整理重点 / AI 知识链 / 复习页对话）">LLM 设置</button>
   </div>
 </header>
@@ -78,7 +79,7 @@
 <div class="modal-mask" id="loginModal" hidden>
   <div class="modal">
     <h3>登录问渠学堂</h3>
-    <p class="hint">通过成都理工大学统一认证登录。首次点击后会在本机拉起一个 Edge 窗口，若需要验证码请在该窗口中完成。</p>
+    <p class="hint">通过成都理工大学统一认证登录。Edge 窗口平时躲在屏幕外、不会打扰你；需要输验证码时会自动唤出，也可以随时用右上角「显示浏览器」手动唤出 / 隐藏。</p>
     <label class="field">
       <span>学号</span>
       <input type="text" id="inpUser" placeholder="请输入学号" autocomplete="username">

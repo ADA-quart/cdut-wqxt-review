@@ -213,7 +213,20 @@ downloads/         下载产物（已 gitignore）
 | 无头模式（`--headless=new`） | 同上，被识别 |
 | **手动拉起真实 Edge + CDP 连接** | 正常访问 ✅ |
 
-因此 `browser.mjs` 采用「以独立 profile 拉起用户本机真实 Edge，通过调试端口连接」的方式：首访会弹出一个 Edge 窗口（如遇验证码请在该窗口完成），登录态保存在 `.edge-profile/`，后续重启免登录。
+因此 `browser.mjs` 采用「以独立 profile 拉起用户本机真实 Edge，通过调试端口连接」的方式。登录态保存在 `.edge-profile/`，后续重启免登录。
+
+**窗口不会打扰你**：Edge 进程照常运行（内核与指纹和普通 Edge 一致，这样才能过 WAF），
+但窗口被 CDP 挪到屏幕外（约 `-21000, -21000`），平时完全看不见，也不会抢焦点。
+需要手动操作时：
+
+- 点右上角「**显示浏览器**」把它唤到屏幕中央，用完点「隐藏浏览器」挪回去；
+- 点「登录」时会**自动唤出**（可能要输验证码），登录成功后自动隐藏。
+
+对应 API：`POST /api/browser/show`、`POST /api/browser/hide`、`GET /api/browser/window`。
+
+> 试过但行不通的路子：`--headless=new` 无头模式会被瑞数 WAF 识别（挑战 JS 执行后仍返回 400）；
+> Playwright 自带 Chromium / Electron 之类"简化浏览器"指纹不同，同样被拦。
+> 所以这里保留真实 Edge 内核，只把窗口挪出可视区域——既过检测，也不弹窗。
 
 ### 2. 数据流
 
@@ -250,6 +263,9 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/status` | 浏览器与登录状态 |
+| POST | `/api/browser/show` | 把 Edge 窗口唤到屏幕上（登录 / 验证码） |
+| POST | `/api/browser/hide` | 把 Edge 窗口挪回屏幕外 |
+| GET | `/api/browser/window` | 当前窗口是否在可见区域 |
 | POST | `/api/login` | 触发登录 `{username, password}` |
 | POST | `/api/logout` | 退出登录 |
 | GET | `/api/terms` | 学期列表 |

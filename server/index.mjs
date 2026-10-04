@@ -36,7 +36,10 @@ import {
   testProfile, expandQuery, generateQaCards, feynmanReview,
   events as llmEvents,
 } from './llm.mjs';
-import { closeBrowser, edgeStatus, getWorkPage, WQ_BASE } from './browser.mjs';
+import {
+  closeBrowser, edgeStatus, getWorkPage, WQ_BASE,
+  showBrowserWindow, hideBrowserWindow, browserWindowVisible,
+} from './browser.mjs';
 
 const PORT = Number(process.env.PORT || 3901);
 const app = express();
@@ -61,6 +64,8 @@ app.get('/api/status', asyncRoute(async (_req, res) => {
 app.post('/api/login', asyncRoute(async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: '请输入学号和密码' });
+  // 登录可能需要输验证码 → 先把 Edge 窗口唤到屏幕上
+  await showBrowserWindow();
   const result = await login(username, password);
   if (!result.ok) return res.status(401).json({ error: result.error || '登录失败' });
   res.json(result);
@@ -104,6 +109,19 @@ app.get('/api/subs/:courseId/:subId/ppt', asyncRoute(async (req, res) => {
 }));
 
 // ---------- 下载任务 ----------
+
+/** Edge 窗口控制：平时躲在屏幕外，需要输验证码/手动操作时唤出 */
+app.post('/api/browser/show', asyncRoute(async (_req, res) => {
+  res.json(await showBrowserWindow());
+}));
+
+app.post('/api/browser/hide', asyncRoute(async (_req, res) => {
+  res.json(await hideBrowserWindow());
+}));
+
+app.get('/api/browser/window', (_req, res) => {
+  res.json({ visible: browserWindowVisible() });
+});
 
 app.post('/api/jobs', asyncRoute(async (req, res) => {
   const { mode = 'course', courseId, subId, monthsBack = 12, termId } = req.body || {};
