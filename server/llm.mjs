@@ -753,3 +753,65 @@ export async function expandQuery(q) {
   ], { profile: 'text', maxTokens: 120, temperature: 0.1 });
   return content.split(/[\s,，、;；]+/).filter((t) => t.length >= 2).slice(0, 16);
 }
+
+/**
+ * AI 出题：把一页（或一节）的 OCR 文本转成问答卡 [ {front, back, page} ]。
+ * 依据：检索练习（Roediger & Karpicke 2006）——先问后答的收益远高于重读。
+ */
+export async function generateQaCards(text, { count = 3, lesson = '', page = null, maxChars = 3500 } = {}) {
+  const body = String(text || '').slice(0, maxChars);
+  if (!body.trim()) return [];
+  const ask = [
+    '你是出题助手。根据下面课件内容出 ' + count + ' 道「先问后答」复习卡，用于自测（检索练习）。',
+    '要求：',
+    '1. 问题考察理解（为什么/如何推导/区别/适用条件），避免名词背诵式的一问一答；',
+    '2. 答案简洁、准确，公式用 LaTeX（$...$）；',
+    '3. 只依据给定内容，不要编造；内容不足就少出题；',
+    '4. 严格输出 JSON 数组，形如 [{"front":"问题","back":"答案"}]，不要输出其它文字。',
+    '',
+    (lesson ? '课程：' + lesson + (page ? '（第 ' + page + ' 页）' : '') : ''),
+    '内容：',
+    body,
+  ].join('\n');
+  const { content } = await chat([{ role: 'user', content: ask }], { profile: 'text', maxTokens: 1400, temperature: 0.3 });
+  const m = content.match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  let arr;
+  try { arr = JSON.parse(m[0]); } catch { return []; }
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((x) => x && String(x.front || '').trim())
+    .slice(0, count)
+    .map((x) => ({ front: String(x.front).trim(), back: String(x.back || '').trim(), page }));
+}
+
+/**
+ * 费曼回评：学生用自己的话复述一张卡/一页，返回「缺漏 / 表述问题 / 追问」三栏点评。
+ * 依据：自解释与生成性学习（Chi 自解释原则；Fiorella & Mayer 2015）。
+ */
+export async function feynmanReview(sourceText, studentText, { lesson = '', page = null } = {}) {
+  const ask = [
+    '学生在复习「先问后答」卡片。下方是课件原文与学生的复述。',
+    '请像严格的助教一样点评学生的复述，用中文，只输出如下 JSON（不要其它文字）：',
+    '{"missing":["遗漏的关键点…"],"wrong":["表述不准确的地方…（给正确说法）"],"followup":["一条追问，促使学生补全理解"]}',
+    '标准：只对照课件原文判断；学生说对了也要在 missing 里留空数组；每条不超过 60 字；公式用 LaTeX（$...$）。',
+    '',
+    (lesson ? '课程：' + lesson + (page ? '（第 ' + page + ' 页）' : '') : ''),
+    '【课件原文】',
+    String(sourceText || '').slice(0, 3000),
+    '',
+    '【学生复述】',
+    String(studentText || '').slice(0, 2000),
+  ].join('\n');
+  const { content } = await chat([{ role: 'user', content: ask }], { profile: 'text', maxTokens: 1200, temperature: 0.2 });
+  const m = content.match(/\{[\s\S]*\}/);
+  if (!m) return { missing: [], wrong: [], followup: [] };
+  try {
+    const obj = JSON.parse(m[0]);
+    return {
+      missing: Array.isArray(obj.missing) ? obj.missing.slice(0, 8).map(String) : [],
+      wrong: Array.isArray(obj.wrong) ? obj.wrong.slice(0, 8).map(String) : [],
+      followup: Array.isArray(obj.followup) ? obj.followup.slice(0, 3).map(String) : [],
+    };
+  } catch { return { missing: [], wrong: [], followup: [] }; }
+}

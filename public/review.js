@@ -899,6 +899,7 @@ function setupEvents() {
   $('btnMarkStar').onclick = () => markCurrent('star');
   $('btnMarkWrong').onclick = () => markCurrent('wrong');
   $('btnMarkOk').onclick = () => markCurrent('ok');
+  $('btnGenQa').onclick = genQaCurrent;
   $('btnExportMd').onclick = () => window.open('/api/cards/export?format=md', '_blank');
   $('btnCopyCsv').onclick = async () => {
     try {
@@ -913,6 +914,42 @@ function setupEvents() {
     const card = e.target.closest('.q-card');
     if (!card) return;
     const id = card.dataset.id;
+    if (e.target.closest('[data-feyn]')) {
+      const box = card.querySelector('.q-feyn-box');
+      box.hidden = !box.hidden;
+      if (!box.hidden) box.querySelector('textarea').focus();
+      return;
+    }
+    if (e.target.closest('[data-feyn-go]')) {
+      const box = card.querySelector('.q-feyn-box');
+      const answer = box.querySelector('textarea').value.trim();
+      if (!answer) { toast('先写一句你的复述'); return; }
+      const btn = e.target.closest('[data-feyn-go]');
+      btn.disabled = true; btn.textContent = '点评中…';
+      try {
+        const r = await fetch('/api/cards/feynman', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cardId: id, answer }),
+        });
+        const v = await r.json();
+        if (!r.ok) throw new Error(v.error || ('HTTP ' + r.status));
+        const sec = (title, arr, cls) => (arr && arr.length)
+          ? `<div class="feyn-sec ${cls}"><b>${title}</b><ul>${arr.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>`
+          : '';
+        box.insertAdjacentHTML('afterend',
+          `<div class="feyn-result">` +
+          sec('缺漏', v.missing, 'miss') + sec('不准确', v.wrong, 'wrong') +
+          sec('追问', v.followup, 'ask') +
+          (!v.missing.length && !v.wrong.length ? '<div class="feyn-sec ok"><b>✓ 表述完整</b></div>' : '') +
+          `</div>`);
+        box.hidden = true;
+      } catch (err) {
+        toast('点评失败：' + String(err.message || err));
+      }
+      btn.disabled = false; btn.textContent = '提交复述';
+      return;
+    }
     if (e.target.closest('[data-del]')) {
       await fetch('/api/cards/' + encodeURIComponent(id), { method: 'DELETE' });
       await renderQueue();
@@ -1265,6 +1302,7 @@ const KIND_META = {
   star: { icon: '⭐', label: '重点' },
   wrong: { icon: '❓', label: '错题' },
   ok: { icon: '✅', label: '已掌握' },
+  qa: { icon: '🧠', label: '问答' },
 };
 
 async function refreshDueBadge() {
@@ -1305,6 +1343,32 @@ async function markCurrent(kind) {
     toast(`${KIND_META[kind].icon} 第 ${page} 页已加入复习队列`);
   } catch (e) {
     toast('标记失败：' + String(e.message || e));
+  }
+}
+
+/** AI 出题：为当前页生成问答卡并入库 */
+async function genQaCurrent() {
+  const sec = currentVisibleSection();
+  if (!sec) { toast('先翻到要出题的那一页'); return; }
+  const page = Number(sec.dataset.page);
+  const btn = $('btnGenQa');
+  btn.disabled = true; btn.textContent = '出题中…';
+  try {
+    const r = await fetch('/api/cards/gen-qa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir, page, count: 3 }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    if (!data.added) { toast('这一页没生成出卡片（内容可能太少）'); return; }
+    toast(`🧠 第 ${page} 页已生成 ${data.added} 张问答卡，打开「复习」开始自测`);
+    await refreshDueBadge();
+    await markCardBadges();
+  } catch (e) {
+    toast('出题失败：' + String(e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = '🧠 出题';
   }
 }
 
@@ -1358,7 +1422,13 @@ async function renderQueue() {
       `<div class="q-head"><span class="q-kind q-${escapeHtml(c.kind)}">${meta.icon} ${meta.label}</span>` +
       `<a class="q-link" href="/review.html?dir=${encodeURIComponent(c.dir)}${c.page ? `&page=${c.page}` : ''}">` +
       `${escapeHtml(course)} · ${escapeHtml(lesson)}${c.page ? ` · 第 ${c.page} 页` : ''}</a></div>` +
-      (c.text ? `<div class="q-text">${escapeHtml(c.text.slice(0, 220))}</div>` : '') +
+      (c.kind === 'qa' && c.front
+        ? `<div class="q-text">❓ ${escapeHtml(c.front)}</div>` +
+          (c.back ? `<details class="q-details"><summary>显示答案</summary><div class="q-back">${escapeHtml(c.back)}</div></details>` : '') +
+          `<div class="q-feyn"><button class="btn tiny" data-feyn="1">我来复述（费曼）</button>` +
+          `<div class="q-feyn-box" hidden><textarea rows="2" placeholder="用自己的话讲一遍，AI 对照课件点评缺漏"></textarea>` +
+          `<button class="btn tiny primary" data-feyn-go="1">提交复述</button></div></div>`
+        : (c.text ? `<div class="q-text">${escapeHtml(c.text.slice(0, 220))}</div>` : '')) +
       `<div class="q-actions">` +
       `<button class="btn tiny" data-g="again">再来一次</button>` +
       `<button class="btn tiny" data-g="hard">有点难</button>` +

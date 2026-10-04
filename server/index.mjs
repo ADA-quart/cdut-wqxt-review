@@ -30,10 +30,10 @@ import {
 import { publicConfig, saveConfig } from './config.mjs';
 import { streamChat } from './chat.mjs';
 import { searchKb, buildGraph, listTags, getPreview } from './kb.mjs';
-import { listCards, dueCount, addCard, gradeCard, deleteCard, exportCards } from './cards.mjs';
+import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
-  testProfile, expandQuery,
+  testProfile, expandQuery, generateQaCards, feynmanReview,
   events as llmEvents,
 } from './llm.mjs';
 import { closeBrowser, edgeStatus, getWorkPage, WQ_BASE } from './browser.mjs';
@@ -464,9 +464,9 @@ app.get('/api/cards', asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/cards', asyncRoute(async (req, res) => {
-  const { dir, page, kind, text } = req.body || {};
+  const { dir, page, kind, text, front, back } = req.body || {};
   if (!dir) return res.status(400).json({ error: '缺少 dir' });
-  const card = addCard({ dir: String(dir), page, kind: kind || 'star', text });
+  const card = addCard({ dir: String(dir), page, kind: kind || 'star', text, front, back });
   res.status(201).json({ card, dueCount: dueCount() });
 }));
 
@@ -481,6 +481,85 @@ app.delete('/api/cards/:id', asyncRoute(async (req, res) => {
   const removed = deleteCard(String(req.params.id));
   if (!removed) return res.status(404).json({ error: '卡片不存在' });
   res.json({ ok: true, dueCount: dueCount() });
+}));
+
+/** AI 出题：把某一页（或整节）转成问答卡并入库 */
+app.post('/api/cards/gen-qa', asyncRoute(async (req, res) => {
+  const { dir, page, count } = req.body || {};
+  if (!dir) return res.status(400).json({ error: '缺少 dir' });
+  const rel = String(dir).replace(/^[/\\]+/, '');
+  const parts = rel.split('/');
+  if (parts.length < 2) return res.status(400).json({ error: 'dir 需要是 课程/课次' });
+  const [course, lesson] = parts;
+  const mdPath = path.join(DOWNLOAD_DIR, course, lesson + '.md');
+  if (!fs.existsSync(mdPath)) return res.status(404).json({ error: '先对该课次「转 MD」' });
+  const md = fs.readFileSync(mdPath, 'utf8');
+  const marks = [...md.matchAll(/<!-- page (\d+): [^>]+ -->/g)];
+  let text = md;
+  let pageNo = null;
+  if (page) {
+    const i = marks.findIndex((m) => Number(m[1]) === Number(page));
+    if (i < 0) text = '';
+    else {
+      const start = marks[i].index + marks[i][0].length;
+      const end = i + 1 < marks.length ? marks[i + 1].index : md.length;
+      text = md.slice(start, end);
+      pageNo = Number(page);
+    }
+  } else {
+    text = md.replace(/<!-- page \d+: [^>]+ -->/g, '\n');
+  }
+  text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ').replace(/<!--[\s\S]*?-->/g, ' ').trim();
+  if (!text) return res.status(404).json({ error: page ? `md 里没有第 ${page} 页` : '内容为空' });
+  const items = await generateQaCards(text, { count: Number(count) || 3, lesson: `${course} / ${lesson}`, page: pageNo });
+  if (!items.length) return res.json({ added: 0, cards: [] });
+  const added = addCards(rel, items);
+  res.json({ added, cards: items, dueCount: dueCount() });
+}));
+
+/** 费曼回评：学生复述 → 缺漏/纠错/追问 */
+app.post('/api/cards/feynman', asyncRoute(async (req, res) => {
+  const { dir, page, cardId, answer } = req.body || {};
+  const studentText = String(answer || '').trim();
+  if (!studentText) return res.status(400).json({ error: '缺少 answer（你的复述）' });
+  let sourceText = '';
+  let lesson = '';
+  let pageNo = page ? Number(page) : null;
+  if (cardId) {
+    const card = listCards({}).find((c) => c.id === String(cardId));
+    if (card) {
+      sourceText = card.back || card.text || '';
+      pageNo = card.page ?? pageNo;
+      lesson = `${card.dir.split('/').join(' / ')}`;
+    }
+  }
+  if (!sourceText && dir) {
+    const rel = String(dir).replace(/^[/\\]+/, '');
+    const parts = rel.split('/');
+    if (parts.length >= 2) {
+      const [course, lessonName] = parts;
+      const mdPath = path.join(DOWNLOAD_DIR, course, lessonName + '.md');
+      if (fs.existsSync(mdPath)) {
+        const md = fs.readFileSync(mdPath, 'utf8');
+        const marks = [...md.matchAll(/<!-- page (\d+): [^>]+ -->/g)];
+        if (pageNo != null) {
+          const i = marks.findIndex((m) => Number(m[1]) === pageNo);
+          if (i >= 0) {
+            const start = marks[i].index + marks[i][0].length;
+            const end = i + 1 < marks.length ? marks[i + 1].index : md.length;
+            sourceText = md.slice(start, end);
+          }
+        } else {
+          sourceText = md.replace(/<!-- page \d+: [^>]+ -->/g, '\n');
+        }
+        lesson = `${course} / ${lessonName}`;
+      }
+    }
+  }
+  sourceText = sourceText.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ').replace(/<!--[\s\S]*?-->/g, ' ').trim();
+  if (!sourceText) return res.status(404).json({ error: '找不到用于对照的课件内容' });
+  const review = await feynmanReview(sourceText, studentText, { lesson, page: pageNo });
+  res.json(review);
 }));
 
 app.get('/api/cards/export', asyncRoute(async (req, res) => {

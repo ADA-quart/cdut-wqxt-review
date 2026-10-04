@@ -8,7 +8,7 @@ import { DOWNLOAD_DIR, ensureDir } from './paths.mjs';
 
 const STORE_DIR = path.join(DOWNLOAD_DIR, '.review');
 const DAY = 86400000;
-const KINDS = ['star', 'wrong', 'ok'];
+const KINDS = ['star', 'wrong', 'ok', 'qa'];
 
 function safeRel(dir) {
   const parts = String(dir || '').split('/').filter(Boolean)
@@ -62,7 +62,7 @@ export function dueCount() {
   return listCards({ dueOnly: true }).length;
 }
 
-export function addCard({ dir, page = null, kind = 'star', text = '' }) {
+export function addCard({ dir, page = null, kind = 'star', text = '', front = '', back = '' }) {
   const rel = safeRel(dir);
   if (!KINDS.includes(kind)) throw new Error(`未知标记类型：${kind}`);
   const cards = readCards(rel);
@@ -73,6 +73,8 @@ export function addCard({ dir, page = null, kind = 'star', text = '' }) {
     page: page ? Number(page) : null,
     kind,
     text: String(text || '').slice(0, 800),
+    front: String(front || '').slice(0, 500),
+    back: String(back || '').slice(0, 1200),
     created: now,
     due: now,
     interval: 0,
@@ -83,6 +85,24 @@ export function addCard({ dir, page = null, kind = 'star', text = '' }) {
   cards.push(card);
   writeCards(rel, cards);
   return card;
+}
+
+/** 批量导入（AI 出题用），返回新增张数 */
+export function addCards(dir, items) {
+  let added = 0;
+  for (const it of items || []) {
+    if (!it || !String(it.front || '').trim()) continue;
+    addCard({
+      dir,
+      page: it.page ?? null,
+      kind: it.kind && KINDS.includes(it.kind) ? it.kind : 'qa',
+      text: it.source || it.text || '',
+      front: String(it.front).slice(0, 500),
+      back: String(it.back || '').slice(0, 1200),
+    });
+    added++;
+  }
+  return added;
 }
 
 export function gradeCard(id, grade) {
@@ -132,7 +152,7 @@ export function deleteCard(id) {
   return null;
 }
 
-const KIND_LABEL = { star: '⭐ 重点', wrong: '❓ 错题', ok: '✅ 已掌握' };
+const KIND_LABEL = { star: '⭐ 重点', wrong: '❓ 错题', ok: '✅ 已掌握', qa: '🧠 问答' };
 
 /** 导出复习清单：format=md（贴 Obsidian）或 csv（Anki / 表格） */
 export function exportCards({ dir = '', format = 'md' } = {}) {
@@ -154,7 +174,12 @@ export function exportCards({ dir = '', format = 'md' } = {}) {
     }
     const where = c.page ? `第 ${c.page} 页` : '整节';
     lines.push(`- ${KIND_LABEL[c.kind] || c.kind} · ${where}`);
-    if (c.text) lines.push(`  > ${String(c.text).replace(/\n+/g, ' ').slice(0, 300)}`);
+    if (c.kind === 'qa' && c.front) {
+      lines.push(`  - 问：${String(c.front).replace(/\n+/g, ' ')}`);
+      if (c.back) lines.push(`  - 答：${String(c.back).replace(/\n+/g, ' ')}`);
+    } else if (c.text) {
+      lines.push(`  > ${String(c.text).replace(/\n+/g, ' ').slice(0, 300)}`);
+    }
   }
   return lines.join('\n') + '\n';
 }

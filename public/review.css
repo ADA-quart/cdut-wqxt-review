@@ -424,3 +424,24 @@ a.cite:hover { text-decoration: underline; }
 .q-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .btn.tiny.danger { color: var(--err); border-color: #f2c9c9; }
 .page-badge { float: right; font-size: 13px; margin-left: 6px; }
+
+/* ---------- 问答卡（先问后答）/ 费曼回评 ---------- */
+.q-details { margin-top: 6px; }
+.q-details summary { cursor: pointer; font-size: 12.5px; color: var(--brand); user-select: none; }
+.q-details summary:hover { text-decoration: underline; }
+.q-back { margin-top: 6px; padding: 8px 10px; background: #f7f9fc; border-radius: 7px; font-size: 12.5px; line-height: 1.7; color: var(--ink-2); white-space: pre-wrap; }
+.q-feyn { margin-top: 8px; }
+.q-feyn-box { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.q-feyn-box textarea {
+  font: inherit; font-size: 12.5px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; outline: none;
+}
+.q-feyn-box textarea:focus { border-color: var(--brand); }
+.feyn-result { margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; background: #fbfcfe; }
+.feyn-sec { font-size: 12.5px; line-height: 1.7; margin-bottom: 4px; }
+.feyn-sec b { font-size: 12px; }
+.feyn-sec ul { margin: 4px 0 0; padding-left: 18px; color: var(--ink-2); }
+.feyn-sec.miss b { color: #b45309; }
+.feyn-sec.wrong b { color: #a12a2f; }
+.feyn-sec.ask b { color: var(--brand); }
+.feyn-sec.ok b { color: #1f7a3d; }
