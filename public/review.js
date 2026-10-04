@@ -935,7 +935,7 @@ function setupEvents() {
         const v = await r.json();
         if (!r.ok) throw new Error(v.error || ('HTTP ' + r.status));
         const sec = (title, arr, cls) => (arr && arr.length)
-          ? `<div class="feyn-sec ${cls}"><b>${title}</b><ul>${arr.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul></div>`
+          ? `<div class="feyn-sec ${cls}"><b>${title}</b><ul>${arr.map((x) => `<li>${renderAssistantHtml(x)}</li>`).join('')}</ul></div>`
           : '';
         box.insertAdjacentHTML('afterend',
           `<div class="feyn-result">` +
@@ -1423,12 +1423,12 @@ async function renderQueue() {
       `<a class="q-link" href="/review.html?dir=${encodeURIComponent(c.dir)}${c.page ? `&page=${c.page}` : ''}">` +
       `${escapeHtml(course)} · ${escapeHtml(lesson)}${c.page ? ` · 第 ${c.page} 页` : ''}</a></div>` +
       (c.kind === 'qa' && c.front
-        ? `<div class="q-text">❓ ${escapeHtml(c.front)}</div>` +
-          (c.back ? `<details class="q-details"><summary>显示答案</summary><div class="q-back">${escapeHtml(c.back)}</div></details>` : '') +
+        ? `<div class="q-text">❓ ${renderAssistantHtml(c.front)}</div>` +
+          (c.back ? `<details class="q-details"><summary>显示答案</summary><div class="q-back">${renderAssistantHtml(c.back)}</div></details>` : '') +
           `<div class="q-feyn"><button class="btn tiny" data-feyn="1">我来复述（费曼）</button>` +
           `<div class="q-feyn-box" hidden><textarea rows="2" placeholder="用自己的话讲一遍，AI 对照课件点评缺漏"></textarea>` +
           `<button class="btn tiny primary" data-feyn-go="1">提交复述</button></div></div>`
-        : (c.text ? `<div class="q-text">${escapeHtml(c.text.slice(0, 220))}</div>` : '')) +
+        : (c.text ? `<div class="q-text">${renderAssistantHtml(c.text.slice(0, 400))}</div>` : '')) +
       `<div class="q-actions">` +
       `<button class="btn tiny" data-g="again">再来一次</button>` +
       `<button class="btn tiny" data-g="hard">有点难</button>` +
