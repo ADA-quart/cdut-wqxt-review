@@ -26,7 +26,13 @@ def _enable_ort_cuda():
     其 CUDA 提供者需要 cudnn64_9.dll / cublasLt64_12.dll。这两个 DLL 随 PyTorch 一起
     打包在 torch/lib 下，默认不在 DLL 搜索路径里，会导致 ORT **静默回落到 CPU**。
     这里把该目录加入搜索路径（必须在 import onnxruntime 之前执行）。
+
+    仅 Windows 需要这段处理：
+      - macOS 没有 CUDA，onnxruntime 直接走 CPU（Apple 芯片上 torch 侧的版面模型走 MPS）
+      - Linux 由系统/conda 的 LD_LIBRARY_PATH 负责
     """
+    if sys.platform != "win32":
+        return
     try:
         import torch
 
@@ -98,13 +104,18 @@ def make_emitter(json_mode: bool):
 
 
 def pick_device(requested: str) -> str:
-    """解析 --device auto：有可用 CUDA 就用 cuda，否则回落 cpu。"""
+    """解析 --device auto：优先 CUDA（N 卡）→ Apple MPS（M 系芯片）→ CPU。"""
     if requested != "auto":
         return requested
     try:
         import torch
 
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            return "cuda"
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return "mps"
+        return "cpu"
     except Exception:
         return "cpu"
 
@@ -141,7 +152,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", help="课次图片目录")
     ap.add_argument("-o", "--out", default=None, help="输出 md 路径（默认与课次目录同级）")
-    ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"], help="推理设备（auto=有 CUDA 就用）")
+    ap.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"],
+                    help="推理设备（auto=N 卡用 CUDA / Apple 芯片用 MPS / 否则 CPU）")
     ap.add_argument("--limit", type=int, default=0, help="只处理前 N 张（0=全部）")
     ap.add_argument("--json", action="store_true", help="逐行输出 JSON 进度（供后端解析）")
     ap.add_argument("--no-pdf", action="store_true", help="不生成课件 PDF、不插入翻页链接")
@@ -201,7 +213,16 @@ def main():
     from pix2text import Pix2Text
 
     t0 = time.time()
-    p2t = Pix2Text.from_config(device=device)
+    try:
+        p2t = Pix2Text.from_config(device=device)
+    except Exception as e:
+        # 某些算子/旧版 torch 在 MPS 上会加载失败，直接回落 CPU 比整批失败好
+        if device == "cpu":
+            raise
+        emit({"type": "warn", "error": f"{device} 加载失败，回落 CPU：{e}"},
+             f"[!] {device} 加载失败，回落 CPU：{e}")
+        device = "cpu"
+        p2t = Pix2Text.from_config(device=device)
     emit(
         {"type": "ready", "secs": round(time.time() - t0, 1), "device": device},
         f"[i] 模型加载完成（{time.time()-t0:.1f}s, device={device}）",

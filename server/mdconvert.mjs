@@ -50,7 +50,7 @@ export function mdToolStatus() {
     script,
     hint: python && script
       ? null
-      : '未找到转换环境：请先安装 Python 3.12 并执行 `uv venv .venv-p2t --python 3.12` + `uv pip install --python .venv-p2t/Scripts/python.exe pix2text onnxruntime-gpu torch --index-url https://download.pytorch.org/whl/cu124`',
+      : '未找到转换环境：先跑一次项目自带的安装脚本 —— Windows: `powershell -ExecutionPolicy Bypass -File setup-p2t.ps1`；macOS/Linux: `bash setup-p2t.sh`',
   };
 }
 

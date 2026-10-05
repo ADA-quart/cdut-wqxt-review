@@ -1,32 +1,77 @@
 /**
- * Edge 浏览器会话管理。
+ * 浏览器会话管理（Windows / macOS / Linux）。
  *
  * 问渠学堂（classroom.wqxt.cdut.edu.cn）全站有瑞数式动态防护（WAF）：
  *   - 直接 HTTP 请求 → 412 挑战页
  *   - Playwright 直接 launch / headless → 挑战 JS 执行后仍 400
- *   - 手动拉起真实 Edge + CDP 连接 → 正常访问（已实测）
+ *   - 手动拉起真实 Edge / Chrome + CDP 连接 → 正常访问（已实测）
  *
- * 所以本模块以「独立 profile 拉起真实 Edge + 连接调试端口」的方式工作：
+ * 所以本模块以「独立 profile 拉起本机真实浏览器 + 连接调试端口」的方式工作：
  *   - profile 目录持久化，登录状态（cookie/localStorage）跨重启保留
- *   - 只有在 Edge 未运行时才拉起新窗口，已有实例直接复用
+ *   - 只有在浏览器未运行时才拉起新实例，已有实例直接复用
+ *   - 窗口默认挪到屏幕外（见下方 OFFSCREEN），需要验证码时再用 /api/browser/show 唤出
  *   - 业务 API 一律在真实页面上下文里 fetch（同源、带 cookie、免签名）
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { PROFILE_DIR, ensureDir } from './paths.mjs';
 
-const EDGE_CANDIDATES = [
-  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-];
+const IS_WIN = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
+
+/** 各平台候选浏览器（Chromium 系真实内核，用来过瑞数 WAF） */
+function browserCandidates() {
+  const home = os.homedir();
+  if (IS_WIN) {
+    return [
+      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+      'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+      'C:/Program Files/Google/Chrome/Application/chrome.exe',
+      'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    ];
+  }
+  if (IS_MAC) {
+    return [
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      path.join(home, 'Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'),
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      path.join(home, 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    ];
+  }
+  return [
+    '/usr/bin/microsoft-edge',
+    '/usr/bin/microsoft-edge-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
+  ];
+}
+
+/** 在 PATH 里找一个可执行文件（Linux 发行版路径经常不一致） */
+function findInPath(name) {
+  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const p = path.join(dir, name);
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch { /* 忽略无权限的目录 */ }
+  }
+  return null;
+}
 
 export const CDP_PORT = 9333;
 export const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
 export const WQ_BASE = 'https://classroom.wqxt.cdut.edu.cn';
 
 let edgeChild = null;
+/** 实际使用的浏览器可执行文件路径（便于在 Mac/Linux 上排查） */
+let browserPath = null;
 let browser = null;
 let workPage = null;
 let launching = null;
@@ -60,10 +105,24 @@ async function nudgeOffscreen(b) {
 }
 
 function findEdge() {
-  for (const p of EDGE_CANDIDATES) {
+  // 手动指定优先：WQ_BROWSER="/Applications/xxx.app/Contents/MacOS/xxx"
+  const override = process.env.WQ_BROWSER;
+  if (override && fs.existsSync(override)) return override;
+
+  for (const p of browserCandidates()) {
     if (fs.existsSync(p)) return p;
   }
-  throw new Error('未找到 Microsoft Edge，请先安装 Edge 浏览器');
+  if (!IS_WIN && !IS_MAC) {
+    for (const name of ['microsoft-edge', 'google-chrome', 'chromium', 'chromium-browser']) {
+      const p = findInPath(name);
+      if (p) return p;
+    }
+  }
+  throw new Error(
+    IS_MAC
+      ? '未找到 Edge / Chrome / Chromium / Brave，请先安装其中之一，或用 WQ_BROWSER 指定路径'
+      : '未找到 Microsoft Edge（或 Chrome），请先安装 Chromium 系浏览器',
+  );
 }
 
 async function cdpReachable() {
@@ -87,6 +146,7 @@ async function waitForCdp(timeoutMs = 30000) {
 /** 拉起一个独立的 Edge 实例（独立 profile，不影响用户日常浏览器） */
 async function launchEdge() {
   const edgePath = findEdge();
+  browserPath = edgePath;
   ensureDir(PROFILE_DIR);
   edgeChild = spawn(
     edgePath,
@@ -278,6 +338,7 @@ export function edgeStatus() {
     edgeRunning: !!edgeChild,
     cdpPort: CDP_PORT,
     profileDir: PROFILE_DIR,
+    browserPath,
     windowVisible,
   };
 }

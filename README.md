@@ -41,25 +41,32 @@ npm start
 把下载的课件图片转成带 LaTeX 公式的 Markdown（Pix2Text），供 Obsidian / AI agent 使用：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File setup-p2t.ps1   # 一次性建环境（需 uv + Python 3.12）
+# Windows（需 uv + Python 3.12）
+powershell -ExecutionPolicy Bypass -File setup-p2t.ps1
+
+# macOS / Linux
+bash setup-p2t.sh
 ```
 
 装好后，界面上每个课次目录旁会出现 **「转 MD」** 按钮，点击即转换（有 N 卡自动走 CUDA，否则 CPU）。
 
 ```bash
-# 也可以直接命令行用
+# 也可以直接命令行用（Windows）
 .venv-p2t\Scripts\python.exe ppt2md.py "downloads/电波…/2026-09-28第3-4节" --device auto
+# macOS / Linux
+.venv-p2t/bin/python ppt2md.py "downloads/电波…/2026-09-28第3-4节" --device auto
 ```
 
 #### 换机器 / 笔记本部署
 
-`setup-p2t.ps1` 是跨机器脚本，台式机与笔记本通用（实测验证的版本组合见脚本内注释）：
+`setup-p2t.ps1`（Windows）与 `setup-p2t.sh`（macOS / Linux）是跨机器脚本，台式机与笔记本通用：
 
 | 机器 | 说明 |
 | --- | --- |
 | V100 / 老卡（sm_70） | ORT 锁 1.20.2 的原因：新版 ORT（1.26+）CUDA 内核不再包含 sm_70，会报 `no kernel image`；1.30 起还要求 CUDA 13 |
 | RTX 20/30/40 系、笔记本卡（sm_86 / sm_89） | 同一套即可直接跑：已确认 ORT 1.20.2 内核含 sm_89，torch cu124 原生支持 Ada |
-| 无 N 卡 | 自动回落 CPU，功能完整但慢 3~5 倍 |
+| Apple 芯片 Mac（M1~M4） | torch 走 **MPS**（Metal），ONNX（文字/公式识别）走 CPU —— 免配置，速度介于 N 卡与纯 CPU 之间 |
+| Intel Mac / 无 N 卡 | 自动回落 CPU，功能完整但慢 3~5 倍 |
 
 部署步骤（新机器上）：
 
@@ -76,6 +83,36 @@ powershell -ExecutionPolicy Bypass -File setup-p2t.ps1
 - **只需要显卡驱动（R550+），不需要单独安装 CUDA Toolkit / cuDNN** —— torch 自带运行库，脚本会自动把它加进 DLL 搜索路径
 - 混合显卡笔记本（核显 + 独显）如遇 GPU 没被使用：Windows 设置 → 显示 → 图形 → 把 python.exe 设为「高性能」
 - 显存占用约 3.5GB，8GB 笔记本卡够用；与其他 GPU 程序（游戏/浏览器硬件加速）同时跑时会互抢
+
+#### macOS 版说明
+
+整套东西在 Mac 上是同一份代码，只有三处按平台自动切换：
+
+| 环节 | Windows | macOS |
+| --- | --- | --- |
+| 浏览器 | 自动找 Edge / Chrome（`Program Files`） | 自动找 `/Applications` 与 `~/Applications` 下的 Edge / Chrome / Chromium / Brave |
+| 推理设备 | torch + onnxruntime 走 CUDA | Apple 芯片 torch 走 **MPS**，onnxruntime 走 CPU；Intel Mac 全 CPU |
+| 建环境 | `setup-p2t.ps1` | `bash setup-p2t.sh` |
+
+上手步骤：
+
+```bash
+brew install node uv          # 没有 Homebrew 就先装 Homebrew；Apple 芯片务必装 arm64 版 Node
+git clone https://github.com/ADA-quart/cdut-wqxt-review.git && cd cdut-wqxt-review
+npm install
+bash setup-p2t.sh             # 建 Pix2Text 环境（几分钟），末尾会跑自检
+npm start                     # 打开 http://127.0.0.1:3901
+```
+
+Mac 上要注意的几点：
+
+- **窗口同样是"隐藏"的**：真实 Edge/Chrome 进程照常跑（内核指纹必须是真的，否则过不了瑞数 WAF），窗口被 CDP 挪到屏幕外，
+  但 **Dock 里会出现浏览器的图标**，这是正常的；点界面右上角「显示浏览器」可以随时唤出 / 隐藏。
+- 想指定浏览器（比如只装了 Chrome）可以覆盖：`WQ_BROWSER="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" npm start`。
+- 用的是独立 profile（`.edge-profile/`），**不会动你日常浏览器的书签和登录态**；Edge 和 Chrome 同时装着时优先用 Edge。
+- 首次启动如果 macOS 弹「xxx 想接受传入的网络连接」，允许即可（调试端口只监听本机 127.0.0.1）。
+- Apple 芯片跑「转 MD」比 V100 慢，但比纯 CPU 快；如果发现 `gpu-check.py` 报 MPS 不可用，多半是 Node/Python 装成了 Intel 版
+  （用 `node -p process.arch` 和 `.venv-p2t/bin/python -c "import platform;print(platform.machine())"` 确认是 `arm64`）。
 
 产物：
 
