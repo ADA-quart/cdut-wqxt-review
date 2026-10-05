@@ -36,12 +36,55 @@ function resolveMdAssets(root) {
 
 // ---------- Markdown 渲染 ----------
 
+/**
+ * 公式保护：先把 $$...$$ / $...$ 抽成占位符，再交给 markdown 解析。
+ * 否则 LaTeX 里的下划线会被当成斜体（E_{{}_{d}} → E_{{}<em>{d}}），
+ * 公式被 <em> 劈成多个文本节点，KaTeX 就匹配不到完整的 $$，只能原样显示。
+ */
+function extractMathSpans(text) {
+  const store = [];
+  const re = /\$\$([\s\S]+?)\$\$|\$(?!\$)(?!\s)([^$\n]+?)(?<!\s)\$(?!\$)/g;
+  const out = String(text).replace(re, (raw, disp, inline) => {
+    const display = disp !== undefined;
+    const tex = String(display ? disp : inline).trim();
+    const token = '@@MATH' + store.length + '@@';
+    store.push({ tex: tex, display: display, raw: raw });
+    return token;
+  });
+  return { text: out, store: store };
+}
+
 function renderMarkdown(text) {
+  const src = String(text == null ? '' : text);
+  const parts = src.split(/(```[\s\S]*?```)/g);
+  const store = [];
+  const tokenized = parts.map((seg, i) => {
+    if (i % 2 === 1) return seg;
+    const r = extractMathSpans(seg);
+    const base = store.length;
+    r.store.forEach((item) => store.push(item));
+    return r.text.replace(/@@MATH(\d+)@@/g, (m, n) => '@@MATH' + (base + Number(n)) + '@@');
+  }).join('');
+
+  let html;
   try {
-    return marked.parse(text, { gfm: true, breaks: false });
+    html = marked.parse(tokenized, { gfm: true, breaks: false });
   } catch {
-    return `<pre>${text.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</pre>`;
+    html = '<pre>' + src.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])) + '</pre>';
   }
+
+  if (store.length && typeof katex !== 'undefined') {
+    html = html.replace(/@@MATH(\d+)@@/g, (m, n) => {
+      const item = store[Number(n)];
+      if (!item) return m;
+      try {
+        return katex.renderToString(item.tex, { displayMode: item.display, throwOnError: false, strict: false });
+      } catch {
+        return '<span class="katex-error math-broken">' + item.raw.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])) + '</span>';
+      }
+    });
+  }
+  return html;
 }
 
 /** KaTeX 解析失败的公式：标红 + 给个说明（原来它会原样吐源码，看着像没渲染） */
