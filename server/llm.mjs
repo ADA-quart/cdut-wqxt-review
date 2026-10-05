@@ -15,6 +15,7 @@ import { EventEmitter } from 'node:events';
 import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ensureInside } from './paths.mjs';
 import { loadConfig, getProfile, PROFILE_KEYS } from './config.mjs';
 import { describeFetchError } from './net.mjs';
+import { findMath, findBrokenMath, mathError, applyMathFixes } from './mdmath.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -417,6 +418,62 @@ function upsertBlock(text, marker, block) {
 
 const relOf = (p) => path.relative(NOTES_DIR, p).split(path.sep).join('/');
 
+/** 公式修复：找出 KaTeX 解析不了的公式，让 LLM 重写，再用 KaTeX 验一遍才写回 */
+async function runFixMath(job) {
+  const mdPath = job.mdPath;
+  const original = fs.readFileSync(mdPath, 'utf8');
+  const all = findMath(original);
+  const broken = findBrokenMath(original);
+  job.progress.total = broken.length;
+  emit(job);
+  if (!broken.length) {
+    job.log.push('没有发现解析不了的公式');
+    return { checked: all.length, broken: 0, fixed: 0 };
+  }
+  job.log.push(`共 ${all.length} 条公式，其中 ${broken.length} 条无法解析`);
+
+  const fixes = [];
+  let done = 0;
+  for (const item of broken) {
+    if (job.canceled) break;
+    job.progress.current = `公式 ${done + 1}/${broken.length}`;
+    emit(job);
+    const ask = [
+      '下面是从课件 OCR 得到的 LaTeX 公式，KaTeX 解析报错。请把它改成等价的、KaTeX 能解析的 LaTeX。',
+      '要求：只输出修正后的 LaTeX 本体，不要 $ 或 $ 包裹，不要解释；保持符号含义不变（如 \\slash → /、\\verb( → ( 、括号配平）。',
+      '',
+      'KaTeX 报错：' + item.error,
+      '原公式：' + item.tex,
+      item.before ? '前文：' + item.before : '',
+      item.after ? '后文：' + item.after : '',
+    ].filter(Boolean).join('\n');
+    try {
+      const { content, usage } = await chatRetry([{ role: 'user', content: ask }], { profile: 'text', temperature: 0.1, maxTokens: 500 });
+      addUsage(job, usage);
+      let tex = String(content).trim().replace(/^```(?:latex|tex)?/i, '').replace(/```$/, '').trim();
+      tex = tex.replace(/^\$\$?/, '').replace(/\$\$?$/, '').trim();
+      const err2 = mathError(tex, item.display);
+      if (!err2) {
+        fixes.push({ ...item, tex });
+        job.log.push('已修复一处公式');
+      } else {
+        job.log.push('有一处修复后仍无法解析，已跳过：' + err2.slice(0, 60));
+      }
+    } catch (e) {
+      job.log.push('修复失败：' + String(e?.message || e).slice(0, 80));
+    }
+    done += 1;
+    job.progress.done = done;
+    emit(job);
+  }
+
+  if (fixes.length) {
+    fs.writeFileSync(mdPath.replace(/\.md$/, '.math-backup.md'), original, 'utf8');
+    fs.writeFileSync(mdPath, applyMathFixes(original, fixes), 'utf8');
+  }
+  return { checked: all.length, broken: broken.length, fixed: fixes.length };
+}
+
 /** 课程内知识链：生成课程索引 + 每个课次的「相关课次」块 */
 async function runWeaveCourse(job) {
   const courseName = job.courseName || path.basename(job.absDir);
@@ -635,7 +692,7 @@ export function getLlmJob(id) {
 }
 
 export function createLlmJob({ op, dir, mode, scope }) {
-  if (!['proofread', 'summarize', 'weave'].includes(op)) throw new Error(`不支持的操作：${op}`);
+  if (!['proofread', 'summarize', 'weave', 'fixmath'].includes(op)) throw new Error(`不支持的操作：${op}`);
   const relDir = String(dir || '').replace(/^[/\\]+/, '');
   let absDir = null;
   let mdPath = null;
@@ -709,7 +766,9 @@ export function createLlmJob({ op, dir, mode, scope }) {
         ? await runProofread(job)
         : op === 'summarize'
           ? await runSummarize(job)
-          : await runWeave(job);
+          : op === 'fixmath'
+            ? await runFixMath(job)
+            : await runWeave(job);
       if (job.canceled) {
         job.status = 'canceled';
       } else {
@@ -717,6 +776,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
         const tok = `tokens 输入 ${job.usage.prompt} / 输出 ${job.usage.completion}`;
         if (op === 'proofread') job.log.push(`完成：${r.pages} 页，保留原文 ${r.kept} 页；${tok}`);
         else if (op === 'summarize') job.log.push(`完成：分 ${r.chunks} 块提取并汇总；${tok}`);
+        else if (op === 'fixmath') job.log.push(`完成：检查 ${r.checked} 条公式，修复 ${r.fixed}/${r.broken} 条；${tok}`);
         else if (job.scope === 'all') job.log.push(`完成：${r.courses} 门课，识别关联 ${r.related} 对；${tok}`);
         else job.log.push(`完成：${r.lessons} 个课次，关联 ${r.related} 对；${tok}`);
         job.progress.done = job.progress.total;

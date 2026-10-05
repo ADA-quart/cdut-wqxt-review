@@ -509,7 +509,8 @@ function renderLlmJobCard(j) {
   const title = document.createElement('p');
   title.className = 'job-title';
   const modeLabel = LLM_FIELDS[j.mode]?.label || '';
-  title.textContent = `#${j.id} ${j.op === 'proofread' ? '纠错' : '总结'} · ${j.title}${j.op === 'proofread' && modeLabel ? `（${modeLabel}）` : ''}`;
+  const opLabel = { proofread: '纠错', summarize: '总结', weave: '知识链', fixmath: '修公式' }[j.op] || j.op;
+  title.textContent = `#${j.id} ${opLabel} · ${j.title}${j.op === 'proofread' && modeLabel ? `（${modeLabel}）` : ''}`;
   const stats = document.createElement('div');
   stats.className = 'job-stats';
   const tokenText = j.usage && (j.usage.prompt || j.usage.completion)

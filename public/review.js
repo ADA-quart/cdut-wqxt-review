@@ -44,6 +44,18 @@ function renderMarkdown(text) {
   }
 }
 
+/** KaTeX 解析失败的公式：标红 + 给个说明（原来它会原样吐源码，看着像没渲染） */
+function markMathErrors(root) {
+  root.querySelectorAll('.katex-error').forEach((el) => {
+    el.classList.add('math-broken');
+    el.title = '这条公式的 LaTeX 没能解析（多半是 OCR 识别错，比如 \\verb( 、括号不配对）。可以用顶部「修公式」让 AI 试着修。';
+  });
+  // 没被 KaTeX 接住的裸 $ 块（分隔符错位时会出现）
+  root.querySelectorAll('.page-sec, .md-head').forEach((sec) => {
+    if (/\$\$/.test(sec.innerText || '')) sec.classList.add('has-raw-math');
+  });
+}
+
 function renderMath(root) {
   if (typeof renderMathInElement !== 'function') return;
   try {
@@ -133,6 +145,7 @@ function renderFullMd() {
   hydrateBlockIds(container);
   resolveMdAssets(container);
   renderMath(container);
+  markMathErrors(container);
   container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = '_blank'; a.rel = 'noreferrer'; });
   hydrateEmbeds(container);
 }
@@ -733,6 +746,25 @@ async function handleSummarize() {
   }
 }
 
+async function handleFixMath() {
+  const btn = $('btnFixMath');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '检查中…';
+  try {
+    const job = await runLlmJob({ op: 'fixmath', dir }, { label: '「修公式」' });
+    await reloadMd();
+    const fixed = job.result ? (job.result.fixed || 0) : 0;
+    const broken = job.result ? (job.result.broken || 0) : 0;
+    toast(broken === 0 ? '本页公式都能正常解析 ✅' : `公式修复完成：${fixed}/${broken} 条已修好（原文件备份为 .math-backup.md）`);
+  } catch (e) {
+    toast('修公式失败：' + String(e.message || e), false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
 async function handleWeave(scope) {
   const btn = scope === 'all' ? $('btnWeaveAll') : $('btnWeaveCourse');
   btn.style.pointerEvents = 'none';
@@ -883,6 +915,7 @@ function setupEvents() {
   };
   $('btnIndex').onclick = generateIndex;
   $('btnSummarize').onclick = handleSummarize;
+  $('btnFixMath').onclick = handleFixMath;
   $('btnWeaveCourse').onclick = () => handleWeave('course');
   $('btnWeaveAll').onclick = () => handleWeave('all');
   $('btnChain').onclick = () => {
