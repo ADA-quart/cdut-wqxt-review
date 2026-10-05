@@ -1168,6 +1168,8 @@ $('termSel').onchange = loadCourses;
 // ---------- SSE 进度 ----------
 
 function connectEvents() {
+  /** 已提示过「下一步」的任务，避免同一条提示重复弹 */
+  const notified = new Set();
   const es = new EventSource('/api/events');
   es.onmessage = (ev) => {
     try {
@@ -1181,11 +1183,23 @@ function connectEvents() {
       } else if (msg.type === 'job') {
         state.jobs.set(msg.job.id, msg.job);
         renderJobs();
-        if (msg.job.status === 'done' && msg.job.finishedAt) loadFiles();
+        if (msg.job.status === 'done' && msg.job.finishedAt) {
+          loadFiles();
+          if (!notified.has('dl' + msg.job.id)) {
+            notified.add('dl' + msg.job.id);
+            toast('✅ PPT 下载完成 → 下一步：在「已下载文件」里点课次旁的「转 MD」', 'ok');
+          }
+        }
       } else if (msg.type === 'md-job') {
         state.mdJobs.set(msg.job.id, msg.job);
         renderJobs();
-        if (msg.job.status === 'done' && msg.job.finishedAt) loadFiles();
+        if (msg.job.status === 'done' && msg.job.finishedAt) {
+          loadFiles();
+          if (!notified.has('md' + msg.job.id)) {
+            notified.add('md' + msg.job.id);
+            toast('✅ 转 MD 完成 → 下一步：点课次旁的「复习」进入复习台', 'ok');
+          }
+        }
       } else if (msg.type === 'hello-llm') {
         for (const j of msg.jobs) state.llmJobs.set(j.id, j);
         renderJobs();
