@@ -5,24 +5,28 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { DOWNLOAD_DIR } from './paths.mjs';
+import { DATA_DIR, NOTES_DIR } from './paths.mjs';
 
 const PAGE_RE = /<!-- page (\d+): ([^>]+) -->/g;
 const WJ_RE = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
 const MAX_PASSAGE_CHARS = 2000;
 
-/** 课程目录（跳过 _smoke 之类的辅助目录） */
+/** 课程目录：数据目录与笔记目录的并集（跳过 _smoke 之类的辅助目录） */
 export function listCourses() {
-  if (!fs.existsSync(DOWNLOAD_DIR)) return [];
-  return fs.readdirSync(DOWNLOAD_DIR, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.') && !e.name.startsWith('_'))
-    .map((e) => e.name)
-    .sort((a, b) => a.localeCompare(b, 'zh'));
+  const names = new Set();
+  for (const root of new Set([DATA_DIR, NOTES_DIR])) {
+    if (!fs.existsSync(root)) continue;
+    for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name.startsWith('.') || e.name.startsWith('_')) continue;
+      names.add(e.name);
+    }
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, 'zh'));
 }
 
 /** 某课程下已转 MD 的课次（不含课程索引自身） */
 export function listLessons(course) {
-  const dir = path.join(DOWNLOAD_DIR, course);
+  const dir = path.join(NOTES_DIR, course);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isFile() && e.name.endsWith('.md') && !e.name.includes('.ocr-backup.'))
@@ -33,7 +37,7 @@ export function listLessons(course) {
 
 function readMd(rel) {
   try {
-    return fs.readFileSync(path.join(DOWNLOAD_DIR, rel), 'utf8');
+    return fs.readFileSync(path.join(NOTES_DIR, rel), 'utf8');
   } catch {
     return null;
   }
@@ -235,7 +239,7 @@ export function getPreview(rel) {
 
   let thumb = null;
   try {
-    const dirPath = path.join(DOWNLOAD_DIR, course, lesson);
+    const dirPath = path.join(DATA_DIR, course, lesson);
     const img = fs.readdirSync(dirPath).filter((f) => /\.(jpe?g|png)$/i.test(f)).sort()[0];
     if (img) thumb = `/files/${[course, lesson, img].map(encodeURIComponent).join('/')}`;
   } catch { /* 没有原图就只显示文字 */ }

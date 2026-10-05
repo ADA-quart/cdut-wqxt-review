@@ -19,9 +19,10 @@ const state = {
 
 const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
 const fileUrl = (p) => '/files/' + enc(p);
+const noteUrl = (p) => '/notes/' + enc(p);
 const imgUrl = (name) => fileUrl(`${dir}/${name}`);
 // md 文件在 downloads/<课程>/<课次>.md，其中的相对资源（xxx_assets/figures/…）按课程目录解析
-const mdBaseUrl = '/files/' + (courseDir ? enc(courseDir) + '/' : '');
+const mdBaseUrl = '/notes/' + (courseDir ? enc(courseDir) + '/' : '');
 
 /** 把 md 里的相对图片地址改写成 /files/ 下的真实地址 */
 function resolveMdAssets(root) {
@@ -179,7 +180,7 @@ async function hydrateEmbeds(root) {
     const note = pathPart.trim().replace(/\.md$/i, '');
     const rel = note.includes('/') ? note : `${courseDir}/${note}`;
     try {
-      const res = await fetch(fileUrl(`${rel}.md`));
+      const res = await fetch(noteUrl(`${rel}.md`));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const md = await res.text();
       let text;
@@ -325,7 +326,7 @@ function openWikilink(target) {
   const note = clean.replace(/\.md$/i, '');
   if (!note) return;
   if (note === courseName) {
-    window.open(fileUrl(`${courseDir}/${courseName}.md`), '_blank');
+    window.open(noteUrl(`${courseDir}/${courseName}.md`), '_blank');
     return;
   }
   if (note.includes('/')) {
@@ -379,7 +380,7 @@ async function kbSearch(q, scope, topK = 8) {
 }
 
 function sourceHref(s) {
-  if (!s.page) return fileUrl(s.rel);
+  if (!s.page) return noteUrl(s.rel);
   return `/review.html?dir=${encodeURIComponent(`${s.course}/${s.lesson}`)}&page=${s.page}`;
 }
 
@@ -635,7 +636,7 @@ async function loadBacklinks() {
       snip.className = 'snip';
       snip.textContent = b.snippet;
       el.append(name, snip);
-      el.onclick = () => window.open(fileUrl(b.rel), '_blank');
+      el.onclick = () => window.open(noteUrl(b.rel), '_blank');
       box.appendChild(el);
     }
   } catch (e) {
@@ -1091,7 +1092,7 @@ function renderGraph({ nodes, edges, stats }) {
   }
 
   const go = (node) => {
-    if (node.type === 'course') window.open(fileUrl(`${node.id}/${node.id}.md`), '_blank');
+    if (node.type === 'course') window.open(noteUrl(`${node.id}/${node.id}.md`), '_blank');
     else location.href = '/review.html?dir=' + encodeURIComponent(node.id);
   };
 
@@ -1212,7 +1213,7 @@ function setupSearch() {
         a.className = 'sr-item';
         a.href = p.page
           ? `/review.html?dir=${encodeURIComponent(`${p.course}/${p.lesson}`)}&page=${p.page}`
-          : fileUrl(p.rel);
+          : noteUrl(p.rel);
         a.innerHTML =
           `<div class="sr-name">${escapeHtml(p.course)} · ${escapeHtml(p.lesson)}${p.page ? ` · 第 ${p.page} 页` : ''}</div>` +
           `<div class="sr-snip">${escapeHtml(p.snippet || '')}</div>`;
@@ -1467,7 +1468,7 @@ async function markCardBadges() {
   $('lessonTitle').textContent = lessonName || dir;
   $('lessonSub').textContent = [courseDir.replace(/\//g, ' · '), '问渠学堂复习工作台'].filter(Boolean).join(' — ');
 
-  state.mdUrl = fileUrl(`${dir}.md`);
+  state.mdUrl = noteUrl(`${dir}.md`);
   $('linkDownloadMd').href = state.mdUrl;
   $('linkOpenMd').href = state.mdUrl;
 

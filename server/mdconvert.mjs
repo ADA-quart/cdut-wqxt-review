@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { DOWNLOAD_DIR, ROOT_DIR, ensureInside } from './paths.mjs';
+import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ROOT_DIR, ensureInside, ensureDir } from './paths.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -22,6 +22,13 @@ let nextJobId = 1;
 let queue = Promise.resolve();
 
 const IS_WIN = process.platform === 'win32';
+
+/** 目录里的文件 → 可访问的 URL（/files 指向数据目录，/notes 指向笔记目录） */
+function urlOf(base, absPath) {
+  const rel = path.relative(base, absPath).split(path.sep).map(encodeURIComponent).join('/');
+  const prefix = path.resolve(base) === path.resolve(NOTES_DIR) ? '/notes/' : '/files/';
+  return prefix + rel;
+}
 
 /** 定位 Pix2Text 虚拟环境里的 Python 解释器 */
 export function findPython() {
@@ -66,9 +73,12 @@ function publicMdJob(j) {
     finishedAt: j.finishedAt,
     progress: j.progress,      // { done, total, current }
     device: j.device,
-    outMd: j.outMd,            // 相对 downloads 的 md 路径
-    pdf: j.pdfRel,             // 相对 downloads 的课件 PDF 路径
-    report: j.reportRel,       // 去重复核页面（--dedup 时生成）
+    outMd: j.outMd,            // 相对笔记目录的 md 路径
+    outMdUrl: j.outMdUrl,      // 可直接打开的 /notes/... 地址
+    pdf: j.pdfRel,             // 相对笔记目录的课件 PDF 路径
+    pdfUrl: j.pdfUrl,
+    report: j.reportRel,       // 去重复核页面（--dedup 时生成，位于数据目录）
+    reportUrl: j.reportUrl,
     assets: j.assets,
     error: j.error,
     log: j.log.slice(-8),
@@ -150,6 +160,12 @@ async function runMdJob(job) {
   if (!tool.available) throw new Error(tool.hint || '转换环境不可用');
 
   const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, job.relDir));
+  // Markdown / PDF / assets 输出到笔记目录（可与数据目录不同，例如直接写进 Obsidian 库）
+  const parts = job.relDir.split('/').filter(Boolean);
+  const outMdPath = parts.length >= 2
+    ? path.join(NOTES_DIR, parts[0], `${parts[1]}.md`)
+    : null;
+  if (outMdPath) ensureDir(path.dirname(outMdPath));
   job.status = 'running';
   job.startedAt = Date.now();
   emit(job);
@@ -157,7 +173,11 @@ async function runMdJob(job) {
   await new Promise((resolve) => {
     const child = spawn(
       tool.python,
-      ['-u', tool.script, absDir, '--json', '--device', job.device, ...(job.dedup ? ['--dedup'] : [])],
+      [
+        '-u', tool.script, absDir, '--json', '--device', job.device,
+        ...(outMdPath ? ['--out', outMdPath] : []),
+        ...(job.dedup ? ['--dedup'] : []),
+      ],
       {
         cwd: ROOT_DIR,
         windowsHide: true,
@@ -194,10 +214,12 @@ async function runMdJob(job) {
       } else if (msg.type === 'warn') {
         job.log.push(String(msg.error || '').slice(0, 200));
       } else if (msg.type === 'done') {
-        job.outMd = path.relative(DOWNLOAD_DIR, msg.out).split(path.sep).join('/');
-        if (msg.pdf) job.pdfRel = path.relative(DOWNLOAD_DIR, msg.pdf).split(path.sep).join('/');
-        if (msg.report) job.reportRel = path.relative(DOWNLOAD_DIR, msg.report).split(path.sep).join('/');
-        job.assets = path.relative(DOWNLOAD_DIR, msg.assets).split(path.sep).join('/');
+        const relFrom = (base, p) => path.relative(base, p).split(path.sep).join('/');
+        job.outMd = relFrom(NOTES_DIR, msg.out);
+        job.outMdUrl = urlOf(NOTES_DIR, msg.out);
+        if (msg.pdf) { job.pdfRel = relFrom(NOTES_DIR, msg.pdf); job.pdfUrl = urlOf(NOTES_DIR, msg.pdf); }
+        if (msg.report) { job.reportRel = relFrom(DATA_DIR, msg.report); job.reportUrl = urlOf(DATA_DIR, msg.report); }
+        job.assets = relFrom(NOTES_DIR, msg.assets);
         job.log.push(`完成 ${msg.ok}/${msg.total} 页，耗时 ${msg.secs}s`);
       } else if (msg.type === 'error') {
         job.error = msg.error;

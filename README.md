@@ -29,12 +29,66 @@ downloads/
 
 ## 快速开始
 
+**Windows 一键**：双击 `start.cmd` 启动（后台运行 + 自动开浏览器），`stop.cmd` 退出，
+`update.cmd` 升级，`uninstall.cmd` 卸载；也可以用 `powershell -ExecutionPolicy Bypass -File wqppt.ps1 <start|stop|restart|status|update|uninstall>`。
+
+**macOS 一键**：双击 `wqppt.command` 启动，`wqppt-stop.command` 退出；
+命令行同 `bash wqppt.sh <start|stop|restart|status|update|uninstall [--purge]>`。
+
+**手动**：
+
 ```bash
 npm install
 npm start
 ```
 
 浏览器打开 <http://127.0.0.1:3901> → 点右上角「登录」→ 输入统一认证学号密码 → 选择课程下载。
+
+### 一键启动 / 退出 / 升级 / 卸载
+
+| 操作 | Windows | macOS / Linux |
+| --- | --- | --- |
+| 启动 | `start.cmd`（或 `wqppt.ps1 start`） | `wqppt.command`（或 `bash wqppt.sh start`） |
+| 退出 | `stop.cmd` | `wqppt-stop.command` |
+| 升级 | `update.cmd`（git pull + npm install） | `bash wqppt.sh update` |
+| 卸载 | `uninstall.cmd`（默认保留 `downloads/`） | `bash wqppt.sh uninstall [--purge]` |
+
+启动是「后台 + 日志写 `run/server.log` + 自动打开浏览器」；退出会先走 `POST /api/system/shutdown` 优雅关闭，
+再确保后台浏览器进程一起结束。网页里也有对应的「设置 → 退出程序 / 检查更新 / 一键升级」按钮。
+
+### 目录位置（PPT 与笔记可以分开放）
+
+「设置 → 目录位置」里可以改两个路径，都支持「浏览…」调出系统文件夹选择框：
+
+- **数据目录**：PPT 原始帧图片、清洗复核页、复习卡（默认 `downloads/`）
+- **笔记目录**：Markdown、合成 PDF、公式素材图（默认与数据目录相同）
+
+把笔记目录指向 Obsidian 库（例如 `D:\Obsidian\CDUT`），转出来的 `.md` + `.pdf` + `_assets/` 就直接躺在库里，
+一边复习一边双链。网页里 md 走 `/notes/`、图片走 `/files/`，两个目录相同或分离都能正常工作。
+
+### 一键导出 / 导入（为手机 / 平板客户端准备）
+
+「设置 → 导出 / 导入」：
+
+- **一键导出**：打包 zip，含 `manifest.json` + `notes/`（md、pdf、assets）+ `cards/`（复习卡）；
+  勾选「包含 PPT 原始图片」会额外带上 `images/`（体积大）。
+- **一键导入**：把 zip 合并进当前目录，默认跳过已存在的文件，可勾选覆盖。
+
+`manifest.json` 就是给未来移动端的接口约定：
+
+```json
+{
+  "app": "wqppt", "format": 1, "version": "0.1.0",
+  "counts": { "courses": 2, "lessons": 3, "notes": 3, "pdfs": 3, "assets": 143, "cards": 6, "images": 0 },
+  "courses": [{ "name": "地球物理测井原理", "lessons": [{ "name": "2026-09-15第7-8节", "pages": 2, "chars": 1606, "pdf": true, "cards": 3 }] }],
+  "pages": [{ "dir": "地球物理测井原理/2026-09-15第7-8节", "pages": 2,
+              "md": "notes/地球物理测井原理/2026-09-15第7-8节.md",
+              "pdf": "notes/地球物理测井原理/2026-09-15第7-8节.pdf" }]
+}
+```
+
+移动端只需读 `manifest.json` 渲染课程树、按 `pages` 定位课件页；
+复习卡在 `cards/<课程>/<课次>.json`，结构与服务端一致（`front` / `back` / `due` / `interval` / `ease`）。
 
 ### 可选：启用「转 Markdown」（复习/喂 AI 用）
 
@@ -348,6 +402,14 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | POST | `/api/cards/:id/grade` | 评分排期 `{grade:'again'\|'hard'\|'good'\|'easy'}` |
 | DELETE | `/api/cards/:id` | 删除卡片 |
 | GET | `/api/cards/export?format=md\|csv` | 导出复习清单（Markdown / CSV） |
+| GET | `/api/paths` | 当前数据目录 / 笔记目录 |
+| PUT | `/api/paths` | 修改目录 `{dataDir, notesDir}`（空字符串=回到默认） |
+| POST | `/api/pick-folder` | 弹系统「选择文件夹」对话框 `{initial}` |
+| GET | `/api/system/update-check` | 检查更新（git fetch + 比较落后提交数） |
+| POST | `/api/system/update` | 一键升级（git pull --ff-only，必要时 npm install） |
+| GET | `/api/export` | 一键导出 zip（`?images=1` 含原始图片，`?pdf=0&assets=0&cards=0` 可裁剪） |
+| POST | `/api/import` | 一键导入 zip（`?overwrite=1` 覆盖，`?force=1` 跳过 manifest 校验） |
+| POST | `/api/system/shutdown` | 优雅退出（关闭服务 + 后台浏览器） |
 | GET | `/api/backlinks?dir=` | 反链：全库扫描引用某课次的 wiki 链接 |
 | POST | `/api/index-note` | 快速生成课程索引 `{dir}`（规则版，不含 AI；课程/课次目录均可，自动保留「相关课程」关联块） |
 

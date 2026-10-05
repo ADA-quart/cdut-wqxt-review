@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { DOWNLOAD_DIR, ensureInside } from './paths.mjs';
+import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ensureInside } from './paths.mjs';
 import { loadConfig, getProfile, PROFILE_KEYS } from './config.mjs';
 import { describeFetchError } from './net.mjs';
 
@@ -415,12 +415,12 @@ function upsertBlock(text, marker, block) {
   return text.slice(0, pos) + '\n' + block + text.slice(pos);
 }
 
-const relOf = (p) => path.relative(DOWNLOAD_DIR, p).split(path.sep).join('/');
+const relOf = (p) => path.relative(NOTES_DIR, p).split(path.sep).join('/');
 
 /** 课程内知识链：生成课程索引 + 每个课次的「相关课次」块 */
 async function runWeaveCourse(job) {
-  const courseAbs = job.absDir;
-  const courseName = path.basename(courseAbs);
+  const courseName = job.courseName || path.basename(job.absDir);
+  const courseAbs = path.join(NOTES_DIR, courseName);
   const lessons = collectLessonMds(courseAbs);
   if (lessons.length === 0) throw new Error('该课程还没有已转 MD 的课次');
 
@@ -512,10 +512,10 @@ async function runWeaveCourse(job) {
 async function runWeaveCourses(job) {
   const courses = [];
   let entries = [];
-  try { entries = fs.readdirSync(DOWNLOAD_DIR, { withFileTypes: true }); } catch { entries = []; }
+  try { entries = fs.readdirSync(NOTES_DIR, { withFileTypes: true }); } catch { entries = []; }
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith('.')) continue;
-    const courseAbs = path.join(DOWNLOAD_DIR, e.name);
+    const courseAbs = path.join(NOTES_DIR, e.name);
     const lessons = collectLessonMds(courseAbs);
     if (lessons.length > 0) courses.push({ name: e.name, abs: courseAbs, lessons });
   }
@@ -584,7 +584,7 @@ async function runWeaveCourses(job) {
   if (related.length) rootLines.push(...related.map((r) => `- [[${r.from}]] ↔ [[${r.to}]] — ${r.reason}`));
   else rootLines.push('（暂未识别出明确的课程关联）');
   rootLines.push('');
-  const rootPath = path.join(DOWNLOAD_DIR, '知识链.md');
+  const rootPath = path.join(NOTES_DIR, '知识链.md');
   fs.writeFileSync(rootPath, rootLines.join('\n'), 'utf8');
   job.resultRel = relOf(rootPath);
 
@@ -645,14 +645,22 @@ export function createLlmJob({ op, dir, mode, scope }) {
     title = '课程间知识链';
   } else {
     absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
-    if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) throw new Error(`目录不存在：${relDir}`);
+    const parts = relDir.split('/').filter(Boolean);
+    const courseName = parts[0] || '';
+    const lessonName = parts[1] || '';
     if (op === 'weave') {
-      title = path.basename(absDir);
+      // 课程级操作只依赖笔记目录
+      const notesCourse = path.join(NOTES_DIR, courseName);
+      if (!fs.existsSync(notesCourse) || !fs.statSync(notesCourse).isDirectory()) {
+        throw new Error(`课程目录不存在：${courseName}`);
+      }
+      title = courseName;
     } else {
-      const name = path.basename(absDir);
-      mdPath = path.join(path.dirname(absDir), `${name}.md`);
+      if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) throw new Error(`目录不存在：${relDir}`);
+      if (!lessonName) throw new Error('dir 需要是「课程/课次」');
+      mdPath = path.join(NOTES_DIR, courseName, `${lessonName}.md`);
       if (!fs.existsSync(mdPath)) throw new Error('还没有 Markdown——先对该课次「转 MD」');
-      title = name;
+      title = lessonName;
     }
   }
 
@@ -669,10 +677,11 @@ export function createLlmJob({ op, dir, mode, scope }) {
     status: 'pending',
     relDir,
     title,
+    courseName: relDir.split('/').filter(Boolean)[0] || '',
     mdPath,
     absDir,
     mediaDir: absDir,
-    outMd: mdPath ? path.relative(DOWNLOAD_DIR, mdPath).split(path.sep).join('/') : null,
+    outMd: mdPath ? relOf(mdPath) : null,
     createdAt: Date.now(),
     startedAt: null,
     finishedAt: null,

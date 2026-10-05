@@ -18,9 +18,14 @@
  */
 import express from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { DOWNLOAD_DIR, PUBLIC_DIR, ROOT_DIR, ensureDir, ensureInside } from './paths.mjs';
+import { spawn, execFile } from 'node:child_process';
+import AdmZip from 'adm-zip';
+import {
+  DOWNLOAD_DIR, DATA_DIR, NOTES_DIR, PUBLIC_DIR, ROOT_DIR,
+  ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf,
+} from './paths.mjs';
 import { checkLogin, login, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
 import {
@@ -29,7 +34,7 @@ import {
 } from './mdconvert.mjs';
 import { publicConfig, saveConfig } from './config.mjs';
 import { streamChat } from './chat.mjs';
-import { searchKb, buildGraph, listTags, getPreview } from './kb.mjs';
+import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
@@ -331,6 +336,7 @@ app.get('/api/events', (req, res) => {
 // ---------- 已下载文件浏览 ----------
 
 ensureDir(DOWNLOAD_DIR);
+ensureDir(NOTES_DIR);
 
 app.get('/api/files', asyncRoute(async (_req, res) => {
   res.json({ tree: readTree(DOWNLOAD_DIR, 3) });
@@ -347,8 +353,8 @@ function readTree(dir, depth) {
       const full = path.join(dir, e.name);
       const rel = path.relative(DOWNLOAD_DIR, full).split(path.sep).join('/');
       if (e.isDirectory()) {
-        // 同名 .md 存在 = 这个课次已转过 Markdown
-        const hasMd = fs.existsSync(full + '.md');
+        // 同名 .md 存在（在笔记目录里）= 这个课次已转过 Markdown
+        const hasMd = fs.existsSync(path.join(NOTES_DIR, `${rel}.md`));
         return { name: e.name, type: 'dir', rel, hasMd, children: readTree(full, depth - 1) };
       }
       const stat = fs.statSync(full);
@@ -359,15 +365,22 @@ function readTree(dir, depth) {
     });
 }
 
-// 静态文件预览（downloads 目录，防目录穿越）
-app.use('/files', (req, res, next) => {
-  const rel = decodeURIComponent(req.path).replace(/^\/+/, '');
-  const full = path.resolve(DOWNLOAD_DIR, rel);
-  const relCheck = path.relative(DOWNLOAD_DIR, full);
-  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) return res.status(403).end();
-  if (fs.existsSync(full) && fs.statSync(full).isFile()) return res.sendFile(full);
-  next();
-});
+// 静态文件预览（防目录穿越）
+//   /files  → 数据目录（PPT 图片、去冗报告）
+//   /notes  → 笔记目录（Markdown / PDF / assets；默认与数据目录相同）
+function staticDirHandler(baseDir) {
+  return (req, res, next) => {
+    const rel = decodeURIComponent(req.path).replace(/^\/+/, '');
+    const full = path.resolve(baseDir, rel);
+    const relCheck = path.relative(baseDir, full);
+    if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) return res.status(403).end();
+    if (fs.existsSync(full) && fs.statSync(full).isFile()) return res.sendFile(full);
+    next();
+  };
+}
+
+app.use('/files', (req, res, next) => staticDirHandler(DATA_DIR)(req, res, next));
+app.use('/notes', (req, res, next) => staticDirHandler(NOTES_DIR)(req, res, next));
 
 app.use(express.static(PUBLIC_DIR));
 
@@ -435,14 +448,14 @@ app.get('/api/backlinks', asyncRoute(async (req, res) => {
       }
       if (snippet) {
         results.push({
-          rel: path.relative(DOWNLOAD_DIR, full).split(path.sep).join('/'),
+          rel: path.relative(NOTES_DIR, full).split(path.sep).join('/'),
           name: e.name,
           snippet,
         });
       }
     }
   };
-  walk(DOWNLOAD_DIR);
+  walk(NOTES_DIR);
   res.json({ backlinks: results });
 }));
 
@@ -519,7 +532,7 @@ app.post('/api/cards/gen-qa', asyncRoute(async (req, res) => {
   const parts = rel.split('/');
   if (parts.length < 2) return res.status(400).json({ error: 'dir 需要是 课程/课次' });
   const [course, lesson] = parts;
-  const mdPath = path.join(DOWNLOAD_DIR, course, lesson + '.md');
+  const mdPath = mdPathOf(course, lesson);
   if (!fs.existsSync(mdPath)) return res.status(404).json({ error: '先对该课次「转 MD」' });
   const md = fs.readFileSync(mdPath, 'utf8');
   const marks = [...md.matchAll(/<!-- page (\d+): [^>]+ -->/g)];
@@ -566,7 +579,7 @@ app.post('/api/cards/feynman', asyncRoute(async (req, res) => {
     const parts = rel.split('/');
     if (parts.length >= 2) {
       const [course, lessonName] = parts;
-      const mdPath = path.join(DOWNLOAD_DIR, course, lessonName + '.md');
+      const mdPath = mdPathOf(course, lessonName);
       if (fs.existsSync(mdPath)) {
         const md = fs.readFileSync(mdPath, 'utf8');
         const marks = [...md.matchAll(/<!-- page (\d+): [^>]+ -->/g)];
@@ -603,37 +616,24 @@ app.get('/api/cards/export', asyncRoute(async (req, res) => {
 app.post('/api/index-note', asyncRoute(async (req, res) => {
   const relDir = String(req.body?.dir || '').replace(/^[/\\]+/, '');
   if (!relDir) return res.status(400).json({ error: '缺少 dir' });
-  let absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
-  if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) {
-    return res.status(404).json({ error: `目录不存在：${relDir}` });
+  // 允许传课程目录或课次目录：都取第一段作为课程名
+  const courseName = relDir.split('/').filter(Boolean)[0];
+  if (!courseName) return res.status(400).json({ error: '缺少课程名' });
+  const notesCourseDir = ensureInside(NOTES_DIR, path.join(NOTES_DIR, courseName));
+  if (!fs.existsSync(notesCourseDir) || !fs.statSync(notesCourseDir).isDirectory()) {
+    return res.status(404).json({ error: `笔记目录不存在：${courseName}（先对该课程「转 MD」）` });
   }
 
-  const lessonsOf = (dir) => fs.readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-    .map((e) => e.name)
-    .filter((name) => fs.existsSync(path.join(dir, `${name}.md`)))
+  const lessons = fs.readdirSync(notesCourseDir, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.md')
+      && e.name !== `${courseName}.md` && !e.name.includes('.ocr-backup.'))
+    .map((e) => e.name.replace(/\.md$/i, ''))
     .sort((a, b) => a.localeCompare(b, 'zh'));
-
-  let lessons = lessonsOf(absDir);
   if (lessons.length === 0) {
-    // 允许传课次目录：自动上溯一层到课程目录
-    const parent = path.dirname(absDir);
-    if (parent !== DOWNLOAD_DIR && parent.startsWith(DOWNLOAD_DIR + path.sep)) {
-      const fromParent = lessonsOf(parent);
-      if (fromParent.length > 0) {
-        absDir = parent;
-        lessons = fromParent;
-      }
-    }
-  }
-  if (lessons.length === 0) {
-    return res.status(400).json({
-      error: `「${path.basename(absDir)}」下没有已转 MD 的课次；请传课程目录（例如 downloads/<课程名>）`,
-    });
+    return res.status(400).json({ error: `「${courseName}」下没有已转 MD 的课次` });
   }
 
-  const courseName = path.basename(absDir);
-  const outPath = path.join(absDir, `${courseName}.md`);
+  const outPath = path.join(notesCourseDir, `${courseName}.md`);
 
   // 保留「课程间知识链」写入的关联课程块，避免被规则版索引覆盖掉
   let related = '';
@@ -655,8 +655,318 @@ app.post('/api/index-note', asyncRoute(async (req, res) => {
   fs.writeFileSync(outPath, md, 'utf8');
   res.json({
     ok: true,
-    rel: path.relative(DOWNLOAD_DIR, outPath).split(path.sep).join('/'),
+    rel: path.relative(NOTES_DIR, outPath).split(path.sep).join('/'),
     lessons: lessons.length,
+  });
+}));
+
+// ---------- 目录设置（PPT 数据目录 / 笔记目录）----------
+
+app.get('/api/paths', (_req, res) => {
+  res.json(getPaths());
+});
+
+app.put('/api/paths', asyncRoute(async (req, res) => {
+  const { dataDir, notesDir } = req.body || {};
+  let applied;
+  try {
+    applied = applyPathSettings({
+      dataDir: typeof dataDir === 'string' ? dataDir.trim() : undefined,
+      notesDir: typeof notesDir === 'string' ? notesDir.trim() : undefined,
+    });
+  } catch (e) {
+    return res.status(400).json({ error: `目录不可用：${e.message}` });
+  }
+  saveConfig({ paths: { dataDir: applied.dataDir, notesDir: applied.notesDir } });
+  res.json(applied);
+}));
+
+/** 打开本机原生「选择文件夹」对话框（服务跑在本机，所以能弹系统框） */
+function pickFolder(initial) {
+  return new Promise((resolve) => {
+    const start = initial || os.homedir();
+    if (process.platform === 'win32') {
+      const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+      const ps = [
+        'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
+        '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
+        "$d.Description = '选择文件夹'",
+        `$d.SelectedPath = ${q(start)}`,
+        '$d.ShowNewFolderButton = $true',
+        "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }",
+      ].join('; ');
+      execFile('powershell', ['-NoProfile', '-STA', '-Command', ps],
+        { timeout: 300000, windowsHide: true },
+        (err, stdout) => resolve(err ? null : String(stdout || '').trim() || null));
+      return;
+    }
+    if (process.platform === 'darwin') {
+      const script = `POSIX path of (choose folder with prompt "选择文件夹" default location POSIX file ${JSON.stringify(start)})`;
+      execFile('osascript', ['-e', script], { timeout: 300000 },
+        (err, stdout) => resolve(err ? null : String(stdout || '').trim() || null));
+      return;
+    }
+    resolve(null);
+  });
+}
+
+app.post('/api/pick-folder', asyncRoute(async (req, res) => {
+  const p = await pickFolder(String(req.body?.initial || ''));
+  res.json(p ? { path: p } : { canceled: true });
+}));
+
+// ---------- 一键导出 / 导入（含未来手机端所需的结构）----------
+
+const PKG = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8')); } catch { return {}; }
+})();
+
+function addFileToZip(zip, absPath, zipPath) {
+  try {
+    if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) return false;
+    zip.addFile(zipPath, fs.readFileSync(absPath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function addDirToZip(zip, absDir, zipPrefix) {
+  let n = 0;
+  const walk = (dir, prefix) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(full, `${prefix}${e.name}/`); continue; }
+      if (addFileToZip(zip, full, `${prefix}${e.name}`)) n++;
+    }
+  };
+  walk(absDir, zipPrefix);
+  return n;
+}
+
+app.get('/api/export', asyncRoute(async (req, res) => {
+  const includeImages = req.query.images === '1';
+  const includePdf = req.query.pdf !== '0';
+  const includeAssets = req.query.assets !== '0';
+  const includeCards = req.query.cards !== '0';
+
+  const zip = new AdmZip();
+  const courses = [];
+  const counts = { courses: 0, lessons: 0, notes: 0, pdfs: 0, assets: 0, cards: 0, images: 0 };
+
+  for (const course of listCourses()) {
+    const lessons = listLessons(course);
+    const courseInfo = { name: course, lessons: [] };
+    let any = false;
+
+    // 课程索引
+    if (addFileToZip(zip, path.join(NOTES_DIR, course, `${course}.md`), `notes/${course}/${course}.md`)) any = true;
+    if (addFileToZip(zip, path.join(NOTES_DIR, '知识链.md'), 'notes/知识链.md')) any = true;
+
+    for (const lesson of lessons) {
+      const rel = `${course}/${lesson}`;
+      const mdAbs = mdPathOf(course, lesson);
+      if (!addFileToZip(zip, mdAbs, `notes/${rel}.md`)) continue;
+      counts.notes++;
+      const md = fs.readFileSync(mdAbs, 'utf8');
+      const info = {
+        name: lesson,
+        pages: (md.match(/<!-- page \d+:/g) || []).length,
+        chars: md.length,
+        pdf: false,
+        cards: 0,
+      };
+      if (includePdf && addFileToZip(zip, path.join(NOTES_DIR, `${rel}.pdf`), `notes/${rel}.pdf`)) {
+        info.pdf = true;
+        counts.pdfs++;
+      }
+      if (includeAssets) counts.assets += addDirToZip(zip, path.join(NOTES_DIR, `${rel}_assets`), `notes/${rel}_assets/`);
+      if (includeCards) {
+        const cardsAbs = path.join(DATA_DIR, '.review', `${rel}.json`);
+        if (addFileToZip(zip, cardsAbs, `cards/${rel}.json`)) {
+          try { info.cards = (JSON.parse(fs.readFileSync(cardsAbs, 'utf8')) || []).length; } catch { /* 忽略 */ }
+          counts.cards += info.cards;
+        }
+      }
+      if (includeImages) {
+        const imgDir = path.join(DATA_DIR, course, lesson);
+        let imgs = [];
+        try {
+          imgs = fs.readdirSync(imgDir).filter((f) => /\.(jpe?g|png|webp|bmp)$/i.test(f));
+        } catch { /* 没有原图 */ }
+        for (const f of imgs) {
+          if (addFileToZip(zip, path.join(imgDir, f), `images/${rel}/${f}`)) counts.images++;
+        }
+        info.images = imgs.length;
+      }
+      courseInfo.lessons.push(info);
+      counts.lessons++;
+      any = true;
+    }
+    if (any) { courses.push(courseInfo); counts.courses++; }
+  }
+
+  const manifest = {
+    app: 'wqppt',
+    format: 1,
+    version: PKG.version || '0.0.0',
+    exportedAt: new Date().toISOString(),
+    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards },
+    paths: getPaths(),
+    counts,
+    courses,
+    // 给未来的手机 / 平板客户端：课次 → 页 → 图片文件名
+    pages: courses.flatMap((c) => c.lessons.map((l) => ({
+      dir: `${c.name}/${l.name}`,
+      course: c.name,
+      lesson: l.name,
+      pages: l.pages,
+      pdf: l.pdf ? `notes/${c.name}/${l.name}.pdf` : null,
+      md: `notes/${c.name}/${l.name}.md`,
+    }))),
+  };
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
+
+  const buf = zip.toBuffer();
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="wqppt-export-${stamp}.zip"`);
+  res.setHeader('X-Export-Summary', encodeURIComponent(JSON.stringify(counts)));
+  res.send(buf);
+}));
+
+app.post('/api/import', express.raw({ type: () => true, limit: '2048mb' }), asyncRoute(async (req, res) => {
+  const overwrite = req.query.overwrite === '1';
+  const body = req.body;
+  if (!body || !body.length) return res.status(400).json({ error: '请求体为空（请上传导出的 .zip）' });
+
+  let zip;
+  try {
+    zip = new AdmZip(body);
+  } catch (e) {
+    return res.status(400).json({ error: `不是有效的 zip：${e.message}` });
+  }
+  const entries = zip.getEntries();
+  const hasManifest = entries.some((e) => e.entryName.replace(/\\/g, '/') === 'manifest.json');
+  if (!hasManifest && req.query.force !== '1') {
+    return res.status(400).json({ error: '缺少 manifest.json —— 这不像是 wqppt 导出的包（确实要导入请加 ?force=1）' });
+  }
+
+  let written = 0;
+  let skipped = 0;
+  const errors = [];
+  for (const e of entries) {
+    if (e.isDirectory) continue;
+    const name = e.entryName.replace(/\\/g, '/');
+    let target = null;
+    if (name.startsWith('notes/')) {
+      target = ensureInside(NOTES_DIR, path.join(NOTES_DIR, name.slice(6)));
+    } else if (name.startsWith('images/')) {
+      target = ensureInside(DATA_DIR, path.join(DATA_DIR, name.slice(7)));
+    } else if (name.startsWith('cards/')) {
+      target = ensureInside(DATA_DIR, path.join(DATA_DIR, '.review', name.slice(6)));
+    } else {
+      continue; // manifest.json 等元数据不入库
+    }
+    try {
+      if (fs.existsSync(target) && !overwrite) { skipped++; continue; }
+      ensureDir(path.dirname(target));
+      fs.writeFileSync(target, e.getData());
+      written++;
+    } catch (err) {
+      if (errors.length < 5) errors.push(`${name}: ${err.message}`);
+    }
+  }
+  res.json({ ok: true, written, skipped, errors, paths: getPaths() });
+}));
+
+// ---------- 一键退出 / 一键升级 ----------
+
+const runCmd = (file, args, opts = {}) => new Promise((resolve) => {
+  execFile(file, args, { cwd: ROOT_DIR, timeout: 300000, windowsHide: true, ...opts },
+    (err, stdout, stderr) => resolve({
+      ok: !err,
+      stdout: String(stdout || ''),
+      stderr: String(stderr || ''),
+      error: err ? String(err.message) : null,
+    }));
+});
+
+const git = (args, opts) => runCmd('git', args, opts);
+
+app.post('/api/system/shutdown', asyncRoute(async (_req, res) => {
+  res.json({ ok: true, message: '服务正在退出…' });
+  setTimeout(async () => {
+    try { await closeBrowser(); } catch { /* 忽略 */ }
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 2000).unref();
+  }, 300);
+}));
+
+app.get('/api/system/update-check', asyncRoute(async (_req, res) => {
+  const inside = await git(['rev-parse', '--is-inside-work-tree']);
+  if (!inside.ok || inside.stdout.trim() !== 'true') {
+    return res.json({
+      ok: false,
+      reason: 'not-git',
+      message: '当前目录不是 git 仓库（可能是解压 ZIP 安装的），无法自动升级；请到 GitHub 重新下载',
+    });
+  }
+  const fetchRes = await git(['fetch', '--quiet', 'origin']);
+  if (!fetchRes.ok) {
+    return res.json({ ok: false, reason: 'fetch-failed', message: `拉取远程信息失败：${(fetchRes.stderr || fetchRes.error || '').slice(0, 200)}` });
+  }
+  const upstream = await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (!upstream.ok) {
+    return res.json({ ok: false, reason: 'no-upstream', message: '当前分支没有配置远程上游，无法自动升级' });
+  }
+  const behind = await git(['rev-list', '--count', 'HEAD..@{u}']);
+  const local = await git(['rev-parse', '--short', 'HEAD']);
+  const remote = await git(['rev-parse', '--short', '@{u}']);
+  const n = Number(behind.stdout.trim()) || 0;
+  res.json({
+    ok: true,
+    behind: n,
+    local: local.stdout.trim(),
+    remote: remote.stdout.trim(),
+    branch: upstream.stdout.trim(),
+    message: n === 0 ? '已经是最新版本' : `有 ${n} 个新提交可以升级`,
+  });
+}));
+
+app.post('/api/system/update', asyncRoute(async (_req, res) => {
+  const inside = await git(['rev-parse', '--is-inside-work-tree']);
+  if (!inside.ok || inside.stdout.trim() !== 'true') {
+    return res.status(400).json({ error: '当前目录不是 git 仓库，无法自动升级' });
+  }
+  const before = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  const pull = await git(['pull', '--ff-only']);
+  if (!pull.ok) {
+    return res.status(500).json({
+      error: '升级失败（可能有本地改动冲突）',
+      detail: (pull.stderr || pull.stdout || pull.error || '').slice(0, 500),
+    });
+  }
+  const after = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  const changed = await git(['diff', '--name-only', `${before}`, `${after}`]);
+  const files = changed.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  const needInstall = files.some((f) => f === 'package.json' || f === 'package-lock.json');
+
+  let npmResult = null;
+  if (needInstall) {
+    npmResult = await runCmd(process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      ['install', '--no-audit', '--no-fund'], { shell: process.platform === 'win32' });
+  }
+  res.json({
+    ok: true,
+    updated: before !== after,
+    commits: files.length,
+    files: files.slice(0, 30),
+    npm: npmResult ? { ok: npmResult.ok, output: (npmResult.stdout || npmResult.stderr || '').slice(-400) } : null,
+    needRestart: true,
+    message: before === after ? '已是最新版本' : '升级完成，重启程序后生效',
   });
 }));
 

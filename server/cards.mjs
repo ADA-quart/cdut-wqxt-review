@@ -4,11 +4,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { DOWNLOAD_DIR, ensureDir } from './paths.mjs';
+import { DATA_DIR, ensureDir } from './paths.mjs';
 
-const STORE_DIR = path.join(DOWNLOAD_DIR, '.review');
 const DAY = 86400000;
 const KINDS = ['star', 'wrong', 'ok', 'qa'];
+
+/** 卡片存放在数据目录下的 .review/（跟着 PPT 走） */
+const storeDir = () => path.join(DATA_DIR, '.review');
 
 function safeRel(dir) {
   const parts = String(dir || '').split('/').filter(Boolean)
@@ -17,7 +19,7 @@ function safeRel(dir) {
   return parts.join('/');
 }
 
-const fileOf = (dir) => path.join(STORE_DIR, `${safeRel(dir)}.json`);
+const fileOf = (dir) => path.join(storeDir(), `${safeRel(dir)}.json`);
 
 function readCards(dir) {
   try {
@@ -36,6 +38,7 @@ function writeCards(dir, cards) {
 
 /** 所有存过卡的课次目录 */
 function allLessonDirs() {
+  const STORE_DIR = storeDir();
   if (!fs.existsSync(STORE_DIR)) return [];
   const out = [];
   for (const course of fs.readdirSync(STORE_DIR, { withFileTypes: true })) {

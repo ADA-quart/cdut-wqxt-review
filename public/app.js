@@ -440,7 +440,7 @@ function renderMdJobCard(j) {
   if (j.status === 'done' && j.outMd) {
     const open = document.createElement('a');
     open.className = 'btn';
-    open.href = '/files/' + j.outMd.split('/').map(encodeURIComponent).join('/');
+    open.href = j.outMdUrl || ('/notes/' + j.outMd.split('/').map(encodeURIComponent).join('/'));
     open.target = '_blank';
     open.textContent = '打开 md';
     right.append(document.createTextNode(' '), open);
@@ -448,7 +448,7 @@ function renderMdJobCard(j) {
   if (j.status === 'done' && j.pdf) {
     const openPdf = document.createElement('a');
     openPdf.className = 'btn';
-    openPdf.href = '/files/' + j.pdf.split('/').map(encodeURIComponent).join('/');
+    openPdf.href = j.pdfUrl || ('/notes/' + j.pdf.split('/').map(encodeURIComponent).join('/'));
     openPdf.target = '_blank';
     openPdf.textContent = '打开 PDF';
     right.append(document.createTextNode(' '), openPdf);
@@ -456,7 +456,7 @@ function renderMdJobCard(j) {
   if (j.status === 'done' && j.report) {
     const openReport = document.createElement('a');
     openReport.className = 'btn';
-    openReport.href = '/files/' + j.report.split('/').map(encodeURIComponent).join('/');
+    openReport.href = j.reportUrl || ('/files/' + j.report.split('/').map(encodeURIComponent).join('/'));
     openReport.target = '_blank';
     openReport.textContent = '清洗复核';
     right.append(document.createTextNode(' '), openReport);
@@ -526,7 +526,7 @@ function renderLlmJobCard(j) {
   if (j.status === 'done' && j.outMd) {
     const open = document.createElement('a');
     open.className = 'btn';
-    open.href = '/files/' + j.outMd.split('/').map(encodeURIComponent).join('/');
+    open.href = '/notes/' + j.outMd.split('/').map(encodeURIComponent).join('/');
     open.target = '_blank';
     open.textContent = '查看 md';
     right.append(document.createTextNode(' '), open);
@@ -928,6 +928,146 @@ async function syncBrowserBtn() {
 }
 
 $('btnRefresh').onclick = loadCourses;
+
+// ---------- 设置：目录 / 导入导出 / 升级 / 退出 ----------
+
+async function openSettings() {
+  $('settingsModal').hidden = false;
+  try {
+    const p = await api('/paths');
+    $('setDataDir').value = p.dataDir || '';
+    $('setNotesDir').value = p.sameDir ? '' : (p.notesDir || '');
+    $('pathsHint').textContent = p.sameDir ? '（笔记与数据同目录）' : '（笔记目录独立）';
+    $('pathsHint').className = 'test-result';
+  } catch (e) {
+    $('pathsHint').textContent = '读取失败：' + String(e.message || e);
+    $('pathsHint').className = 'test-result err';
+  }
+}
+
+async function pickFolderInto(inputId, hintId) {
+  const hint = $(hintId);
+  hint.textContent = '等待选择…';
+  hint.className = 'test-result';
+  try {
+    const r = await api('/pick-folder', { method: 'POST', body: { initial: $(inputId).value.trim() } });
+    if (r.canceled) { hint.textContent = '已取消'; return; }
+    $(inputId).value = r.path;
+    hint.textContent = '';
+  } catch (e) {
+    hint.textContent = '打开对话框失败：' + String(e.message || e).slice(0, 60);
+    hint.className = 'test-result err';
+  }
+}
+
+$('btnSettings').onclick = openSettings;
+$('btnCloseSettings').onclick = () => { $('settingsModal').hidden = true; };
+$('btnPickData').onclick = () => pickFolderInto('setDataDir', 'pickDataHint');
+$('btnPickNotes').onclick = () => pickFolderInto('setNotesDir', 'pickNotesHint');
+
+$('btnSavePaths').onclick = async () => {
+  const hint = $('pathsHint');
+  hint.textContent = '保存中…';
+  hint.className = 'test-result';
+  try {
+    const p = await api('/paths', {
+      method: 'PUT',
+      body: { dataDir: $('setDataDir').value.trim(), notesDir: $('setNotesDir').value.trim() },
+    });
+    hint.textContent = `✓ 已保存：数据 ${p.dataDir}${p.sameDir ? '（笔记同目录）' : '，笔记 ' + p.notesDir}`;
+    hint.className = 'test-result ok';
+    toast('目录已更新，正在刷新…', 'ok');
+    setTimeout(() => location.reload(), 900);
+  } catch (e) {
+    hint.textContent = '✗ ' + String(e.message || e).slice(0, 90);
+    hint.className = 'test-result err';
+  }
+};
+
+$('btnExport').onclick = () => {
+  const q = $('expImages').checked ? '?images=1' : '';
+  $('exportHint').textContent = $('expImages').checked ? '正在打包（含图片，可能较慢）…' : '正在打包…';
+  $('exportHint').className = 'test-result';
+  // 用隐藏 iframe 触发下载，避免整页跳转
+  const a = document.createElement('a');
+  a.href = '/api/export' + q;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => {
+    $('exportHint').textContent = '✓ 已开始下载（浏览器下载目录里）';
+    $('exportHint').className = 'test-result ok';
+  }, 1500);
+};
+
+$('btnImport').onclick = async () => {
+  const file = $('impFile').files && $('impFile').files[0];
+  const hint = $('importHint');
+  if (!file) { hint.textContent = '先选一个 .zip 包'; hint.className = 'test-result err'; return; }
+  hint.textContent = `正在导入 ${file.name}（${(file.size / 1048576).toFixed(1)}MB）…`;
+  hint.className = 'test-result';
+  try {
+    const q = $('impOverwrite').checked ? '?overwrite=1' : '';
+    const r = await fetch('/api/import' + q, { method: 'POST', body: file });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    hint.textContent = `✓ 写入 ${data.written} 个文件，跳过 ${data.skipped} 个${data.errors?.length ? '，失败 ' + data.errors.length : ''}`;
+    hint.className = 'test-result ok';
+    toast('导入完成，正在刷新…', 'ok');
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    hint.textContent = '✗ ' + String(e.message || e).slice(0, 100);
+    hint.className = 'test-result err';
+  }
+};
+
+$('btnUpdateCheck').onclick = async () => {
+  const hint = $('updateHint');
+  hint.textContent = '检查中…';
+  hint.className = 'test-result';
+  try {
+    const r = await api('/system/update-check');
+    hint.textContent = (r.ok ? '✓ ' : '✗ ') + (r.message || '');
+    hint.className = 'test-result' + (r.ok ? ' ok' : ' err');
+  } catch (e) {
+    hint.textContent = '✗ ' + String(e.message || e).slice(0, 90);
+    hint.className = 'test-result err';
+  }
+};
+
+$('btnUpdate').onclick = async () => {
+  if (!confirm('从 GitHub 拉取最新代码并升级？升级后需要重启程序。')) return;
+  const hint = $('updateHint');
+  hint.textContent = '升级中（git pull + 可能安装依赖）…';
+  hint.className = 'test-result';
+  try {
+    const r = await api('/system/update', { method: 'POST' });
+    hint.textContent = `✓ ${r.message}${r.files?.length ? '（' + r.files.length + ' 个文件）' : ''}`;
+    hint.className = 'test-result ok';
+    $('shutdownHint').textContent = '升级完成，建议点「退出程序」后重新启动。';
+  } catch (e) {
+    hint.textContent = '✗ ' + String(e.message || e).slice(0, 120);
+    hint.className = 'test-result err';
+  }
+};
+
+$('btnShutdown').onclick = async () => {
+  if (!confirm('退出程序？会关闭服务与后台浏览器进程（下载中的任务会中断）。')) return;
+  const hint = $('shutdownHint');
+  hint.textContent = '正在退出…';
+  try {
+    await api('/system/shutdown', { method: 'POST' });
+    hint.textContent = '✓ 已退出，可以关闭这个页面了';
+    hint.className = 'test-result ok';
+    document.body.innerHTML = '<div style="font:16px/1.8 system-ui;padding:48px;text-align:center">' +
+      '程序已退出 ✅<br><span style="color:#666;font-size:14px">浏览器窗口会在 1~2 秒内自动关闭，此页面可以直接关掉。</span></div>';
+    setTimeout(() => window.close(), 1200);
+  } catch (e) {
+    hint.textContent = '✗ ' + String(e.message || e).slice(0, 90);
+    hint.className = 'test-result err';
+  }
+};
 $('btnRefreshJobs').onclick = async () => {
   const { jobs } = await api('/jobs');
   for (const j of jobs) state.jobs.set(j.id, j);

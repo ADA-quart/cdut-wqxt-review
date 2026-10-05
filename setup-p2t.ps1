@@ -1,4 +1,4 @@
-# 创建 PPT → Markdown 转换环境（Pix2Text）。
+﻿# 创建 PPT → Markdown 转换环境（Pix2Text）。
 #
 # 适用机器：任意 NVIDIA 显卡（V100 / RTX 20~40 系 / 笔记本卡均可）；
 #          无 N 卡时自动回落 CPU（可用，但慢很多）。

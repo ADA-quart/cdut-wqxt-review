@@ -100,6 +100,15 @@ export function saveConfig(patch = {}) {
     next.llm.defaultMode = PROFILE_KEYS.includes(p.defaultMode) ? p.defaultMode : 'text';
   }
 
+  // 目录配置（PPT 数据目录 / 笔记目录）
+  const pp = patch.paths;
+  if (pp && typeof pp === 'object') {
+    const merged = { ...(current.paths || {}) };
+    if (typeof pp.dataDir === 'string') merged.dataDir = pp.dataDir.trim();
+    if (typeof pp.notesDir === 'string') merged.notesDir = pp.notesDir.trim();
+    next.paths = merged;
+  }
+
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2) + '\n', 'utf8');
   return next;
 }

@@ -23,6 +23,7 @@
     <button class="btn ghost" id="btnLogout" hidden>退出</button>
     <button class="btn ghost" id="btnBrowser" title="Edge 窗口平时躲在屏幕外；需要输验证码或手动操作时唤出">显示浏览器</button>
     <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（纠错 / 整理重点 / AI 知识链 / 复习页对话）">LLM 设置</button>
+    <button class="btn ghost" id="btnSettings" title="目录位置 / 导入导出 / 升级 / 退出">设置</button>
   </div>
 </header>
 
@@ -168,6 +169,60 @@
     <div class="modal-actions">
       <button class="btn ghost" id="btnCancelLlm">取消</button>
       <button class="btn primary" id="btnSaveLlm">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 设置：目录 / 导入导出 / 升级 / 退出 -->
+<div class="modal-mask" id="settingsModal" hidden>
+  <div class="modal wide">
+    <h3>设置</h3>
+    <div class="modal-body-scroll">
+      <section class="profile-section">
+        <h4>① 目录位置</h4>
+        <p class="hint">PPT 原始帧（图片）放在数据目录；Markdown / PDF / 公式图放在笔记目录。笔记目录可以直接指向 Obsidian 库，改完立即生效。</p>
+        <label class="field"><span>数据目录</span><input type="text" id="setDataDir" placeholder="默认：项目下的 downloads/"></label>
+        <div class="test-row"><button class="btn tiny" id="btnPickData">浏览…</button><span class="test-result" id="pickDataHint"></span></div>
+        <label class="field"><span>笔记目录</span><input type="text" id="setNotesDir" placeholder="默认与数据目录相同"></label>
+        <div class="test-row"><button class="btn tiny" id="btnPickNotes">浏览…</button><span class="test-result" id="pickNotesHint"></span></div>
+        <div class="test-row">
+          <button class="btn primary" id="btnSavePaths">保存目录设置</button>
+          <span class="test-result" id="pathsHint"></span>
+        </div>
+      </section>
+
+      <section class="profile-section">
+        <h4>② 导出 / 导入</h4>
+        <p class="hint">导出一个 zip 包（笔记 + 复习卡 + 清单），可以拷到别的电脑或手机 / 平板客户端使用；导入会把包里的内容合并进当前目录。</p>
+        <label class="chk"><input type="checkbox" id="expImages"> 导出时包含 PPT 原始图片（体积大，手机端通常不需要）</label>
+        <div class="test-row">
+          <button class="btn" id="btnExport">一键导出 zip</button>
+          <span class="test-result" id="exportHint"></span>
+        </div>
+        <label class="field"><span>选择导入包</span><input type="file" id="impFile" accept=".zip"></label>
+        <label class="chk"><input type="checkbox" id="impOverwrite"> 覆盖已有同名文件（默认跳过）</label>
+        <div class="test-row">
+          <button class="btn" id="btnImport">一键导入</button>
+          <span class="test-result" id="importHint"></span>
+        </div>
+      </section>
+
+      <section class="profile-section">
+        <h4>③ 升级 / 退出</h4>
+        <p class="hint">升级走 git（需要是 git clone 安装的）；退出会关闭服务与后台浏览器进程。</p>
+        <div class="test-row">
+          <button class="btn tiny" id="btnUpdateCheck">检查更新</button>
+          <button class="btn tiny" id="btnUpdate">一键升级</button>
+          <span class="test-result" id="updateHint"></span>
+        </div>
+        <div class="test-row">
+          <button class="btn danger" id="btnShutdown">退出程序</button>
+          <span class="test-result" id="shutdownHint"></span>
+        </div>
+      </section>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btnCloseSettings">关闭</button>
     </div>
   </div>
 </div>
