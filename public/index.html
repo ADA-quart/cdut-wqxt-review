@@ -116,27 +116,30 @@
         <h4>① 纯文本 <span class="tag">最省 token</span></h4>
         <p class="hint">只发送 OCR 文字做纠错/总结。推荐 DeepSeek 等文本模型。</p>
         <label class="field"><span>接口地址</span><input type="text" id="pTextBaseUrl" placeholder="https://api.deepseek.com/v1"></label>
-        <label class="field"><span>模型</span><input type="text" id="pTextModel" placeholder="deepseek-chat"></label>
+        <label class="field"><span>模型</span><input type="text" id="pTextModel" list="pTextModelList" placeholder="deepseek-chat"></label>
+        <datalist id="pTextModelList"></datalist>
         <label class="field"><span>API Key</span><input type="password" id="pTextKey" placeholder="留空保持原样"></label>
-        <div class="test-row"><button class="btn tiny" id="btnTestText">测试连接</button><span class="test-result" id="testText"></span></div>
+        <div class="test-row"><button class="btn tiny" id="btnTestText">测试连接</button><button class="btn tiny" id="btnModelsText">拉取模型列表</button><span class="test-result" id="testText"></span></div>
       </section>
 
       <section class="profile-section">
         <h4>② 图片上云 <span class="tag">精度最高</span></h4>
         <p class="hint">页面截图 + 文字一起发给云端视觉模型，按截图校对术语和公式。token 消耗约为纯文本的 5~10 倍。</p>
         <label class="field"><span>接口地址</span><input type="text" id="pCloudBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"></label>
-        <label class="field"><span>模型</span><input type="text" id="pCloudModel" placeholder="qwen-vl-max"></label>
+        <label class="field"><span>模型</span><input type="text" id="pCloudModel" list="pCloudModelList" placeholder="qwen-vl-max"></label>
+        <datalist id="pCloudModelList"></datalist>
         <label class="field"><span>API Key</span><input type="password" id="pCloudKey" placeholder="留空保持原样"></label>
-        <div class="test-row"><button class="btn tiny" id="btnTestCloud">测试连接</button><span class="test-result" id="testCloud"></span></div>
+        <div class="test-row"><button class="btn tiny" id="btnTestCloud">测试连接</button><button class="btn tiny" id="btnModelsCloud">拉取模型列表</button><span class="test-result" id="testCloud"></span></div>
       </section>
 
       <section class="profile-section">
         <h4>③ 图片本地 <span class="tag">零 API 费用</span></h4>
         <p class="hint">发给本机推理服务（Ollama / vLLM 跑 Qwen-VL 等）。你的 V100 16G 可跑 7B 量化模型。</p>
         <label class="field"><span>接口地址</span><input type="text" id="pLocalBaseUrl" placeholder="http://127.0.0.1:11434/v1"></label>
-        <label class="field"><span>模型</span><input type="text" id="pLocalModel" placeholder="qwen2.5vl:7b"></label>
+        <label class="field"><span>模型</span><input type="text" id="pLocalModel" list="pLocalModelList" placeholder="qwen2.5vl:7b"></label>
+        <datalist id="pLocalModelList"></datalist>
         <label class="field"><span>API Key</span><input type="password" id="pLocalKey" placeholder="Ollama 随便填（如 ollama）"></label>
-        <div class="test-row"><button class="btn tiny" id="btnTestLocal">测试连接</button><span class="test-result" id="testLocal"></span></div>
+        <div class="test-row"><button class="btn tiny" id="btnTestLocal">测试连接</button><button class="btn tiny" id="btnModelsLocal">拉取模型列表</button><span class="test-result" id="testLocal"></span></div>
       </section>
 
       <section class="profile-section">

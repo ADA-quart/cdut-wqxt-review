@@ -552,6 +552,13 @@ const LLM_FIELDS = {
   visionLocal: { base: 'pLocalBaseUrl', model: 'pLocalModel', key: 'pLocalKey', test: 'testLocal', btn: 'btnTestLocal', label: '图片本地' },
 };
 
+/** 模型候选列表 <datalist> 与「拉取模型列表」按钮 */
+const LLM_MODEL_UI = {
+  text: { list: 'pTextModelList', btn: 'btnModelsText' },
+  visionCloud: { list: 'pCloudModelList', btn: 'btnModelsCloud' },
+  visionLocal: { list: 'pLocalModelList', btn: 'btnModelsLocal' },
+};
+
 async function loadLlmConfig() {
   try {
     state.llmConfig = await api('/llm-config');
@@ -609,6 +616,43 @@ async function saveLlmConfig() {
     await loadLlmConfig();
   } catch (e) {
     toast('保存失败：' + e.message, 'err');
+  }
+}
+
+/** 拉取该档位的可用模型列表，填进 <datalist>（输入框仍可手填） */
+async function fetchLlmModels(key) {
+  const f = LLM_FIELDS[key];
+  const ui = LLM_MODEL_UI[key];
+  const span = $(f.test);
+  const btn = $(ui.btn);
+  btn.disabled = true;
+  span.textContent = '拉取模型列表中…';
+  span.className = 'test-result';
+  try {
+    const body = { profile: key, baseUrl: $(f.base).value.trim() };
+    const typedKey = $(f.key).value;
+    if (typedKey) body.apiKey = typedKey; // 还没保存时也能先拉一把
+    const { models } = await api('/llm-models', { method: 'POST', body });
+    const list = $(ui.list);
+    list.innerHTML = '';
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      list.appendChild(opt);
+    }
+    if (models.length) {
+      if (!$(f.model).value.trim()) $(f.model).value = models[0];
+      span.textContent = `✓ 找到 ${models.length} 个模型：${models.slice(0, 4).join('、')}${models.length > 4 ? '…' : ''}（点模型输入框可选）`;
+      span.className = 'test-result ok';
+    } else {
+      span.textContent = '接口没返回模型，手动填写即可';
+      span.className = 'test-result';
+    }
+  } catch (e) {
+    span.textContent = '✗ ' + String(e.message || e).slice(0, 110);
+    span.className = 'test-result err';
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -921,6 +965,7 @@ $('btnCancelLlm').onclick = () => { $('llmModal').hidden = true; };
 $('btnSaveLlm').onclick = saveLlmConfig;
 for (const [key, f] of Object.entries(LLM_FIELDS)) {
   $(f.btn).onclick = () => testLlmProfile(key);
+  $(LLM_MODEL_UI[key].btn).onclick = () => fetchLlmModels(key);
 }
 
 $('termSel').onchange = loadCourses;

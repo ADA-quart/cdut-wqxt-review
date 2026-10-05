@@ -171,7 +171,17 @@ OCR 会有零星错字（如「也位差」→「电位差」）。界面提供�
 图片本地  http://127.0.0.1:11434/v1              qwen2.5vl:7b   （Ollama，key 随便填）
 ```
 
-每档都有「测试连接」按钮（会先保存再发一条探测请求）。配置保存在本机 `config.json`（已 gitignore）。
+每档都有两个按钮：
+
+- **测试连接**：先保存，再发一条探测请求确认能通
+- **拉取模型列表**：调 `GET {接口地址}/models`（OpenAI 兼容接口都有），把可用模型填进输入框的候选列表，点输入框即可选，
+  也可以继续手填。DeepSeek / OpenAI / DashScope 兼容模式 / Ollama（`/v1/models`）都支持
+
+> 推理型模型（如 DeepSeek 的 `deepseek-v4-pro`）会把 token 先花在思考上：
+> 探测请求的 `max_tokens` 给太小会返回空，程序会提示"推理型模型把 token 用在了思考上"。
+> 日常的纠错/总结已经预留了足够的输出空间，直接选它用即可。
+
+配置保存在本机 `config.json`（已 gitignore）。
 
 ### 复习工作台（左笔记 / 右课件 / 右下 AI 对话）
 
@@ -322,6 +332,7 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | POST | `/api/dedup-decisions` | 保存人工恢复选择 `{dir, restore:[...]}` |
 | GET/PUT | `/api/llm-config` | LLM 三档配置（不回传明文密钥） |
 | POST | `/api/llm-test` | 测试某档连通性 `{profile}` |
+| POST | `/api/llm-models` | 拉取模型列表 `{profile, baseUrl?, apiKey?}` → `GET {baseUrl}/models` |
 | POST | `/api/llm-jobs` | LLM 任务 `{op:'proofread'|'summarize'|'weave', dir?, mode?, scope?}`（weave 织知识链） |
 | GET | `/api/llm-jobs` / `/api/llm-jobs/:id` | LLM 任务列表 / 详情（含 token 用量） |
 | POST | `/api/llm-jobs/:id/cancel` | 取消 LLM 任务 |

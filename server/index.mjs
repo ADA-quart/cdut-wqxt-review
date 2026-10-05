@@ -33,7 +33,7 @@ import { searchKb, buildGraph, listTags, getPreview } from './kb.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
-  testProfile, expandQuery, generateQaCards, feynmanReview,
+  testProfile, expandQuery, generateQaCards, feynmanReview, listModels,
   events as llmEvents,
 } from './llm.mjs';
 import {
@@ -267,6 +267,16 @@ app.post('/api/llm-test', asyncRoute(async (req, res) => {
   const { profile } = req.body || {};
   const r = await testProfile(profile || 'text');
   res.json(r);
+}));
+
+/** 自动获取模型列表（GET {baseUrl}/models，OpenAI 兼容） */
+app.post('/api/llm-models', asyncRoute(async (req, res) => {
+  const { profile, baseUrl, apiKey } = req.body || {};
+  const override = {};
+  if (baseUrl) override.baseUrl = String(baseUrl).trim();
+  if (apiKey) override.apiKey = String(apiKey);
+  const models = await listModels(profile || 'text', override);
+  res.json({ models });
 }));
 
 app.post('/api/llm-jobs', asyncRoute(async (req, res) => {

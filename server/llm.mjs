@@ -66,7 +66,15 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
   }
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content;
-  if (!content || !String(content).trim()) throw new Error('LLM 返回为空');
+  if (!content || !String(content).trim()) {
+    const finish = data?.choices?.[0]?.finish_reason;
+    const reasoning = data?.choices?.[0]?.message?.reasoning_content;
+    throw new Error(
+      finish === 'length' || reasoning
+        ? '模型返回为空（推理型模型把 token 用在了思考上，请调大 max_tokens 或换非推理模型）'
+        : 'LLM 返回为空',
+    );
+  }
   return { content: String(content).trim(), usage: data?.usage || null };
 }
 
@@ -735,7 +743,8 @@ export function cancelLlmJob(id) {
 export async function testProfile(profile) {
   if (!PROFILE_KEYS.includes(profile)) throw new Error('未知档位');
   const t0 = Date.now();
-  const { content } = await chat([{ role: 'user', content: '请只回复两个字：正常' }], { profile, maxTokens: 32 });
+  // max_tokens 给足：推理型模型（如 deepseek-v4-pro）会先花 token 思考，给小了会返回空
+  const { content } = await chat([{ role: 'user', content: '请只回复两个字：正常' }], { profile, maxTokens: 512 });
   return { ok: true, ms: Date.now() - t0, reply: content.slice(0, 40) };
 }
 
@@ -814,4 +823,38 @@ export async function feynmanReview(sourceText, studentText, { lesson = '', page
       followup: Array.isArray(obj.followup) ? obj.followup.slice(0, 3).map(String) : [],
     };
   } catch { return { missing: [], wrong: [], followup: [] }; }
+}
+
+/**
+ * 拉取某个档位的可用模型列表（OpenAI 兼容的 GET {baseUrl}/models）。
+ * override 用于「还没保存配置就想先拉一把」的场景（前端传当前输入框的值）。
+ */
+export async function listModels(profile = 'text', override = {}) {
+  const key = PROFILE_KEYS.includes(profile) ? profile : 'text';
+  const label = MODE_LABELS[key] || key;
+  const prof = { ...getProfile(key), ...override };
+  const base = String(prof.baseUrl || '').replace(/\/+$/, '');
+  if (!base) throw new Error(`未配置「${label}」的接口地址`);
+  if (!prof.apiKey) throw new Error(`未配置「${label}」的 API Key（本机服务随便填一个，如 ollama）`);
+
+  let res;
+  try {
+    res = await fetch(`${base}/models`, {
+      headers: { Authorization: `Bearer ${prof.apiKey}` },
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (err) {
+    throw describeFetchError(err, { base, label: `「${label}」模型列表`, timeoutSec: 20 });
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`拉取模型列表失败（HTTP ${res.status}）：${text.slice(0, 200)}`);
+  }
+  const data = await res.json().catch(() => null);
+  const raw = data?.data ?? data?.models ?? [];
+  const models = raw
+    .map((m) => (typeof m === 'string' ? m : m?.id || m?.name))
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => s.trim());
+  return [...new Set(models)].sort();
 }
