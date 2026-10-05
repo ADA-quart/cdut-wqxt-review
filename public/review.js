@@ -329,17 +329,24 @@ function sectionAtReadingLine() {
   const scroll = $('mdScroll');
   const secs = [...document.querySelectorAll('.page-sec')];
   if (!secs.length) return null;
-  const rect = scroll.getBoundingClientRect();
-  const topLine = rect.top + 20;                                // 顶部判定线（只留 20px 容差）
-  const mid = rect.top + rect.height * 0.5;                     // 中线：内容至少盖到这里才算当前页
-  let lastPassed = null;
+  const box = scroll.getBoundingClientRect();
+
+  // 1) 视口中线落在哪一页 —— 最贴近「我正在看哪一页」
+  const center = box.top + box.height * 0.5;
   for (const s of secs) {
     const r = s.getBoundingClientRect();
-    if (r.top > topLine) break;
-    lastPassed = s;
-    if (r.bottom >= mid) return s;
+    if (r.top <= center && r.bottom > center) return s;
   }
-  return lastPassed || secs[0];
+
+  // 2) 没有页跨过中线（页很短）→ 取可见面积最大的那页
+  let best = null;
+  let bestArea = 0;
+  for (const s of secs) {
+    const r = s.getBoundingClientRect();
+    const area = Math.max(0, Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top));
+    if (area > bestArea) { bestArea = area; best = s; }
+  }
+  return best || secs[0];
 }
 
 function currentVisibleSection() {
