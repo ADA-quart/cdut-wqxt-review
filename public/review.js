@@ -978,6 +978,7 @@ function setupEvents() {
     await renderQueue();
   });
 
+  setupImageViewer();
   setupSearch();
   setupHoverPreview();
 
@@ -1510,3 +1511,96 @@ async function markCardBadges() {
   refreshDueBadge();
   renderOutLinks();
 })();
+
+// ---------- 图片查看器（点击放大 / 滚轮缩放 / 拖拽 / 前后切换）----------
+
+function setupImageViewer() {
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.hidden = true;
+  box.innerHTML = `
+    <img alt="">
+    <div class="lb-bar">
+      <button class="btn tiny" data-act="prev">◀ 上一张</button>
+      <span class="lb-pos"></span>
+      <button class="btn tiny" data-act="next">下一张 ▶</button>
+      <button class="btn tiny" data-act="zoomout">−</button>
+      <button class="btn tiny" data-act="zoomin">＋</button>
+      <button class="btn tiny" data-act="reset">适应</button>
+      <button class="btn tiny" data-act="close">关闭 (Esc)</button>
+    </div>`;
+  document.body.appendChild(box);
+  const img = box.querySelector('img');
+  const pos = box.querySelector('.lb-pos');
+  let list = [];
+  let idx = 0;
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+  let drag = null;
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const applyT = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; };
+  const show = (i) => {
+    if (!list.length) return;
+    idx = (i + list.length) % list.length;
+    img.src = list[idx];
+    scale = 1; tx = 0; ty = 0; applyT();
+    pos.textContent = `${idx + 1} / ${list.length}`;
+  };
+  const open = (items, i) => { if (!items.length) return; list = items; box.hidden = false; show(i); };
+  const close = () => { box.hidden = true; img.src = ""; };
+
+  // 点笔记里的图片 → 看整篇文档的图；点右侧课件 → 看整节课的 PPT
+  document.addEventListener('click', (e) => {
+    const inMd = e.target.closest('#mdContent img');
+    if (inMd) {
+      const imgs = [...document.querySelectorAll('#mdContent img')].map((el) => el.src);
+      open(imgs, imgs.indexOf(inMd.src));
+      return;
+    }
+    const inStage = e.target.closest('#imgStage img');
+    if (inStage && state.pages.length) {
+      const imgs = state.pages.map((p) => imgUrl(p.name));
+      open(imgs, state.pageIndex);
+    }
+  });
+
+  box.querySelector('.lb-bar').addEventListener('click', (e) => {
+    const act = e.target.dataset && e.target.dataset.act;
+    if (!act) return;
+    if (act === 'prev') show(idx - 1);
+    else if (act === 'next') show(idx + 1);
+    else if (act === 'zoomin') { scale = clamp(scale * 1.25, 0.2, 8); applyT(); }
+    else if (act === 'zoomout') { scale = clamp(scale / 1.25, 0.2, 8); applyT(); }
+    else if (act === 'reset') { scale = 1; tx = 0; ty = 0; applyT(); }
+    else if (act === 'close') close();
+  });
+  box.addEventListener('click', (e) => { if (e.target === box) close(); });
+  box.addEventListener('wheel', (e) => {
+    if (box.hidden) return;
+    e.preventDefault();
+    scale = clamp(scale * (e.deltaY < 0 ? 1.12 : 0.89), 0.2, 8);
+    applyT();
+  }, { passive: false });
+
+  img.addEventListener('pointerdown', (e) => {
+    if (box.hidden) return;
+    drag = { x: e.clientX - tx, y: e.clientY - ty };
+    img.setPointerCapture(e.pointerId);
+    img.style.cursor = 'grabbing';
+  });
+  img.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    tx = e.clientX - drag.x; ty = e.clientY - drag.y; applyT();
+  });
+  img.addEventListener('pointerup', () => { drag = null; img.style.cursor = 'grab'; });
+
+  // 捕获阶段拦掉翻页快捷键，避免和课件翻页冲突
+  document.addEventListener('keydown', (e) => {
+    if (box.hidden) return;
+    if (e.key === 'Escape') { close(); e.stopPropagation(); }
+    else if (e.key === 'ArrowLeft') { show(idx - 1); e.stopPropagation(); }
+    else if (e.key === 'ArrowRight') { show(idx + 1); e.stopPropagation(); }
+  }, true);
+}

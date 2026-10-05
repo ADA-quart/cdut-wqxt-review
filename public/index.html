@@ -32,9 +32,9 @@
 <div class="flowbar" id="flowBar">
   <span class="flow-step" data-step="1"><b>①</b> 登录统一认证</span>
   <span class="flow-sep">→</span>
-  <span class="flow-step" data-step="2"><b>②</b> 选课程下载 PPT</span>
+  <span class="flow-step" data-step="2"><b>②</b> 勾选课程 →「下载所选」</span>
   <span class="flow-sep">→</span>
-  <span class="flow-step" data-step="3"><b>③</b> 课次旁点「转 MD」</span>
+  <span class="flow-step" data-step="3"><b>③</b> 在「已下载文件」里点「转 MD」</span>
   <span class="flow-sep">→</span>
   <span class="flow-step" data-step="4"><b>④</b> 点「复习」看笔记 + 自测</span>
   <span class="flow-hint" id="flowHint"></span>
@@ -53,7 +53,8 @@
           </select>
         </label>
         <button class="btn" id="btnRefresh">刷新</button>
-        <button class="btn primary" id="btnDownloadAll">全部下载</button>
+        <button class="btn" id="btnSelectAll" title="全选 / 取消全选当前学期的课程">全选</button>
+        <button class="btn primary" id="btnDownloadSel" title="只下载勾选的课程">下载所选</button>
       </div>
     </div>
     <div class="panel-body" id="courseList">
@@ -76,9 +77,9 @@
     <div class="panel-head sub-head">
       <h2>已下载文件</h2>
       <div class="toolbar">
-        <label class="field compact" title="转 MD 时自动移除空白帧与渐进重复帧（可在复核页面恢复）">
+        <label class="field compact" title="录播按帧抓图会有大量重复（动画每变一次存一帧）。勾选后转 MD 前先自动去重：丢掉空白帧、等待页/二维码页，同一页只留最后一帧；被移除的帧会进 _回收站/，在「复核」页可随时拉回来。原始图片不会丢。">
           <input type="checkbox" id="dedupChk" checked>
-          <span>去重</span>
+          <span>转 MD 前先自动去重（推荐）</span>
         </label>
         <button class="btn" id="btnRefreshFiles">刷新</button>
       </div>
@@ -210,7 +211,7 @@
           <tr><td>LLM 设置</td><td>配置 AI（纠错、整理重点、知识链、对话都用它）；三档：纯文本 / 图片上云 / 图片本地</td></tr>
           <tr><td>设置</td><td>目录位置、导入导出、升级、退出程序</td></tr>
           <tr><td>使用说明</td><td>就这个窗口</td></tr>
-          <tr><td rowspan="2">课程区</td><td>全部下载</td><td>把当前学期的课程全部下载（慢，但一次到位）</td></tr>
+          <tr><td rowspan="2">课程区</td><td>勾选 + 下载所选</td><td>勾选想下的课程，点「下载所选」批量下载；也可「全选」一键选完</td></tr>
           <tr><td>课次</td><td>列出这门课的每一次课，可以只下某几次</td></tr>
           <tr><td rowspan="3">已下载文件</td><td>清洗</td><td>去重预检：录播抓帧会有重复（渐进动画），生成「前/删/后」对照页让你人工确认</td></tr>
           <tr><td>转 MD</td><td>图片 → Markdown（公式变 LaTeX）+ PDF</td></tr>
@@ -225,9 +226,9 @@
         <h4>名词解释</h4>
         <table class="help-table">
           <tr><th>词</th><th>意思</th></tr>
-          <tr><td>课次</td><td>一次课（如「2026-09-15第7-8节」）。下载、转 MD、复习都以课次为单位</td></tr>
+          <tr><td>课次</td><td>一次课（如「2026-09-15第7-8节」）。下载、转 MD、复习都以课次为单位。<b>「已下载文件」里一级是课程、二级是课次</b></td></tr>
           <tr><td>转 MD</td><td>把课件图片 OCR 成 Markdown，公式保留为 LaTeX，同时合成 PDF</td></tr>
-          <tr><td>去重清洗</td><td>录播按帧抓图会有大量重复，先自动去重，再给你一个对照页人工确认</td></tr>
+          <tr><td>去重清洗</td><td>录播按帧抓图会有大量重复，先自动去重（空白帧 / 等待页二维码 / 渐进重复），移除的帧进 <code>_回收站/</code>，复核页分「二维码」「重复帧」两栏，可随时拉回来</td></tr>
           <tr><td>知识链</td><td>AI 在课次之间、课程之间建立双向链接（标准 <code>[[...]]</code>，可直接丢进 Obsidian）</td></tr>
           <tr><td>图谱</td><td>知识链的可视化（课程 / 课次 / 链接关系）</td></tr>
           <tr><td>复习队列</td><td>⭐ 重点、❓ 错题、✓ 掌握和 AI 出的问答卡，会按间隔重复排期提醒你复习</td></tr>
@@ -270,7 +271,23 @@
       </section>
 
       <section class="profile-section">
-        <h4>② 导出 / 导入</h4>
+        <h4>② 转 MD 并行数</h4>
+        <p class="hint">每个转换任务约占 6~7GB 显存。16GB 显卡可设 2 并行提速；8GB 笔记本卡保持 1，否则会爆显存。</p>
+        <div class="test-row">
+          <label class="field compact"><span>并行任务数</span>
+            <select id="mdParallel">
+              <option value="1">1（默认，最稳）</option>
+              <option value="2">2（≥12GB 显存）</option>
+              <option value="3">3（≥20GB 显存）</option>
+            </select>
+          </label>
+          <button class="btn tiny" id="btnSaveMd">保存</button>
+          <span class="test-result" id="mdParallelHint"></span>
+        </div>
+      </section>
+
+      <section class="profile-section">
+        <h4>③ 导出 / 导入</h4>
         <p class="hint">导出一个 zip 包（笔记 + 复习卡 + 清单），可以拷到别的电脑或手机 / 平板客户端使用；导入会把包里的内容合并进当前目录。</p>
         <label class="chk"><input type="checkbox" id="expImages"> 导出时包含 PPT 原始图片（体积大，手机端通常不需要）</label>
         <div class="test-row">
@@ -286,7 +303,7 @@
       </section>
 
       <section class="profile-section">
-        <h4>③ 升级 / 退出</h4>
+        <h4>④ 升级 / 退出</h4>
         <p class="hint">升级走 git（需要是 git clone 安装的）；退出会关闭服务与后台浏览器进程。</p>
         <div class="test-row">
           <button class="btn tiny" id="btnUpdateCheck">检查更新</button>

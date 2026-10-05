@@ -9,3 +9,4 @@ config.json
 run/
 *.zip
 downloads-backup-*/
+tmp/

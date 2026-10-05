@@ -394,3 +394,24 @@ select { padding: 6px 8px; font-size: 13px; }
 .help-table code, .help-faq code { background: #f2f4f7; border-radius: 4px; padding: 0 4px; font-size: 12px; }
 .help-faq { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.85; color: var(--ink-2); }
 .help-faq li { margin-bottom: 6px; }
+
+/* ---------- 课程多选 ---------- */
+.course-pick { flex: none; width: 15px; height: 15px; margin-right: 10px; cursor: pointer; accent-color: var(--brand, #2f6fed); }
+.course-pick:disabled { cursor: not-allowed; opacity: .4; }
+
+/* ---------- 已下载文件：一级（课程）/ 二级（课次）明显区分 ---------- */
+.tree .dir.lvl-1 { margin: 10px 0 6px; }
+.tree .dir.lvl-1 > summary {
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--ink, #1f2329);
+  background: #f4f7fc;
+  border: 1px solid #e6ecf6;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.tree .dir.lvl-1 > summary:hover { background: #eaf1fd; }
+.tree .dir.lvl-2 { margin: 2px 0 2px 14px; border-left: 2px solid #e6ecf6; padding-left: 8px; }
+.tree .dir.lvl-2 > summary { font-weight: 400; font-size: 12.5px; color: var(--ink-2, #4a5361); padding: 3px 6px; }
+.tree .dir.lvl-2 > summary:hover { background: #f7f8fa; }
+.tree .tree-name { margin-right: 6px; }

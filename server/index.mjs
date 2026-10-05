@@ -32,7 +32,7 @@ import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
   findPython, events as mdEvents,
 } from './mdconvert.mjs';
-import { publicConfig, saveConfig } from './config.mjs';
+import { publicConfig, saveConfig, loadConfig } from './config.mjs';
 import { streamChat } from './chat.mjs';
 import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
@@ -237,13 +237,66 @@ app.post('/api/dedup-decisions', asyncRoute(async (req, res) => {
   if (!fs.existsSync(jsonPath)) return res.status(404).json({ error: '还没有清洗数据，请先执行「清洗」' });
 
   const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  const lessonDir = absDir;
+  const trashDir = path.join(path.dirname(absDir), '_回收站', path.basename(absDir));
+  ensureDir(trashDir);
+
   const valid = new Set(data.frames.filter((f) => !f.keep).map((f) => f.name));
-  data.restore = restore.filter((n) => valid.has(n));
+  const nextRestore = restore.filter((n) => valid.has(n));
+  const prev = new Set(data.restore || []);
+  const next = new Set(nextRestore);
+
+  // 勾选恢复 → 从回收站搬回课次目录；取消勾选 → 再丢回回收站
+  const restored = [];
+  const reTrashed = [];
+  for (const name of next) {
+    if (prev.has(name)) continue;
+    const from = path.join(trashDir, name);
+    const to = path.join(lessonDir, name);
+    if (fs.existsSync(from) && !fs.existsSync(to)) { fs.renameSync(from, to); restored.push(name); }
+  }
+  for (const name of prev) {
+    if (next.has(name)) continue;
+    const from = path.join(lessonDir, name);
+    const to = path.join(trashDir, name);
+    if (fs.existsSync(from) && !fs.existsSync(to)) { fs.renameSync(from, to); reTrashed.push(name); }
+  }
+
+  data.restore = nextRestore;
+  const trashedSet = new Set(data.frames.filter((f) => !f.keep && !next.has(f.name)).map((f) => f.name));
+  for (const f of data.frames) {
+    f.restored = Boolean(!f.keep && next.has(f.name));
+    f.trashed = trashedSet.has(f.name);
+  }
+  const keptCount = data.frames.filter((f) => f.keep || f.restored).length;
+  data.keptCount = keptCount;
+  data.removedCount = data.total - keptCount;
+  data.trash = { dir: trashDir, moved: trashedSet.size, names: [...trashedSet] };
   fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), 'utf8');
-  res.json({ ok: true, restoreCount: data.restore.length });
+  res.json({
+    ok: true,
+    restoreCount: nextRestore.length,
+    movedBack: restored.length,
+    movedToTrash: reTrashed.length,
+    kept: keptCount,
+    removed: data.removedCount,
+    trashDir,
+  });
 }));
 
 // ---------- LLM 配置与文档操作（纠错 / 总结） ----------
+
+/** 转 MD 相关配置（并行度） */
+app.get('/api/md-config', (_req, res) => {
+  const cfg = loadConfig();
+  res.json({ parallel: cfg.md?.parallel || 1 });
+});
+
+app.put('/api/md-config', asyncRoute(async (req, res) => {
+  const parallel = Math.min(Math.max(Number(req.body?.parallel) || 1, 1), 3);
+  saveConfig({ md: { parallel } });
+  res.json({ parallel });
+}));
 
 app.get('/api/llm-config', (_req, res) => res.json(publicConfig()));
 
@@ -346,8 +399,10 @@ function readTree(dir, depth) {
   if (depth < 0) return [];
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
+  const HIDDEN = /\.(dedup\.(json|html)|ocr-backup\.md|cards\.json)$/i;
   return entries
-    .filter((e) => !e.name.startsWith('.'))
+    .filter((e) => !e.name.startsWith('.') && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
     .map((e) => {
       const full = path.join(dir, e.name);
@@ -355,7 +410,8 @@ function readTree(dir, depth) {
       if (e.isDirectory()) {
         // 同名 .md 存在（在笔记目录里）= 这个课次已转过 Markdown
         const hasMd = fs.existsSync(path.join(NOTES_DIR, `${rel}.md`));
-        return { name: e.name, type: 'dir', rel, hasMd, children: readTree(full, depth - 1) };
+        const hasDedup = fs.existsSync(path.join(DATA_DIR, `${rel}.dedup.html`));
+        return { name: e.name, type: 'dir', rel, hasMd, hasDedup, children: readTree(full, depth - 1) };
       }
       const stat = fs.statSync(full);
       return {

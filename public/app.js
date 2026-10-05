@@ -11,6 +11,7 @@ const state = {
   llmConfig: null,
   mdTool: null,
   subsCache: new Map(),
+  selectedCourses: new Set(),
 };
 
 // ---------- 工具 ----------
@@ -123,9 +124,22 @@ function renderCourses() {
     return;
   }
   box.innerHTML = '';
+  updatePickCount();
   for (const c of state.courses) {
     const el = document.createElement('div');
     el.className = 'course-item';
+    const pick = document.createElement('input');
+    pick.type = 'checkbox';
+    pick.className = 'course-pick';
+    pick.title = '勾选后点右上「下载所选」批量下载';
+    if (c.delisted) pick.disabled = true;
+    pick.checked = state.selectedCourses.has(String(c.courseId));
+    pick.onchange = () => {
+      if (pick.checked) state.selectedCourses.add(String(c.courseId));
+      else state.selectedCourses.delete(String(c.courseId));
+      updatePickCount();
+    };
+    el.appendChild(pick);
     if (c.delisted) el.classList.add('delisted');
 
     const main = document.createElement('div');
@@ -334,7 +348,8 @@ function renderJobs() {
 
     const stats = document.createElement('div');
     stats.className = 'job-stats';
-    stats.textContent = `课次 ${j.stats.done}/${j.stats.total} · 图片 ${j.stats.images} 张` +
+    stats.textContent = `课次 ${j.stats.done}/${j.stats.total} · 已下载 ${j.stats.images} 张` +
+      (j.stats.imagesSkipped ? ` · 跳过 ${j.stats.imagesSkipped} 张（本地已有）` : '') +
       (j.stats.imagesFailed ? ` · 失败 ${j.stats.imagesFailed}` : '');
 
     left.append(title, stats);
@@ -711,15 +726,20 @@ async function loadFiles() {
 }
 
 function renderTree(nodes) {
+  return renderTreeLevel(nodes, 1);
+}
+
+function renderTreeLevel(nodes, level) {
   const root = document.createElement('div');
   root.className = 'tree';
   for (const node of nodes) {
     if (node.type === 'dir') {
       const details = document.createElement('details');
-      details.className = 'dir';
+      details.className = `dir lvl-${Math.min(level, 2)}`;
       const summary = document.createElement('summary');
       const label = document.createElement('span');
-      label.textContent = '📁 ' + node.name;
+      label.className = 'tree-name';
+      label.textContent = (level === 1 ? '📚 ' : '🗂 ') + node.name;
       summary.appendChild(label);
       // 目录内直接含图片（= 一个课次）→ 提供「转 Markdown」
       const kids = node.children || [];
@@ -765,8 +785,21 @@ function renderTree(nodes) {
         sum.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startLlmJob(node, 'summarize', sum); };
         summary.appendChild(sum);
       }
+      // 有复核页时给个入口（辅助文件本身不上树）
+      if (node.hasDedup) {
+        const report = document.createElement('button');
+        report.className = 'btn tiny';
+        report.textContent = '复核';
+        report.title = '打开清洗复核页：把误删的帧拉回来';
+        report.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          window.open('/files/' + node.rel.split('/').map(encodeURIComponent).join('/') + '.dedup.html', '_blank');
+        };
+        summary.appendChild(report);
+      }
       details.appendChild(summary);
-      if (kids.length) details.appendChild(renderTree(kids));
+      if (kids.length) details.appendChild(renderTreeLevel(kids, level + 1));
       root.appendChild(details);
     } else if (/\.md$/i.test(node.name)) {
       const row = document.createElement('div');
@@ -949,6 +982,10 @@ $('btnRefresh').onclick = loadCourses;
 async function openSettings() {
   $('settingsModal').hidden = false;
   try {
+    const m = await api('/md-config');
+    $('mdParallel').value = String(m.parallel || 1);
+  } catch { /* 忽略 */ }
+  try {
     const p = await api('/paths');
     $('setDataDir').value = p.dataDir || '';
     $('setNotesDir').value = p.sameDir ? '' : (p.notesDir || '');
@@ -999,12 +1036,12 @@ function updateFlowBar() {
   let hint = '第一步：点右上角「登录」（统一认证学号密码）';
   if (state.loggedIn) {
     step = 2;
-    hint = '下一步：左边点课程右边的「下载」，或先点「课次」挑一次课';
+    hint = '下一步：勾选左边的课程后点「下载所选」；只想下一两次课就点「课次」自己挑';
     if (flow.lessons > 0) {
       step = 3;
       hint = state.mdTool && state.mdTool.available === false
         ? '下一步：先跑 setup 脚本装转换环境（README 里有命令），再点课次旁的「转 MD」'
-        : '下一步：在「已下载文件」里点课次旁的「转 MD」';
+        : '下一步：在右下「已下载文件」里，点某次课后面的「转 MD」';
     }
     if (flow.withMd > 0) {
       step = 4;
@@ -1019,6 +1056,18 @@ function updateFlowBar() {
   $('flowHint').textContent = hint;
 }
 $('btnCloseSettings').onclick = () => { $('settingsModal').hidden = true; };
+$('btnSaveMd').onclick = async () => {
+  const hint = $('mdParallelHint');
+  try {
+    const r = await api('/md-config', { method: 'PUT', body: { parallel: Number($('mdParallel').value) } });
+    hint.textContent = `✓ 已保存：${r.parallel} 个任务并行`;
+    hint.className = 'test-result ok';
+  } catch (e) {
+    hint.textContent = '✗ ' + String(e.message || e).slice(0, 80);
+    hint.className = 'test-result err';
+  }
+};
+
 $('btnPickData').onclick = () => pickFolderInto('setDataDir', 'pickDataHint');
 $('btnPickNotes').onclick = () => pickFolderInto('setNotesDir', 'pickNotesHint');
 
@@ -1132,18 +1181,43 @@ $('btnRefreshJobs').onclick = async () => {
 };
 $('btnRefreshFiles').onclick = loadFiles;
 
-$('btnDownloadAll').onclick = async () => {
-  const btn = $('btnDownloadAll');
+/** 勾选了几门课 → 按钮上显示数量 */
+function updatePickCount() {
+  const n = state.selectedCourses.size;
+  $('btnDownloadSel').textContent = n ? `下载所选（${n}）` : '下载所选';
+  $('btnDownloadSel').disabled = n === 0;
+}
+
+$('btnSelectAll').onclick = () => {
+  const pickable = state.courses.filter((c) => !c.delisted).map((c) => String(c.courseId));
+  const allSelected = pickable.length > 0 && pickable.every((id) => state.selectedCourses.has(id));
+  state.selectedCourses = new Set(allSelected ? [] : pickable);
+  renderCourses();
+  updatePickCount();
+};
+
+$('btnDownloadSel').onclick = async () => {
+  const btn = $('btnDownloadSel');
+  const ids = [...state.selectedCourses];
+  if (!ids.length) return;
   btn.disabled = true;
+  const old = btn.textContent;
   btn.textContent = '创建中…';
   try {
-    await api('/jobs', { method: 'POST', body: { mode: 'all', termId: state.termId } });
-    toast('已创建全部课程下载任务', 'ok');
+    for (const courseId of ids) {
+      const c = state.courses.find((x) => String(x.courseId) === courseId);
+      btn.textContent = `创建中… ${c ? c.title : courseId}`;
+      await api('/jobs', { method: 'POST', body: { mode: 'course', courseId } });
+    }
+    toast(`已为 ${ids.length} 门课创建下载任务`, 'ok');
+    state.selectedCourses = new Set();
+    renderCourses();
   } catch (e) {
     toast('创建失败：' + e.message, 'err');
   } finally {
     btn.disabled = false;
-    btn.textContent = '全部下载';
+    btn.textContent = old;
+    updatePickCount();
   }
 };
 

@@ -6,20 +6,48 @@
  *   python -u ppt2md.py <dir> --json [--device auto]
  * 子进程逐行输出 JSONL（start/ready/progress/skip/done），这里解析成任务进度。
  *
- * 串行执行：同一时刻只跑一个转换任务（GPU / 内存占用友好）。
+ * 并行度由 config.json 的 md.parallel 控制（1~3）：每个任务一个 Python 进程，
+ * 单任务约占 6~7GB 显存，16GB 卡可以设 2；显存不够时保持 1。
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ROOT_DIR, ensureInside, ensureDir } from './paths.mjs';
+import { loadConfig } from './config.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
 
 const mdJobs = new Map();
 let nextJobId = 1;
-let queue = Promise.resolve();
+// 并行池：按 config.md.parallel 同时跑 N 个转换任务（每个任务一个 Python 进程）
+const pendingJobs = [];
+let running = 0;
+
+function parallelLimit() {
+  try {
+    return Math.min(Math.max(Number(loadConfig().md?.parallel) || 1, 1), 3);
+  } catch {
+    return 1;
+  }
+}
+
+function pump() {
+  const max = parallelLimit();
+  while (running < max && pendingJobs.length > 0) {
+    const job = pendingJobs.shift();
+    running += 1;
+    runMdJob(job)
+      .catch((e) => {
+        job.status = 'error';
+        job.error = String(e?.message || e);
+        job.finishedAt = Date.now();
+        emit(job);
+      })
+      .finally(() => { running -= 1; pump(); });
+  }
+}
 
 const IS_WIN = process.platform === 'win32';
 
@@ -137,13 +165,9 @@ export function createMdJob(opts) {
   mdJobs.set(job.id, job);
   emit(job);
 
-  // 串行排队
-  queue = queue.then(() => runMdJob(job)).catch((e) => {
-    job.status = 'error';
-    job.error = String(e?.message || e);
-    job.finishedAt = Date.now();
-    emit(job);
-  });
+  // 进队列，由并行池按配置启动
+  pendingJobs.push(job);
+  pump();
 
   return publicMdJob(job);
 }

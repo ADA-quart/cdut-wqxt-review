@@ -492,3 +492,38 @@ a.cite:hover { text-decoration: underline; }
 
 /* hidden 属性要被 display 规则正确尊重 */
 .hintbar[hidden] { display: none; }
+
+/* ---------- 笔记里的图片：默认限高，点开可放大 ---------- */
+#mdContent img {
+  max-width: 100%;
+  max-height: 300px;
+  width: auto;
+  height: auto;
+  display: block;
+  margin: 8px auto;
+  cursor: zoom-in;
+  border-radius: 6px;
+  background: #fafbfc;
+}
+#mdContent img:hover { outline: 2px solid var(--brand); }
+#imgStage img { cursor: zoom-in; }
+
+/* ---------- 图片查看器 ---------- */
+.lightbox {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(12, 16, 22, .88);
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 10px; padding: 18px;
+}
+.lightbox[hidden] { display: none; }
+.lightbox img {
+  max-width: 94vw; max-height: 82vh;
+  cursor: grab; user-select: none;
+  transition: none;
+  background: #fff; border-radius: 4px;
+  touch-action: none;
+}
+.lb-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.lb-bar .btn { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.25); }
+.lb-bar .btn:hover { background: rgba(255,255,255,.22); }
+.lb-pos { color: #dfe6f0; font-size: 12.5px; min-width: 64px; text-align: center; }

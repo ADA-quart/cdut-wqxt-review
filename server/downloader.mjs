@@ -40,7 +40,8 @@ function publicJob(j) {
       courseTitle: t.courseTitle,
       subId: t.subId,
       subTitle: t.subTitle,
-      status: t.status,         // pending | running | done | error | skipped
+        skipped: t.skipped || 0,  // 命中已下载文件而跳过的张数
+        status: t.status,         // pending | running | done | error | skipped
       total: t.total,
       done: t.done,
       failed: t.failed,
@@ -53,7 +54,7 @@ function publicJob(j) {
 }
 
 function computeStats(j) {
-  const s = { total: j.tasks.length, done: 0, error: 0, skipped: 0, running: 0, pending: 0, images: 0, imagesFailed: 0 };
+  const s = { total: j.tasks.length, done: 0, error: 0, skipped: 0, running: 0, pending: 0, images: 0, imagesSkipped: 0, imagesFailed: 0 };
   for (const t of j.tasks) {
     if (t.status === 'done') s.done++;
     else if (t.status === 'error') s.error++;
@@ -61,6 +62,7 @@ function computeStats(j) {
     else if (t.status === 'running') s.running++;
     else s.pending++;
     s.images += t.done;
+    s.imagesSkipped += t.skipped || 0;
     s.imagesFailed += t.failed;
   }
   return s;
@@ -220,15 +222,25 @@ async function runTask(job, task) {
       const fileName = `${String(i + 1).padStart(4, '0')}.jpg`;
       const filePath = path.join(absDir, fileName);
       try {
-        await downloadFile(img.url, filePath);
-        task.done++;
+        // 已存在且体积正常 → 跳过（再次点下载不会重复拉同一张图）
+        if (fs.existsSync(filePath) && fs.statSync(filePath).size > 100) {
+          task.skipped = (task.skipped || 0) + 1;
+        } else {
+          await downloadFile(img.url, filePath);
+          task.done++;
+        }
       } catch {
         task.failed++;
       }
-      if ((task.done + task.failed) % 5 === 0 || task.done + task.failed === task.total) emit(job);
+      const finished = task.done + task.failed + (task.skipped || 0);
+      if (finished % 5 === 0 || finished === task.total) emit(job);
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
+  if (task.skipped && !task.failed && task.done === 0) {
+    // 全部命中已下载文件：不重复拉取
+    task.error = null;
+  }
   emit(job);
 }
 
