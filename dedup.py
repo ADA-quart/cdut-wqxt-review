@@ -231,7 +231,9 @@ def build_report_html(lesson_dir: Path, state):
     def img_tag(name, cls=''):
         if not name:
             return f'<div class="ph {cls}">（无）</div>'
-        return (f'<figure class="{cls}"><img loading="lazy" src="{html.escape(img_src(name))}">'
+        src = html.escape(img_src(name))
+        return (f'<figure class="{cls}">'
+                f'<a href="{src}" target="_blank" rel="noreferrer"><img loading="lazy" src="{src}"></a>'
                 f'<figcaption>{html.escape(name)}</figcaption></figure>')
 
     cards = []
@@ -259,8 +261,10 @@ def build_report_html(lesson_dir: Path, state):
     def section(title, items, hint=''):
         if not items:
             return ''
+        # 两组并排：每张卡片内部是「前 / 删 / 后」三张缩略图
         return (f'<h2 class="sec">{html.escape(title)}（{len(items)}）'
-                f'<span class="sec-hint">{html.escape(hint)}</span></h2>\n' + '\n'.join(items))
+                f'<span class="sec-hint">{html.escape(hint)}</span></h2>\n'
+                f'<div class="cards">' + '\n'.join(items) + '</div>')
 
     qr_cards = [c for f, c in zip(removed, cards) if f['reason'] == 'qr']
     other_cards = [c for f, c in zip(removed, cards) if f['reason'] != 'qr']
@@ -284,8 +288,12 @@ def build_report_html(lesson_dir: Path, state):
   button {{ border:1px solid #1a54c8; background:#1a54c8; color:#fff; border-radius:6px; padding:8px 14px; font-size:13px; cursor:pointer; }}
   button.ghost {{ background:#fff; color:#1f2329; border-color:#e5e6eb; }}
   #status {{ font-size:13px; color:#0f9d58; }}
-  .card {{ background:#fff; border:1px solid #e5e6eb; border-radius:10px; padding:12px; margin-bottom:14px; }}
-  .strip {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:start; }}
+  .cards {{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin-bottom:14px; }}
+  .card {{ background:#fff; border:1px solid #e5e6eb; border-radius:10px; padding:10px; }}
+  .strip {{ display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; align-items:start; }}
+  figure img {{ max-height:150px; object-fit:contain; background:#f0f2f5; cursor:zoom-in; }}
+  figure a {{ display:block; }}
+  @media (max-width: 900px) {{ .cards {{ grid-template-columns:1fr; }} }}
   h2.sec {{ font-size:14px; margin:18px 0 8px; }}
   .sec-hint {{ font-size:12px; color:#8f959e; font-weight:400; margin-left:8px; }}
   figure {{ margin:0; flex:1; background:#fafbfc; border:1px solid #e5e6eb; border-radius:8px; overflow:hidden; }}
@@ -294,8 +302,9 @@ def build_report_html(lesson_dir: Path, state):
   figure figcaption {{ font-size:11px; color:#646a73; text-align:center; padding:3px 0; }}
   figure.removed figcaption {{ color:#d64541; font-weight:600; }}
   .ph {{ flex:1; height:110px; display:grid; place-items:center; color:#8f959e; background:#fafbfc; border:1px dashed #e5e6eb; border-radius:8px; font-size:12px; }}
-  .meta {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:10px; flex-wrap:wrap; }}
-  .why {{ font-size:12px; color:#646a73; }}
+  .meta {{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }}
+  .why {{ font-size:11.5px; color:#646a73; }}
+  figure figcaption {{ font-size:10.5px; }}
   .restore {{ font-size:13px; user-select:none; cursor:pointer; }}
   .empty {{ color:#8f959e; }}
 </style>
@@ -393,6 +402,8 @@ def main():
         print(f'目录不存在：{lesson_dir}', file=sys.stderr)
         sys.exit(1)
 
+    # 先把回收站里的帧搬回来再判断（否则上次清空的目录会被误判为「没有图片」）
+    restore_from_trash(lesson_dir)
     images = sorted([p for p in lesson_dir.iterdir()
                      if p.suffix.lower() in ('.jpg', '.jpeg', '.png')])
     if not images:
