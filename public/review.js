@@ -278,15 +278,29 @@ function currentSection() {
 }
 
 /** 按左侧滚动位置判断"当前正在读的页"（与图片面板是否跟随无关） */
-function currentVisibleSection() {
+/**
+ * 阅读线：取滚动视口的中线，只有「跨过中线」的那一页才算当前页。
+ * 之前用「顶部 80px」判断，下一页刚露头就会抢走高亮和右侧课件，太早。
+ */
+function sectionAtReadingLine() {
   const scroll = $('mdScroll');
-  const top = scroll.scrollTop + 80;
   const secs = [...document.querySelectorAll('.page-sec')];
-  let best = null;
+  if (!secs.length) return null;
+  const rect = scroll.getBoundingClientRect();
+  const topLine = rect.top + 20;                                // 顶部判定线（只留 20px 容差）
+  const mid = rect.top + rect.height * 0.5;                     // 中线：内容至少盖到这里才算当前页
+  let lastPassed = null;
   for (const s of secs) {
-    if (s.offsetTop <= top) best = s; else break;
+    const r = s.getBoundingClientRect();
+    if (r.top > topLine) break;
+    lastPassed = s;
+    if (r.bottom >= mid) return s;
   }
-  return best || secs[0] || currentSection();
+  return lastPassed || secs[0];
+}
+
+function currentVisibleSection() {
+  return sectionAtReadingLine() || currentSection();
 }
 
 // 跟随滚动：左侧滚到哪一节，右侧切到对应页
@@ -296,14 +310,7 @@ function onMdScroll() {
   if (followRaf) return;
   followRaf = requestAnimationFrame(() => {
     followRaf = null;
-    const scroll = $('mdScroll');
-    const top = scroll.scrollTop + 80;
-    const secs = [...document.querySelectorAll('.page-sec')];
-    let best = null;
-    for (const s of secs) {
-      if (s.offsetTop <= top) best = s; else break;
-    }
-    if (!best) best = secs[0];
+    const best = sectionAtReadingLine();
     if (!best) return;
     const n = Number(best.dataset.page);
     if (state.pages[state.pageIndex]?.n === n) return;
