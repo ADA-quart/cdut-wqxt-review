@@ -449,3 +449,46 @@ a.cite:hover { text-decoration: underline; }
 .feyn-sec.wrong b { color: #a12a2f; }
 .feyn-sec.ask b { color: var(--brand); }
 .feyn-sec.ok b { color: #1f7a3d; }
+
+/* ---------- 复习台：首次提示条 + 指南 ---------- */
+.hintbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 14px 0;
+  padding: 8px 14px;
+  background: var(--brand-soft, #eef4ff);
+  border: 1px solid #dbe6fb;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+.hintbar code { background: #fff; border-radius: 4px; padding: 0 4px; }
+.hintbar-actions { margin-left: auto; display: flex; gap: 6px; flex: none; }
+.guide-sec { margin-bottom: 14px; }
+.guide-sec h4 { margin: 0 0 6px; font-size: 13px; color: var(--ink); }
+.guide-sec ul { margin: 0; padding-left: 20px; font-size: 12.5px; line-height: 1.8; color: var(--ink-2); }
+.guide-sec p { margin: 0; font-size: 12.5px; line-height: 1.8; color: var(--ink-2); }
+.guide-sec code { background: #f2f4f7; border-radius: 4px; padding: 0 4px; }
+
+/* ---------- 指南弹窗（复习台自身没有 .modal 体系，这里补最小实现） ---------- */
+.modal-mask[hidden] { display: none; }
+.modal-mask {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(20, 26, 36, .38);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; backdrop-filter: blur(2px);
+}
+.modal {
+  width: min(620px, 100%); max-height: 86vh; overflow: hidden;
+  background: #fff; border-radius: 14px; padding: 20px;
+  box-shadow: 0 20px 60px rgba(15, 22, 36, .28);
+  display: flex; flex-direction: column;
+}
+.modal h3 { margin: 0 0 10px; font-size: 15px; }
+.modal-body-scroll { max-height: 62vh; overflow: auto; padding-right: 4px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* hidden 属性要被 display 规则正确尊重 */
+.hintbar[hidden] { display: none; }

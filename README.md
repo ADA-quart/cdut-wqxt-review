@@ -29,6 +29,11 @@ downloads/
 
 ## 快速开始
 
+> **第一次用？** 打开界面后右上角有「❓ 使用说明」（首次会自动弹出），
+> 顶部还有一条四步流程条，会实时告诉你现在该点哪里：
+> **① 登录 → ② 选课程下载 PPT → ③ 课次旁点「转 MD」 → ④ 点「复习」看笔记并自测**。
+> 复习台里另一个「❓ 指南」解释了左笔记 / 右课件 / 右下 AI 的用法和每个按钮的作用。
+
 **Windows 一键**：双击 `start.cmd` 启动（后台运行 + 自动开浏览器），`stop.cmd` 退出，
 `update.cmd` 升级，`uninstall.cmd` 卸载；也可以用 `powershell -ExecutionPolicy Bypass -File wqppt.ps1 <start|stop|restart|status|update|uninstall>`。
 

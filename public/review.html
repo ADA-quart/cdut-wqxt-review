@@ -31,8 +31,19 @@
     <button class="btn" id="btnGraph" title="全库知识图谱：课程 / 课次 / 双链">图谱</button>
     <button class="btn" id="btnQueue" title="复习队列（间隔重复）">复习<span class="badge" id="dueBadge" hidden>0</span></button>
     <button class="btn primary" id="btnChain">知识链</button>
+    <button class="btn" id="btnGuide" title="这一页怎么看">❓ 指南</button>
   </div>
 </header>
+
+<div class="hintbar" id="hintBar" hidden>
+  <span><b>左边</b>是这节课的笔记（公式已渲染，<code>[[链接]]</code> 可点） ·
+  <b>右上</b>是课件，跟着左边滚动自动翻页 ·
+  <b>右下</b>可以问 AI：选「本课 / 本课程 / 全库」决定它参考多少资料</span>
+  <span class="hintbar-actions">
+    <button class="btn tiny" id="btnMoreHelp">看完整说明</button>
+    <button class="btn tiny ghost" id="btnCloseHint">×</button>
+  </span>
+</div>
 
 <main class="layout" id="layout">
   <section class="pane md-pane" id="mdPane">
@@ -162,6 +173,48 @@
     <span class="muted">点击节点进入对应笔记</span>
   </div>
 </aside>
+
+<div class="modal-mask" id="guideModal" hidden>
+  <div class="modal">
+    <h3>复习台怎么看</h3>
+    <div class="modal-body-scroll">
+      <section class="guide-sec">
+        <h4>版面</h4>
+        <ul>
+          <li><b>左边</b>：这节课的笔记（Markdown）。公式是渲染好的，<code>[[链接]]</code> 可以点，鼠标悬停 0.3 秒会弹出目标课次的摘要和首图。</li>
+          <li><b>右上</b>：课件原图。可以用缩略图或 ◀ ▶ 翻页，勾「跟随滚动」后左边读到哪页右边自动翻。</li>
+          <li><b>右下</b>：AI 对话。先选作用域再提问 —— 本课（只看这一节）/ 本课程 / 全库（检索整个知识库并给出来源，点了能跳到对应页）。</li>
+        </ul>
+      </section>
+      <section class="guide-sec">
+        <h4>最常用的四个动作</h4>
+        <ul>
+          <li><b>🧠 出题</b>：把当前这页变成问答卡（先问后答，自测用），进复习队列。</li>
+          <li><b>⭐ 重点 / ❓ 错题 / ✓ 掌握</b>：标记当前页，之后在「复习」抽屉里按期复习。</li>
+          <li><b>整理重点</b>：让 AI 读完整节课，生成「重点总结」写回笔记顶部。</li>
+          <li><b>知识链</b>：AI 给课次之间（本课程）或课程之间（全库）建立双向链接。</li>
+        </ul>
+      </section>
+      <section class="guide-sec">
+        <h4>其他按钮</h4>
+        <ul>
+          <li><b>搜索（Ctrl+K）</b>：全库检索，直接跳到某一页。</li>
+          <li><b>标签</b>：把笔记里写的 <code>#标签</code> 汇总起来。</li>
+          <li><b>图谱</b>：知识链的可视化图。</li>
+          <li><b>复习</b>：到期卡片列表（简化的间隔重复，四个按钮决定下次什么时候再出现）。</li>
+          <li><b>复制 Markdown / 下载 md / 原文</b>：把笔记拿去 Obsidian、ima 或看原始文件。</li>
+        </ul>
+      </section>
+      <section class="guide-sec">
+        <h4>划词提问</h4>
+        <p>在笔记或对话里选中一段文字，会浮出「引用到提问 / 解释这段」：前者把那句话粘进输入框，后者直接让 AI 解释（作用域选「全库」时会先检索资料再回答）。</p>
+      </section>
+    </div>
+    <div class="modal-actions">
+      <button class="btn primary" id="btnCloseGuide">知道了</button>
+    </div>
+  </div>
+</div>
 
 <script src="/vendor/marked/marked.umd.js"></script>
 <script src="/vendor/katex/katex.min.js"></script>

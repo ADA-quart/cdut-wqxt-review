@@ -892,6 +892,13 @@ function setupEvents() {
   };
   $('btnCloseChain').onclick = () => { $('chainDrawer').hidden = true; };
   $('btnGraph').onclick = openGraph;
+  $('btnGuide').onclick = () => { $('guideModal').hidden = false; };
+  $('btnCloseGuide').onclick = () => { $('guideModal').hidden = true; };
+  $('btnMoreHelp').onclick = () => { $('guideModal').hidden = false; };
+  $('btnCloseHint').onclick = () => {
+    $('hintBar').hidden = true;
+    try { localStorage.setItem('wqppt_review_hint', '0'); } catch { /* 忽略 */ }
+  };
   $('btnCloseGraph').onclick = () => { $('graphDrawer').hidden = true; };
   $('btnTags').onclick = openTags;
   $('btnCloseTags').onclick = () => { $('tagsDrawer').hidden = true; };
@@ -1496,6 +1503,9 @@ async function markCardBadges() {
   }
   const blkParam = params.get('blk');
   if (blkParam) setTimeout(() => jumpToBlock(blkParam), 160);
+  try {
+    if (localStorage.getItem('wqppt_review_hint') !== '0') $('hintBar').hidden = false;
+  } catch { $('hintBar').hidden = false; }
   markCardBadges();
   refreshDueBadge();
   renderOutLinks();

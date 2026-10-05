@@ -13,7 +13,7 @@
     <span class="logo">问</span>
     <div>
       <h1>问渠学堂 PPT 下载器</h1>
-      <p class="sub">按课程和课次批量下载录播课件图片</p>
+      <p class="sub">下载课件 → 转 Markdown → 复习自测</p>
     </div>
   </div>
   <div class="session" id="session">
@@ -24,8 +24,21 @@
     <button class="btn ghost" id="btnBrowser" title="Edge 窗口平时躲在屏幕外；需要输验证码或手动操作时唤出">显示浏览器</button>
     <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（纠错 / 整理重点 / AI 知识链 / 复习页对话）">LLM 设置</button>
     <button class="btn ghost" id="btnSettings" title="目录位置 / 导入导出 / 升级 / 退出">设置</button>
+    <button class="btn ghost" id="btnHelp" title="第一次用？看这里">❓ 使用说明</button>
   </div>
 </header>
+
+<!-- 四步流程指示条：告诉第一次用的人「现在在哪一步、下一步点哪」 -->
+<div class="flowbar" id="flowBar">
+  <span class="flow-step" data-step="1"><b>①</b> 登录统一认证</span>
+  <span class="flow-sep">→</span>
+  <span class="flow-step" data-step="2"><b>②</b> 选课程下载 PPT</span>
+  <span class="flow-sep">→</span>
+  <span class="flow-step" data-step="3"><b>③</b> 课次旁点「转 MD」</span>
+  <span class="flow-sep">→</span>
+  <span class="flow-step" data-step="4"><b>④</b> 点「复习」看笔记 + 自测</span>
+  <span class="flow-hint" id="flowHint"></span>
+</div>
 
 <main class="layout">
   <!-- 左栏：课程 -->
@@ -174,6 +187,71 @@
 </div>
 
 <!-- 设置：目录 / 导入导出 / 升级 / 退出 -->
+<div class="modal-mask" id="helpModal" hidden>
+  <div class="modal wide">
+    <h3>使用说明</h3>
+    <p class="hint">这个软件做的事：把问渠学堂的录播课件抓成本地图片 → 转成带公式的 Markdown → 在自己的复习台里对着课件复习、提问、做题、隔天自测。</p>
+    <div class="modal-body-scroll">
+      <section class="profile-section">
+        <h4>第一次用，按这 4 步</h4>
+        <ol class="help-steps">
+          <li><b>登录</b>：右上角点「登录」，输入统一认证学号密码。可能会自动弹出一个浏览器窗口让你过验证码，过完它会自己躲回屏幕外。</li>
+          <li><b>下载 PPT</b>：左边选中课程 → 点「课次」挑一次课，或者直接点「下载」整门课。跑完在右下「已下载文件」里能看到课次目录。</li>
+          <li><b>转 MD</b>：课次目录旁点「转 MD」，图片会被 OCR 成带公式的 Markdown，同时生成 PDF。（首次使用需要先装转换环境，见 README 的 setup 脚本；没装的话按钮会有提示。）</li>
+          <li><b>复习</b>：点课次旁的「复习」进入复习台 —— 左边是笔记，右上是课件翻页，右下可以问 AI；用「🧠 出题」生成问答卡自测，⭐/❓ 标记不懂的页，第二天打开「复习」队列过一遍。</li>
+        </ol>
+      </section>
+
+      <section class="profile-section">
+        <h4>按钮都干嘛的</h4>
+        <table class="help-table">
+          <tr><th>位置</th><th>按钮</th><th>作用</th></tr>
+          <tr><td rowspan="4">顶栏</td><td>显示浏览器</td><td>后台浏览器窗口平时躲在屏幕外，需要手动操作 / 输验证码时叫出来</td></tr>
+          <tr><td>LLM 设置</td><td>配置 AI（纠错、整理重点、知识链、对话都用它）；三档：纯文本 / 图片上云 / 图片本地</td></tr>
+          <tr><td>设置</td><td>目录位置、导入导出、升级、退出程序</td></tr>
+          <tr><td>使用说明</td><td>就这个窗口</td></tr>
+          <tr><td rowspan="2">课程区</td><td>全部下载</td><td>把当前学期的课程全部下载（慢，但一次到位）</td></tr>
+          <tr><td>课次</td><td>列出这门课的每一次课，可以只下某几次</td></tr>
+          <tr><td rowspan="3">已下载文件</td><td>清洗</td><td>去重预检：录播抓帧会有重复（渐进动画），生成「前/删/后」对照页让你人工确认</td></tr>
+          <tr><td>转 MD</td><td>图片 → Markdown（公式变 LaTeX）+ PDF</td></tr>
+          <tr><td>复习</td><td>打开复习台</td></tr>
+          <tr><td rowspan="3">复习台</td><td>整理重点</td><td>AI 读整节课，生成「重点总结」写回笔记顶部</td></tr>
+          <tr><td>🧠 出题 / ⭐❓✓</td><td>把当前页变成问答卡或标记，进复习队列（间隔重复）</td></tr>
+          <tr><td>知识链 / 图谱 / 标签</td><td>AI 给课次和课程之间建立关联、可视化、按 #标签 汇总</td></tr>
+        </table>
+      </section>
+
+      <section class="profile-section">
+        <h4>名词解释</h4>
+        <table class="help-table">
+          <tr><th>词</th><th>意思</th></tr>
+          <tr><td>课次</td><td>一次课（如「2026-09-15第7-8节」）。下载、转 MD、复习都以课次为单位</td></tr>
+          <tr><td>转 MD</td><td>把课件图片 OCR 成 Markdown，公式保留为 LaTeX，同时合成 PDF</td></tr>
+          <tr><td>去重清洗</td><td>录播按帧抓图会有大量重复，先自动去重，再给你一个对照页人工确认</td></tr>
+          <tr><td>知识链</td><td>AI 在课次之间、课程之间建立双向链接（标准 <code>[[...]]</code>，可直接丢进 Obsidian）</td></tr>
+          <tr><td>图谱</td><td>知识链的可视化（课程 / 课次 / 链接关系）</td></tr>
+          <tr><td>复习队列</td><td>⭐ 重点、❓ 错题、✓ 掌握和 AI 出的问答卡，会按间隔重复排期提醒你复习</td></tr>
+          <tr><td>费曼回述</td><td>用自己的话把一页讲一遍，AI 对照课件指出缺漏和错误</td></tr>
+        </table>
+      </section>
+
+      <section class="profile-section">
+        <h4>常见问题</h4>
+        <ul class="help-faq">
+          <li><b>为什么下载时会有浏览器窗口？</b> 问渠学堂有动态防护，必须用真实浏览器内核；窗口默认在屏幕外，不打扰你。</li>
+          <li><b>「转 MD」点不动？</b> 还没装转换环境 —— 在项目目录跑一次 <code>setup-p2t.ps1</code>（Windows）或 <code>setup-p2t.sh</code>（Mac）。</li>
+          <li><b>文件存哪了？</b> 默认在项目下的 <code>downloads/</code>；可以在「设置 → 目录位置」改，笔记目录可以直接指向 Obsidian 库。</li>
+          <li><b>这些下载合法吗？</b> 仅用于下载你本人账号有权访问的课件，请遵守学校相关规定。</li>
+        </ul>
+      </section>
+    </div>
+    <div class="modal-actions">
+      <label class="chk" style="margin-right:auto"><input type="checkbox" id="helpDontAuto"> 下次不再自动弹出</label>
+      <button class="btn primary" id="btnCloseHelp">我知道了</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-mask" id="settingsModal" hidden>
   <div class="modal wide">
     <h3>设置</h3>

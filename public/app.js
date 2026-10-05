@@ -57,6 +57,7 @@ async function refreshStatus() {
       : '未登录';
     $('btnLogin').hidden = s.loggedIn;
     $('btnLogout').hidden = !s.loggedIn;
+    updateFlowBar();
     return s;
   } catch (e) {
     $('statusDot').className = 'dot offline';
@@ -684,8 +685,20 @@ async function loadFiles() {
   const box = $('fileTree');
   try {
     const { tree } = await api('/files');
+    // 统计「有几次课 / 几次已转 MD」，用于流程条提示
+    const lessons = [];
+    for (const course of tree) {
+      if (course.type !== 'dir') continue;
+      for (const child of course.children || []) {
+        if (child.type === 'dir' && Array.isArray(child.children) && child.children.some((f) => f.type === 'file' && /\.(jpe?g|png)$/i.test(f.name))) {
+          lessons.push(child);
+        }
+      }
+    }
+    state.flow = { lessons: lessons.length, withMd: lessons.filter((l) => l.hasMd).length };
+    updateFlowBar();
     if (tree.length === 0) {
-      box.innerHTML = '<p class="empty">downloads/ 目录为空</p>';
+      box.innerHTML = '<p class="empty">还没有下载任何课件。<br>先点右上角「登录」，再到左边选一门课点「下载」。</p>';
       return;
     }
     box.innerHTML = '';
@@ -961,6 +974,48 @@ async function pickFolderInto(inputId, hintId) {
 }
 
 $('btnSettings').onclick = openSettings;
+
+// ---------- 使用说明 & 四步流程指示 ----------
+
+function openHelp() {
+  $('helpModal').hidden = false;
+  try { $('helpDontAuto').checked = localStorage.getItem('wqppt_help_auto') === '0'; } catch { /* 忽略 */ }
+}
+
+function closeHelp() {
+  $('helpModal').hidden = true;
+  try { localStorage.setItem('wqppt_help_auto', $('helpDontAuto').checked ? '0' : '1'); } catch { /* 忽略 */ }
+}
+
+$('btnHelp').onclick = openHelp;
+$('btnCloseHelp').onclick = closeHelp;
+
+/** 根据当前进度高亮流程条，并给出「下一步做什么」 */
+function updateFlowBar() {
+  const flow = state.flow || { lessons: 0, withMd: 0 };
+  let step = 1;
+  let hint = '第一步：点右上角「登录」（统一认证学号密码）';
+  if (state.loggedIn) {
+    step = 2;
+    hint = '下一步：左边点课程右边的「下载」，或先点「课次」挑一次课';
+    if (flow.lessons > 0) {
+      step = 3;
+      hint = state.mdTool && state.mdTool.available === false
+        ? '下一步：先跑 setup 脚本装转换环境（README 里有命令），再点课次旁的「转 MD」'
+        : '下一步：在「已下载文件」里点课次旁的「转 MD」';
+    }
+    if (flow.withMd > 0) {
+      step = 4;
+      hint = '可以复习了：点课次旁的「复习」进入复习台；先用「🧠 出题」自测';
+    }
+  }
+  document.querySelectorAll('.flow-step').forEach((el) => {
+    const n = Number(el.dataset.step);
+    el.classList.toggle('active', n === step);
+    el.classList.toggle('done', n < step);
+  });
+  $('flowHint').textContent = hint;
+}
 $('btnCloseSettings').onclick = () => { $('settingsModal').hidden = true; };
 $('btnPickData').onclick = () => pickFolderInto('setDataDir', 'pickDataHint');
 $('btnPickNotes').onclick = () => pickFolderInto('setNotesDir', 'pickNotesHint');
@@ -1172,4 +1227,11 @@ function connectEvents() {
   connectEvents();
   loadLlmConfig();
   syncBrowserBtn();
+  // 第一次用：自动弹一次使用说明
+  try {
+    if (localStorage.getItem('wqppt_help_auto') !== '0' && !localStorage.getItem('wqppt_help_seen')) {
+      localStorage.setItem('wqppt_help_seen', '1');
+      setTimeout(openHelp, 700);
+    }
+  } catch { /* 忽略 */ }
 })();
