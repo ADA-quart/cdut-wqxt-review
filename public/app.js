@@ -698,7 +698,9 @@ async function loadFiles() {
     state.flow = { lessons: lessons.length, withMd: lessons.filter((l) => l.hasMd).length };
     updateFlowBar();
     if (tree.length === 0) {
-      box.innerHTML = '<p class="empty">还没有下载任何课件。<br>先点右上角「登录」，再到左边选一门课点「下载」。</p>';
+      box.innerHTML = state.loggedIn
+        ? '<p class="empty">还没有下载任何课件。<br>在左边选一门课，点「下载」整门，或点「课次」只挑一次课。</p>'
+        : '<p class="empty">还没有下载任何课件。<br>先点右上角「登录」，再到左边选一门课点「下载」。</p>';
       return;
     }
     box.innerHTML = '';
