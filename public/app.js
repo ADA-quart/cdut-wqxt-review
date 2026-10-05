@@ -430,9 +430,9 @@ function renderMdJobCard(j) {
   const stats = document.createElement('div');
   stats.className = 'job-stats';
   stats.textContent = j.status === 'running'
-    ? `进度 ${j.progress.done}/${j.progress.total || '…'}${j.progress.current ? ' · ' + j.progress.current : ''}`
+    ? `进度 ${j.progress.done}/${j.progress.total || '…'}${j.progress.current ? ' · ' + j.progress.current : ''}${j.parallel ? ' · 并行 ' + j.parallel + ' 页' : ''}`
     : j.status === 'done'
-      ? `完成：${j.outMd || ''}`
+      ? `完成：${j.outMd || ''}${j.parallel ? `（并行 ${j.parallel} 页）` : ''}`
       : j.status === 'error'
         ? (j.error || '失败')
         : j.status === 'canceled' ? '已取消' : '排队中…';
@@ -983,7 +983,10 @@ async function openSettings() {
   $('settingsModal').hidden = false;
   try {
     const m = await api('/md-config');
-    $('mdParallel').value = String(m.parallel || 1);
+    $('mdParallel').value = String(m.parallel ?? 'auto');
+    const r = m.resolved || {};
+    $('mdParallelHint').textContent = r.parallel ? `当前：自动会选 ${r.parallel} 页 · ${r.reason || ''}` : '';
+    $('mdParallelHint').className = 'test-result';
   } catch { /* 忽略 */ }
   try {
     const p = await api('/paths');
@@ -1059,8 +1062,11 @@ $('btnCloseSettings').onclick = () => { $('settingsModal').hidden = true; };
 $('btnSaveMd').onclick = async () => {
   const hint = $('mdParallelHint');
   try {
-    const r = await api('/md-config', { method: 'PUT', body: { parallel: Number($('mdParallel').value) } });
-    hint.textContent = `✓ 已保存：${r.parallel} 个任务并行`;
+    const v = $('mdParallel').value;
+    const r = await api('/md-config', { method: 'PUT', body: { parallel: v === 'auto' ? 'auto' : Number(v) } });
+    hint.textContent = r.parallel === 'auto'
+      ? `✓ 已设为自动：当前会并行 ${r.resolved?.parallel || 1} 页`
+      : `✓ 已保存：单节内并行 ${r.parallel} 页`;
     hint.className = 'test-result ok';
   } catch (e) {
     hint.textContent = '✗ ' + String(e.message || e).slice(0, 80);

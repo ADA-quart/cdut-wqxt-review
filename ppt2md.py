@@ -11,11 +11,13 @@
 """
 import argparse
 import json
+import threading
 import os
 import re
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
@@ -64,6 +66,10 @@ def _patch_layout_device():
     if getattr(DocYoloLayoutParser, "_device_patched", False):
         return
 
+    # 版面分析（DocLayout-YOLO / ultralytics）不是线程安全的：
+    # 并行转换时必须串行调用，否则同一页会被切出不同的版面（实测会把图表误当文字）
+    layout_lock = threading.Lock()
+
     orig_init = DocYoloLayoutParser.__init__
 
     def patched_init(self, *args, **kwargs):
@@ -71,13 +77,16 @@ def _patch_layout_device():
         try:
             predictor = getattr(self, "predictor", None)
             device = getattr(self, "device", None)
-            if predictor is None or not device or str(device) == "cpu":
+            if predictor is None:
                 return
             orig_predict = predictor.predict
+            use_gpu = bool(device) and str(device) != "cpu"
 
             def predict(*p_args, **p_kwargs):
-                p_kwargs.setdefault("device", device)
-                return orig_predict(*p_args, **p_kwargs)
+                if use_gpu:
+                    p_kwargs.setdefault("device", device)
+                with layout_lock:
+                    return orig_predict(*p_args, **p_kwargs)
 
             predictor.predict = predict
         except Exception:
@@ -148,6 +157,22 @@ def build_pdf(images, pdf_path: Path):
         doc.close()
 
 
+def convert_one_page(p2t, img, i, page_dir, assets_name):
+    """转换单页 → (页码, 文件名, markdown 文本, 耗时秒)。异常由调用方处理。"""
+    ts = time.time()
+    page = p2t.recognize_page(str(img), return_text=True)
+    md = page.to_markdown(out_dir=str(page_dir))
+    # to_markdown 生成的 figures/ 路径替换成相对 md 的 posix 路径
+    import re as _re
+    rel_prefix = f'{assets_name}/p{i:04d}/figures/'
+    md = _re.sub(r'figures[\\/]', rel_prefix, md)
+    try:
+        (page_dir / 'output.md').unlink(missing_ok=True)
+    except OSError:
+        pass
+    return i, img.name, md.strip(), time.time() - ts
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", help="课次图片目录")
@@ -158,6 +183,7 @@ def main():
     ap.add_argument("--json", action="store_true", help="逐行输出 JSON 进度（供后端解析）")
     ap.add_argument("--no-pdf", action="store_true", help="不生成课件 PDF、不插入翻页链接")
     ap.add_argument("--dedup", action="store_true", help="先清洗（空白帧/渐进重复），并生成人工复核页面")
+    ap.add_argument("--parallel", type=int, default=1, help="单节内并行转换的页数（1=串行；显卡没跑满时可设 2~3 提速）")
     args = ap.parse_args()
 
     emit = make_emitter(args.json)
@@ -231,34 +257,53 @@ def main():
     parts = [f"# {src.name}\n"]
     t0 = time.time()
     ok = 0
-    for i, img in enumerate(images, 1):
-        ts = time.time()
-        page_dir = assets_dir / f"p{i:04d}"
-        try:
-            page = p2t.recognize_page(str(img), return_text=True)
-            md = page.to_markdown(out_dir=str(page_dir))
-        except Exception as e:  # 单张失败不中断整批
-            emit({"type": "skip", "i": i, "total": len(images), "name": img.name, "error": str(e)},
-                 f"[!] {img.name} 失败: {e}")
-            continue
-        # to_markdown 生成了 <page_dir>/figures/xxx.jpg 与 <page_dir>/output.md
-        # 单次正则替换 figures/ 或 figures\ 为相对 md 文件的 posix 路径（避免重复替换）
-        import re as _re
-        rel_prefix = f"{assets_dir.name}/p{i:04d}/figures/"
-        md = _re.sub(r"figures[\\/]", rel_prefix, md)
-        try:
-            (page_dir / "output.md").unlink(missing_ok=True)
-        except OSError:
-            pass
-        parts.append(f"\n<!-- page {i}: {img.name} -->\n")
+    parallel = max(1, min(int(getattr(args, 'parallel', 1) or 1), 6))
+    if parallel > 1:
+        emit({"type": "parallel", "n": parallel}, f"[i] 单节内并行：{parallel} 页同时转换")
+
+    results = {}   # 页码 -> (文件名, markdown)
+    finished = 0
+    total = len(images)
+
+    def record(i, name, md, secs):
+        nonlocal ok, finished
+        results[i] = (name, md)
+        ok += 1
+        finished += 1
+        emit(
+            {"type": "progress", "i": finished, "done": finished, "total": total,
+             "page": i, "name": name, "secs": round(secs, 1)},
+            f"  [{finished}/{total}] {name} ({secs:.1f}s)",
+        )
+
+    if parallel <= 1:
+        for i, img in enumerate(images, 1):
+            try:
+                page_dir = assets_dir / f"p{i:04d}"
+                record(*convert_one_page(p2t, img, i, page_dir, assets_dir.name))
+            except Exception as e:  # 单张失败不中断整批
+                emit({"type": "skip", "i": i, "total": total, "name": img.name, "error": str(e)},
+                     f"[!] {img.name} 失败: {e}")
+    else:
+        with ThreadPoolExecutor(max_workers=parallel) as ex:
+            futures = {
+                ex.submit(convert_one_page, p2t, img, i, assets_dir / f"p{i:04d}", assets_dir.name): (i, img)
+                for i, img in enumerate(images, 1)
+            }
+            for fut in as_completed(futures):
+                i, img = futures[fut]
+                try:
+                    record(*fut.result())
+                except Exception as e:
+                    emit({"type": "skip", "i": i, "total": total, "name": img.name, "error": str(e)},
+                         f"[!] {img.name} 失败: {e}")
+
+    for i in sorted(results):
+        name, md = results[i]
+        parts.append(f"\n<!-- page {i}: {name} -->\n")
         if pdf_path is not None:
             parts.append(f"📄 [[{pdf_path.name}#page={i}|第 {i} 页]]\n")
-        parts.append(md.strip() + "\n")
-        ok += 1
-        emit(
-            {"type": "progress", "i": i, "total": len(images), "name": img.name, "secs": round(time.time() - ts, 1)},
-            f"  [{i}/{len(images)}] {img.name} ({time.time()-ts:.1f}s)",
-        )
+        parts.append(md + "\n")
 
     out_path.write_text("\n".join(parts), encoding="utf-8")
     emit(

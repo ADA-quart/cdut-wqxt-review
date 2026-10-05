@@ -35,6 +35,7 @@ import {
 import { publicConfig, saveConfig, loadConfig } from './config.mjs';
 import { streamChat } from './chat.mjs';
 import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
+import { autoParallel } from './gpu.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
@@ -286,16 +287,17 @@ app.post('/api/dedup-decisions', asyncRoute(async (req, res) => {
 
 // ---------- LLM 配置与文档操作（纠错 / 总结） ----------
 
-/** 转 MD 相关配置（并行度） */
-app.get('/api/md-config', (_req, res) => {
+/** 转 MD 相关配置（并行度：auto 或 1~4） */
+app.get('/api/md-config', asyncRoute(async (_req, res) => {
   const cfg = loadConfig();
-  res.json({ parallel: cfg.md?.parallel || 1 });
-});
+  res.json({ parallel: cfg.md?.parallel ?? 'auto', resolved: await autoParallel() });
+}));
 
 app.put('/api/md-config', asyncRoute(async (req, res) => {
-  const parallel = Math.min(Math.max(Number(req.body?.parallel) || 1, 1), 3);
+  const raw = req.body?.parallel;
+  const parallel = raw === 'auto' ? 'auto' : Math.min(Math.max(Number(raw) || 1, 1), 4);
   saveConfig({ md: { parallel } });
-  res.json({ parallel });
+  res.json({ parallel, resolved: await autoParallel() });
 }));
 
 app.get('/api/llm-config', (_req, res) => res.json(publicConfig()));

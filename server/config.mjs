@@ -26,7 +26,7 @@ const DEFAULTS = {
     defaultMode: 'text', // text | visionCloud | visionLocal
   },
   // 转 MD（Pix2Text）并行任务数：1 个任务约 6~7GB 显存，按显卡容量调
-  md: { parallel: 1 },
+  md: { parallel: 'auto' },   // 'auto' = 按显存自动，或 1~4
 };
 
 function readFile() {
@@ -106,7 +106,9 @@ export function saveConfig(patch = {}) {
   // 转 MD 并行数（1~3）
   const mdPatch = patch.md;
   if (mdPatch && typeof mdPatch === 'object' && mdPatch.parallel !== undefined) {
-    next.md = { ...(current.md || DEFAULTS.md), parallel: Math.min(Math.max(Number(mdPatch.parallel) || 1, 1), 3) };
+    const v = mdPatch.parallel;
+    const parallel = v === 'auto' ? 'auto' : Math.min(Math.max(Number(v) || 1, 1), 4);
+    next.md = { ...(current.md || DEFAULTS.md), parallel };
   }
 
   // 目录配置（PPT 数据目录 / 笔记目录）

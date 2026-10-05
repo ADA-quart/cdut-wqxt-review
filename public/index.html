@@ -271,14 +271,16 @@
       </section>
 
       <section class="profile-section">
-        <h4>② 转 MD 并行数</h4>
-        <p class="hint">每个转换任务约占 6~7GB 显存。16GB 显卡可设 2 并行提速；8GB 笔记本卡保持 1，否则会爆显存。</p>
+        <h4>② 转 MD 并行页数（单节内）</h4>
+        <p class="hint">同一节课的 PPT 页之间并行转换（课与课之间仍串行）。<b>默认「自动」</b>：按当前空闲显存算能并行几页（实测模型基座约 6.2G、每多一页约 1G，并留 1.5G 余量）。版面分析会自动串行，保证结果和逐页转换完全一致。</p>
         <div class="test-row">
-          <label class="field compact"><span>并行任务数</span>
+          <label class="field compact"><span>单节内并行页数</span>
             <select id="mdParallel">
-              <option value="1">1（默认，最稳）</option>
-              <option value="2">2（≥12GB 显存）</option>
-              <option value="3">3（≥20GB 显存）</option>
+              <option value="auto">自动（按显存，推荐）</option>
+              <option value="1">1（逐页，最稳）</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
             </select>
           </label>
           <button class="btn tiny" id="btnSaveMd">保存</button>

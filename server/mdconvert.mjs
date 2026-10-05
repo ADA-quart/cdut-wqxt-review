@@ -15,6 +15,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ROOT_DIR, ensureInside, ensureDir } from './paths.mjs';
 import { loadConfig } from './config.mjs';
+import { autoParallel } from './gpu.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -25,16 +26,26 @@ let nextJobId = 1;
 const pendingJobs = [];
 let running = 0;
 
-function parallelLimit() {
-  try {
-    return Math.min(Math.max(Number(loadConfig().md?.parallel) || 1, 1), 3);
-  } catch {
-    return 1;
+/**
+ * 单节内并行页数（传给 ppt2md.py --parallel）。
+ * config.md.parallel = 'auto' 时按显存/CPU 自动算（实测每页约 1GB 显存）。
+ */
+async function resolveParallel(job) {
+  let raw = 'auto';
+  try { raw = loadConfig().md?.parallel ?? 'auto'; } catch { /* 忽略 */ }
+  if (raw === 'auto' || raw === 0 || raw == null) {
+    const auto = await autoParallel();
+    job.parallel = auto.parallel;
+    job.log.push(`并行：自动 → ${auto.parallel} 页（${auto.reason}）`);
+    return auto.parallel;
   }
+  const n = Math.min(Math.max(Number(raw) || 1, 1), 4);
+  job.parallel = n;
+  return n;
 }
 
 function pump() {
-  const max = parallelLimit();
+  const max = 1;   // 任务串行
   while (running < max && pendingJobs.length > 0) {
     const job = pendingJobs.shift();
     running += 1;
@@ -101,6 +112,7 @@ function publicMdJob(j) {
     finishedAt: j.finishedAt,
     progress: j.progress,      // { done, total, current }
     device: j.device,
+    parallel: j.parallel || null,
     outMd: j.outMd,            // 相对笔记目录的 md 路径
     outMdUrl: j.outMdUrl,      // 可直接打开的 /notes/... 地址
     pdf: j.pdfRel,             // 相对笔记目录的课件 PDF 路径
@@ -190,6 +202,7 @@ async function runMdJob(job) {
     ? path.join(NOTES_DIR, parts[0], `${parts[1]}.md`)
     : null;
   if (outMdPath) ensureDir(path.dirname(outMdPath));
+  const parallelPages = await resolveParallel(job);
   job.status = 'running';
   job.startedAt = Date.now();
   emit(job);
@@ -198,7 +211,7 @@ async function runMdJob(job) {
     const child = spawn(
       tool.python,
       [
-        '-u', tool.script, absDir, '--json', '--device', job.device,
+        '-u', tool.script, absDir, '--json', '--device', job.device, '--parallel', String(parallelPages),
         ...(outMdPath ? ['--out', outMdPath] : []),
         ...(job.dedup ? ['--dedup'] : []),
       ],
@@ -264,8 +277,10 @@ async function runMdJob(job) {
     child.stdout.on('data', consume);
     child.stderr.on('data', (chunk) => {
       // 记录非进度噪声的最后一行，便于排查
-      const text = chunk.toString('utf8').trim();
-      if (text && !text.includes('%|')) job.log.push(text.slice(0, 200));
+      // 过滤 tqdm 进度条等噪声（`it/s`、`?it`、终端控制符），只留真正的报错
+      const text = chunk.toString('utf8').replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').trim();
+      const noise = /it\/s|\?it\[|%\||\\r/.test(text);
+      if (text && !noise && !text.includes('%|')) job.log.push(text.slice(0, 200));
     });
 
     child.on('error', (e) => {
