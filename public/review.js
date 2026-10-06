@@ -973,10 +973,10 @@ async function handleSummarize() {
   const old = btn.textContent;
   btn.textContent = '整理中…';
   try {
-    await runLlmJob({ op: 'summarize', dir }, { label: '「整理重点」' });
+    await runLlmJob({ op: 'summarize', dir }, { label: '「快速摘要」' });
     await reloadMd();
     $('mdScroll').scrollTo({ top: 0, behavior: 'smooth' });
-    toast('重点已整理完成，已插入笔记顶部（可在 Obsidian / ima 中直接使用）');
+    toast('快速摘要已写入原文顶部（切「原文」可看；生成深度笔记时会自动同步同一份重点）');
   } catch (e) {
     toast('整理失败：' + String(e.message || e), false);
   } finally {
@@ -985,19 +985,18 @@ async function handleSummarize() {
   }
 }
 
-async function handleFixMath() {
-  const btn = $('btnFixMath');
+async function handlePolish() {
+  const btn = $('btnPolish');
   btn.disabled = true;
   const old = btn.textContent;
-  btn.textContent = '检查中…';
+  btn.textContent = '校订中…';
   try {
-    const job = await runLlmJob({ op: 'fixmath', dir }, { label: '「修公式」' });
+    const job = await runLlmJob({ op: 'polish', dir }, { label: '「校订」' });
     await reloadMd();
-    const fixed = job.result ? (job.result.fixed || 0) : 0;
-    const broken = job.result ? (job.result.broken || 0) : 0;
-    toast(broken === 0 ? '本页公式都能正常解析 ✅' : `公式修复完成：${fixed}/${broken} 条已修好（原文件备份为 .math-backup.md）`);
+    const r = job.resultData || {};
+    toast(`校订完成：纠错 ${r.pages || 0} 页（保留原文 ${r.kept || 0} 页），修复公式 ${r.fixed || 0}/${r.broken || 0} 条；备份为 .ocr-backup.md / .math-backup.md`);
   } catch (e) {
-    toast('修公式失败：' + String(e.message || e), false);
+    toast('校订失败：' + String(e.message || e), false);
   } finally {
     btn.disabled = false;
     btn.textContent = old;
@@ -1411,7 +1410,7 @@ function setupEvents() {
     renderLeftPane();
     try { localStorage.setItem('wqppt_view:' + dir, 'raw'); } catch { /* 忽略 */ }
   };
-  $('btnFixMath').onclick = handleFixMath;
+  $('btnPolish').onclick = handlePolish;
   $('btnAudit').onclick = () => handleAudit(false);
   $('btnCloseAudit').onclick = () => { $('auditDrawer').hidden = true; };
   $('btnRerunAudit').onclick = () => handleAudit(true);

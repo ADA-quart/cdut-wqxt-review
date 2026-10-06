@@ -617,11 +617,16 @@ async function runFixMath(job) {
   return { checked: all.length, broken: broken.length, fixed: fixes.length };
 }
 
-/**
- * 生成「给人看的笔记」：<课次>.note.md
- * 特点：按页分块（不按字符瞎切）→ 每块产出带页码引用的小节，
- * 引用格式沿用 [[xxx.pdf#page=N|N]]，复习页点击即可跳到对应 PPT 页。
- */
+/** 校订：一次点按依次完成「纠错」（OCR 错字）与「修公式」（KaTeX 解析不了的）两步修订。 */
+async function runPolish(job) {
+  job.log.push('校订第 1/2 步：纠错（OCR 错字）');
+  const a = await runProofread(job);
+  if (job.canceled) return { pages: a.pages, kept: a.kept, checked: 0, broken: 0, fixed: 0 };
+  job.log.push('校订第 2/2 步：修公式');
+  const b = await runFixMath(job);
+  job.log.push(`校订完成：纠错 ${a.pages} 页（保留原文 ${a.kept} 页）；公式 ${b.checked} 条中修复 ${b.fixed}/${b.broken} 条`);
+  return { pages: a.pages, kept: a.kept, checked: b.checked, broken: b.broken, fixed: b.fixed };
+}
 /**
  * 生成「有思考的深度笔记」：<课次>.note.md
  * 三遍加工：
@@ -835,6 +840,23 @@ ${digest.trim()}
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
   fs.writeFileSync(notePath, head + note + '\n', 'utf8');
+
+  // 把「本课脉络 + 课末必记」同步回原文 md 顶部（upsert llm-summary 块），两处重点保持一致
+  try {
+    const summaryBlock = `<!-- llm-summary:start -->\n${digest.trim()}\n<!-- llm-summary:end -->\n\n`;
+    let mdText = fs.readFileSync(mdPath, 'utf8');
+    if (/<!-- llm-summary:start -->/.test(mdText)) {
+      mdText = mdText.replace(/<!-- llm-summary:start -->[\s\S]*?<!-- llm-summary:end -->\n?/, summaryBlock);
+    } else {
+      const firstPage = mdText.indexOf('<!-- page ');
+      mdText = firstPage > 0 ? mdText.slice(0, firstPage) + summaryBlock + mdText.slice(firstPage) : summaryBlock + mdText;
+    }
+    fs.writeFileSync(mdPath, mdText, 'utf8');
+    job.log.push('重点已同步到原文顶部（llm-summary 块）');
+  } catch (e) {
+    job.log.push('重点同步失败：' + String(e?.message || e).slice(0, 60));
+  }
+
   const cov = coverageReport(pages, note);
   job.log.push(`覆盖自检：${cov.covered}/${cov.total} 页被引用（💭 讲解行不带角标，不参与审计核对）`);
 
@@ -1410,6 +1432,7 @@ function publicJob(j) {
     outMd: j.outMd,
     scope: j.scope || null,
     result: j.resultRel || null,
+    resultData: j.resultData || null,
     usage: j.usage,
     error: j.error,
     log: j.log.slice(-8),
@@ -1430,7 +1453,7 @@ export function getLlmJob(id) {
 }
 
 export function createLlmJob({ op, dir, mode, scope }) {
-  if (!['proofread', 'summarize', 'weave', 'fixmath', 'note', 'audit'].includes(op)) throw new Error(`不支持的操作：${op}`);
+  if (!['proofread', 'summarize', 'weave', 'fixmath', 'polish', 'note', 'audit'].includes(op)) throw new Error(`不支持的操作：${op}`);
   const relDir = String(dir || '').replace(/^[/\\]+/, '');
   let absDir = null;
   let mdPath = null;
@@ -1515,11 +1538,14 @@ export function createLlmJob({ op, dir, mode, scope }) {
           ? await runSummarize(job)
           : op === 'fixmath'
             ? await runFixMath(job)
-            : op === 'note'
-              ? await runNote(job)
-              : op === 'audit'
-                ? await runAudit(job)
-                : await runWeave(job);
+            : op === 'polish'
+              ? await runPolish(job)
+              : op === 'note'
+                ? await runNote(job)
+                : op === 'audit'
+                  ? await runAudit(job)
+                  : await runWeave(job);
+      job.resultData = r;
       if (job.canceled) {
         job.status = 'canceled';
       } else {
@@ -1528,6 +1554,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
         if (op === 'proofread') job.log.push(`完成：${r.pages} 页，保留原文 ${r.kept} 页；${tok}`);
         else if (op === 'summarize') job.log.push(`完成：分 ${r.chunks} 块提取并汇总；${tok}`);
         else if (op === 'fixmath') job.log.push(`完成：检查 ${r.checked} 条公式，修复 ${r.fixed}/${r.broken} 条；${tok}`);
+        else if (op === 'polish') job.log.push(`完成：纠错 ${r.pages} 页（保留原文 ${r.kept} 页）+ 公式 ${r.checked} 条（修复 ${r.fixed}/${r.broken}）；${tok}`);
         else if (op === 'note') job.log.push(`完成：${r.pages} 页原文 → ${r.chunks} 段笔记（${r.note}）；${tok}`);
         else if (op === 'audit') job.log.push('完成：覆盖 ' + r.covered + '/' + r.pages + ' 页；条目 OK ' + r.ok + ' / 部分 ' + r.partial + ' / 不支持 ' + r.unsupported + ' / 需看图 ' + r.figure + (r.fixed ? ' / 已修正 ' + r.fixed : '') + '；' + tok);
         else if (job.scope === 'all') job.log.push(`完成：${r.courses} 门课，识别关联 ${r.related} 对；${tok}`);

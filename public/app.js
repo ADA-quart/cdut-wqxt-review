@@ -784,9 +784,9 @@ function renderTreeLevel(nodes, level) {
 
         const proof = document.createElement('button');
         proof.className = 'btn tiny';
-        proof.textContent = '纠错';
-        proof.title = '用 LLM 修正 OCR 错别字（公式与链接不动）';
-        proof.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startLlmJob(node, 'proofread', proof); };
+        proof.textContent = '校订';
+        proof.title = '一次完成：OCR 错字纠错 + 修复 KaTeX 解析不了的公式（分别备份 .ocr-backup.md / .math-backup.md）';
+        proof.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startLlmJob(node, 'polish', proof); };
         summary.appendChild(proof);
 
         const sum = document.createElement('button');
@@ -899,7 +899,7 @@ async function startLlmJob(node, op, btn) {
   btn.textContent = '提交中…';
   try {
     const r = await api('/llm-jobs', { method: 'POST', body: { op, dir: node.rel, mode } });
-    const label = op === 'proofread' ? '纠错' : '总结';
+    const label = op === 'polish' ? '校订' : op === 'proofread' ? '纠错' : '总结';
     if (r.job && r.job.reused) {
       toast(`${node.name} 的「${label}」已在跑（#${r.job.id}），等它完成就行`, 'ok');
     } else {

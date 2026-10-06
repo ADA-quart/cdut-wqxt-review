@@ -28,8 +28,8 @@
       <input id="searchInput" class="search-input" type="search" placeholder="全库搜索 Ctrl+K" autocomplete="off">
       <div class="search-results" id="searchResults" hidden></div>
     </div>
-    <button class="btn" id="btnSummarize" title="LLM 整理这节课的重点，写回笔记顶部">整理重点</button>
-    <button class="btn" id="btnFixMath" title="扫描本页笔记里 KaTeX 解析不了的公式（OCR 识别坏的），让 AI 逐条修好后写回">修公式</button>
+    <button class="btn" id="btnSummarize" title="轻量快速摘要：把本节重点写进原文 md 顶部（不生成完整笔记）；要完整深度笔记请点「生成笔记」">快速摘要</button>
+    <button class="btn" id="btnPolish" title="一次完成两步修订：① OCR 错字纠错（备份 .ocr-backup.md）② 修复 KaTeX 解析不了的公式（备份 .math-backup.md）">校订 md</button>
     <button class="btn primary" id="btnMakeNote" title="用 AI 把原文整理成带页码引用的复习笔记（左栏显示的就是它）">生成笔记</button>
     <button class="btn" id="btnAudit" title="检查笔记质量：①有没有页漏进笔记（本地检查，不花钱）②逐条和课件原文核对是否一致③把与原文不符的表述自动改对（AI 自己的补充内容保留；原版备份 .note-backup.md）（调用 AI，约 1-2 分钟）">质量审计</button>
     <button class="btn" id="btnCopyMd">复制 Markdown</button>
