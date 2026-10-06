@@ -593,3 +593,40 @@ details.note-sec > summary::before {
 }
 details.note-sec[open] > summary::before { content: '▾'; }
 details.note-sec > summary:hover { color: var(--brand); }
+
+/* ---------- 质量审计（笔记徽章 + 审计抽屉） ---------- */
+li.audit-partial,
+li.audit-unsupported,
+li.audit-figure {
+  border-radius: 6px;
+  padding: 4px 8px 4px 10px;
+  margin-left: -10px;
+}
+li.audit-partial { border-left: 3px solid #e8a33d; background: rgba(232, 163, 61, .10); }
+li.audit-unsupported { border-left: 3px solid #d64541; background: rgba(214, 69, 65, .10); }
+li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230, .10); }
+.audit-badge { margin-left: 6px; cursor: help; font-size: 12px; }
+.audit-row { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0; }
+.audit-tag { flex: none; font-size: 12px; padding: 1px 8px; border-radius: 10px; margin-top: 2px; }
+.audit-tag.warn { background: #fdf1dd; color: #9a6a1f; }
+.audit-tag.info { background: #e8f2fd; color: #2c6db0; }
+.audit-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.audit-chip { border: 1px solid var(--line); background: #fff; border-radius: 8px; font-size: 12px; padding: 2px 8px; cursor: pointer; color: var(--ink-2); }
+.audit-chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+.audit-ok { color: #2f8a4c; font-size: 12.5px; margin: 6px 0; }
+.audit-skip { font-size: 12px; margin: 6px 0; }
+.audit-stats { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12.5px; margin: 4px 0 10px; }
+.audit-stats .ok { color: #2f8a4c; }
+.audit-stats .warn { color: #9a6a1f; }
+.audit-stats .bad { color: #c0392b; }
+.audit-stats .info { color: #2c6db0; }
+.audit-items { display: flex; flex-direction: column; gap: 8px; }
+.audit-item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; cursor: pointer; }
+.audit-item:hover { border-color: var(--brand); }
+.audit-item.partial { border-left: 3px solid #e8a33d; }
+.audit-item.unsupported { border-left: 3px solid #d64541; }
+.audit-item.figure { border-left: 3px solid #4091e6; }
+.audit-item-head { font-weight: 600; margin-bottom: 3px; }
+.audit-item-text { color: var(--ink-2); line-height: 1.6; }
+.audit-item-reason { color: #9a6a1f; margin-top: 4px; font-size: 12px; }
+.audit-note { font-size: 12px; margin-top: 10px; }

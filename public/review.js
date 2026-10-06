@@ -11,6 +11,7 @@ const courseName = dirParts[dirParts.length - 2] || courseDir;
 const state = {
   md: '',
   note: null,     // AI 整理的复习笔记（左栏默认显示它）
+  audit: null,    // 质量审计结果（<课次>.audit.json）
   view: 'note',   // note | raw
   pages: [],        // [{ n, name }] 顺序 = PDF 页序
   pageIndex: 0,
@@ -166,6 +167,7 @@ function renderLeftPane() {
   resolveMdAssets(container);
   markMathErrors(container);
   decorateNote(container);
+  applyAuditMarks(container);
   container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = "_blank"; a.rel = "noreferrer"; });
 }
 
@@ -216,6 +218,14 @@ async function loadNote() {
   try {
     const r = await fetch(noteUrl(`${dir}.note.md`), { cache: 'no-store' });
     if (r.ok) state.note = await r.text();
+  } catch { /* 没有就没有 */ }
+}
+
+async function loadAudit() {
+  state.audit = null;
+  try {
+    const r = await fetch(noteUrl(`${dir}.audit.json`), { cache: 'no-store' });
+    if (r.ok) state.audit = await r.json();
   } catch { /* 没有就没有 */ }
 }
 
@@ -868,6 +878,7 @@ async function reloadMd() {
   if (!r.ok) throw new Error(`重新读取 Markdown 失败：HTTP ${r.status}`);
   state.md = await r.text();
   await loadNote();
+  await loadAudit();
   state.view = state.note ? 'note' : 'raw';
   renderLeftPane();
   buildPages();
@@ -907,6 +918,108 @@ async function handleFixMath() {
     toast(broken === 0 ? '本页公式都能正常解析 ✅' : `公式修复完成：${fixed}/${broken} 条已修好（原文件备份为 .math-backup.md）`);
   } catch (e) {
     toast('修公式失败：' + String(e.message || e), false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+/** 审计结果：把 ⚠️/❌/🔍 徽章贴到左侧笔记的对应条目上 */
+function applyAuditMarks(container) {
+  const audit = state.audit;
+  if (!audit || !Array.isArray(audit.items) || !audit.items.length) return;
+  const icon = { partial: '⚠️', unsupported: '❌', figure: '🔍' };
+  const lis = [...container.querySelectorAll('li')];
+  if (!lis.length) return;
+  const stripMath = (s) => String(s || '').replace(/\$\$[\s\S]*?\$\$/g, '').replace(/\$[^$\n]*\$/g, '');
+  const norm = (s) => String(s || '').replace(/[^\p{L}\p{N}]+/gu, '');
+  // 公式渲染后 KaTeX 的 textContent 会重复（MathML + HTML + 源码），匹配时把公式整块移除
+  const liTextOf = (el) => {
+    const c = el.cloneNode(true);
+    c.querySelectorAll('.katex, .katex-display, .math-broken').forEach((x) => x.remove());
+    return c.textContent;
+  };
+  for (const it of audit.items) {
+    const mark = icon[it.verdict];
+    if (!mark) continue;
+    const head = norm(stripMath(it.text)).slice(0, 10);
+    if (!head) continue;
+    const li = lis.find((el) => !el.querySelector('.audit-badge') && norm(liTextOf(el)).includes(head));
+    if (!li) continue;
+    li.classList.add('audit-' + it.verdict);
+    const b = document.createElement('span');
+    b.className = 'audit-badge';
+    b.textContent = mark;
+    b.title = it.reason || '';
+    li.appendChild(b);
+  }
+}
+
+/** 渲染审计抽屉内容 */
+function renderAuditPanel() {
+  const box = $('auditBody');
+  const a = state.audit;
+  if (!a) {
+    box.innerHTML = '<p class="empty">还没有审计结果。点顶部「质量审计」开始。</p>';
+    return;
+  }
+  const cov = a.coverage || {};
+  const st = a.stats || {};
+  const chips = (list) => (list || []).map((g) =>
+    `<button class="audit-chip" data-page="${g.n}" title="${escapeHtml(g.text || '')}">第 ${g.n} 页</button>`).join(' ');
+  const label = { partial: '⚠️ 部分支持', unsupported: '❌ 原文不支持', figure: '🔍 需看图核实' };
+  const bad = (a.items || []).filter((it) => it.verdict && it.verdict !== 'ok');
+  box.innerHTML = [
+    `<h4>① 覆盖检查 <span class="muted">（笔记引用了 ${cov.covered === undefined ? '?' : cov.covered} / ${cov.total === undefined ? '?' : cov.total} 页）</span></h4>`,
+    (cov.gaps || []).length
+      ? `<div class="audit-row"><span class="audit-tag warn">有文字但没进笔记</span><div class="audit-chips">${chips(cov.gaps)}</div></div>`
+      : '<p class="audit-ok">✓ 所有有文字的页都进了笔记</p>',
+    (cov.picOnly || []).length
+      ? `<div class="audit-row"><span class="audit-tag info">图片页，建议翻一眼</span><div class="audit-chips">${chips(cov.picOnly)}</div></div>`
+      : '',
+    (cov.noText || []).length ? `<p class="audit-skip muted">无实质内容、自动忽略：${cov.noText.map((n) => 'p' + n).join('、')}</p>` : '',
+    '<h4>② 忠实度核对 <span class="muted">（逐条对照课件原文）</span></h4>',
+    `<div class="audit-stats"><span class="ok">✓ ${st.ok || 0} 条一致</span><span class="warn">⚠️ ${st.partial || 0} 条部分支持</span><span class="bad">❌ ${st.unsupported || 0} 条不支持</span><span class="info">🔍 ${st.figure || 0} 条需看图</span></div>`,
+    bad.length
+      ? `<div class="audit-items">${bad.map((it) => `
+        <div class="audit-item ${it.verdict}" data-page="${(it.pages || [])[0] || ''}">
+          <div class="audit-item-head">${label[it.verdict] || it.verdict} <span class="muted">· 第 ${(it.pages || []).join('、')} 页</span></div>
+          <div class="audit-item-text">${escapeHtml(it.text)}</div>
+          ${it.reason ? `<div class="audit-item-reason">${escapeHtml(it.reason)}</div>` : ''}
+        </div>`).join('')}</div>`
+      : '<p class="audit-ok">✓ 所有条目都能在课件原文里找到支持</p>',
+    '<p class="muted audit-note">审计由 AI 辅助，可能有误判，看到 ⚠️/❌ 请点条目跳去核对原文。</p>',
+  ].join('');
+  box.querySelectorAll('.audit-chip[data-page]').forEach((el) => {
+    el.onclick = () => { $('auditDrawer').hidden = true; jumpToPage(Number(el.dataset.page)); };
+  });
+  box.querySelectorAll('.audit-item[data-page]').forEach((el) => {
+    el.onclick = () => { if (el.dataset.page) { $('auditDrawer').hidden = true; jumpToPage(Number(el.dataset.page)); } };
+  });
+}
+
+/** 质量审计：没有结果就跑一次，有结果就打开抽屉 */
+async function handleAudit(force) {
+  if (state.audit && !force) {
+    renderAuditPanel();
+    $('auditDrawer').hidden = false;
+    return;
+  }
+  const btn = $('btnAudit');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '审计中…';
+  $('auditDrawer').hidden = true;
+  try {
+    await runLlmJob({ op: 'audit', dir }, { label: '「质量审计」' });
+    await loadAudit();
+    renderLeftPane();
+    renderAuditPanel();
+    $('auditDrawer').hidden = false;
+    const st = (state.audit && state.audit.stats) || {};
+    toast(`审计完成：✓ ${st.ok || 0} · ⚠️ ${st.partial || 0} · ❌ ${st.unsupported || 0} · 🔍 ${st.figure || 0}`);
+  } catch (e) {
+    toast('审计失败：' + String(e.message || e), false);
   } finally {
     btn.disabled = false;
     btn.textContent = old;
@@ -1067,6 +1180,9 @@ function setupEvents() {
   $('tabNote').onclick = () => { state.view = 'note'; renderLeftPane(); };
   $('tabRaw').onclick = () => { state.view = 'raw'; renderLeftPane(); };
   $('btnFixMath').onclick = handleFixMath;
+  $('btnAudit').onclick = () => handleAudit(false);
+  $('btnCloseAudit').onclick = () => { $('auditDrawer').hidden = true; };
+  $('btnRerunAudit').onclick = () => handleAudit(true);
   $('btnWeaveCourse').onclick = () => handleWeave('course');
   $('btnWeaveAll').onclick = () => handleWeave('all');
   $('btnChain').onclick = () => {
@@ -1678,6 +1794,7 @@ async function markCardBadges() {
   }
 
   await loadNote();
+  await loadAudit();
   state.view = state.note ? 'note' : 'raw';
   renderLeftPane();
   buildPages();

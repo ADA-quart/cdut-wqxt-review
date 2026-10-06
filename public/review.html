@@ -25,6 +25,7 @@
     <button class="btn" id="btnSummarize" title="LLM 整理这节课的重点，写回笔记顶部">整理重点</button>
     <button class="btn" id="btnFixMath" title="扫描本页笔记里 KaTeX 解析不了的公式（OCR 识别坏的），让 AI 逐条修好后写回">修公式</button>
     <button class="btn primary" id="btnMakeNote" title="用 AI 把原文整理成带页码引用的复习笔记（左栏显示的就是它）">生成笔记</button>
+    <button class="btn" id="btnAudit" title="检查笔记质量：①有没有页漏进笔记（本地检查，不花钱）②逐条和课件原文核对是否一致（调用 AI，约 1-2 分钟）">质量审计</button>
     <button class="btn" id="btnCopyMd">复制 Markdown</button>
     <a class="btn" id="linkDownloadMd" download>下载 md</a>
     <a class="btn" id="linkOpenMd" target="_blank">原文</a>
@@ -141,6 +142,17 @@
     <h4>反链 · 谁引用了本课</h4>
     <div id="backLinks" class="links"><p class="empty">加载中…</p></div>
   </div>
+</aside>
+
+<aside class="drawer" id="auditDrawer" hidden>
+  <div class="drawer-head">
+    <h3>🛡 质量审计</h3>
+    <div class="tools">
+      <button class="btn tiny" id="btnRerunAudit" title="重新跑一遍（会再次调用 AI）">重跑</button>
+      <button class="btn tiny" id="btnCloseAudit">×</button>
+    </div>
+  </div>
+  <div class="drawer-body" id="auditBody"><p class="empty">还没有审计结果。点顶部「质量审计」开始。</p></div>
 </aside>
 
 <aside class="drawer" id="tagsDrawer" hidden>

@@ -227,6 +227,25 @@ function stripForSummary(md) {
     .trim();
 }
 
+/** 覆盖率自检：笔记引用了哪些页 / 原文里哪些页没被引用（按内容量分三类） */
+function coverageReport(pages, noteText) {
+  const covered = new Set([...String(noteText).matchAll(/#page=(\d+)/g)].map((m) => Number(m[1])));
+  const gaps = [];
+  const picOnly = [];
+  const noText = [];
+  let coveredCount = 0;
+  for (const p of pages) {
+    const n = Number(p.n);
+    if (covered.has(n)) { coveredCount += 1; continue; }
+    const text = stripForSummary(p.body).replace(/\s+/g, ' ').trim();
+    const imgs = imageRefs(p.body).length;
+    if (text.length >= 40) gaps.push({ n, text: text.slice(0, 80), imgs });
+    else if (imgs >= 1) picOnly.push({ n, text: text.slice(0, 40), imgs });
+    else noText.push(n);
+  }
+  return { total: pages.length, covered: coveredCount, gaps, picOnly, noText };
+}
+
 function chunkText(text, maxLen = 6000) {
   const paras = text.split(/\n{2,}/).filter(Boolean);
   const chunks = [];
@@ -636,12 +655,161 @@ async function runNote(job) {
   const head = `# ${lessonName} · 复习笔记\n\n> 由课件原文整理，每条要点末尾的角标是对应页码，点击可跳到右侧课件。\n\n`;
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
   fs.writeFileSync(notePath, head + note + '\n', 'utf8');
+  const cov = coverageReport(pages, note);
+  job.log.push(`覆盖自检：${cov.covered}/${cov.total} 页被引用` + ((cov.gaps.length || cov.picOnly.length) ? `；未引用页 ${[...cov.gaps, ...cov.picOnly].map((g) => g.n).join('、')}（点「质量审计」看详情）` : ''));
+
   job.noteRel = path.relative(NOTES_DIR, notePath).split(path.sep).join('/');
 
   job.progress.done = job.progress.total;
   job.progress.current = '完成';
   emit(job);
   return { chunks: chunks.length, pages: pages.length, note: job.noteRel };
+}
+
+/**
+ * 质量审计（两层）：
+ *  ① 覆盖检查（本地、不花 token）：哪些页有内容但一条笔记都没引用；
+ *  ② 忠实度核对（LLM）：把笔记条目按页和课件原文逐条比对，判定
+ *     ok / partial / unsupported / figure（依赖图片，需人工看图）。
+ * 结果写 <课次>.audit.json（复习页读它画标记）+ <课次>.audit.md（人读报告）。
+ */
+async function runAudit(job) {
+  const mdPath = job.mdPath;
+  const notePath = mdPath.replace(/\.md$/i, '.note.md');
+  if (!fs.existsSync(notePath)) throw new Error('还没有 AI 笔记——先点「生成笔记」再做质量审计');
+  const original = fs.readFileSync(mdPath, 'utf8');
+  const noteText = fs.readFileSync(notePath, 'utf8');
+  const ctx = courseContext(job);
+  const lessonName = path.basename(mdPath).replace(/\.md$/i, '');
+  if (ctx.course) job.log.push('提示词上下文：《' + ctx.course + '》');
+
+  // ① 覆盖检查（本地）
+  const { pages } = splitPages(original);
+  if (!pages.length) throw new Error('原文里没有页标记（先转 MD）');
+  const cov = coverageReport(pages, noteText);
+  job.log.push(`覆盖检查：${cov.covered}/${cov.total} 页被笔记引用；有文字但未覆盖 ${cov.gaps.length} 页，图片页未覆盖 ${cov.picOnly.length} 页`);
+
+  // ② 忠实度核对：笔记里带页码角标的条目，按「首引用页」分组
+  const pageMap = new Map(pages.map((p) => [Number(p.n), stripForSummary(p.body)]));
+  const items = [];
+  let noRef = 0;
+  for (const line of noteText.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('- ')) continue;
+    const refs = [...t.matchAll(/#page=(\d+)/g)].map((m) => Number(m[1]));
+    if (!refs.length) { noRef += 1; continue; }
+    items.push({ text: t.slice(2).replace(/\[\[[^\]]*\]\]/g, '').trim(), pages: refs });
+  }
+  if (noRef) job.log.push(`有 ${noRef} 条笔记没带页码角标，未参与核对`);
+  if (!items.length) throw new Error('笔记里没有可核对的条目（都没有页码角标）');
+
+  const groups = new Map();
+  items.forEach((it) => {
+    const key = it.pages[0];
+    if (!groups.has(key)) groups.set(key, { page: key, items: [] });
+    groups.get(key).items.push(it);
+  });
+  const groupList = [...groups.values()];
+
+  job.progress.total = groupList.length + 1;
+  job.progress.done = 1;
+  job.progress.current = '覆盖检查完成，开始核对条目';
+  emit(job);
+
+  const limit = loadConfig().llm.concurrency || 3;
+  let done = 1;
+  await mapLimit(groupList, limit, async (g) => {
+    if (job.canceled) return;
+    const src = String(pageMap.get(g.page) || '').slice(0, 3200);
+    const list = g.items.map((it, k) => `${k + 1}. ${it.text}`).join('\n');
+    try {
+      const { content, usage } = await chatRetry(
+        [
+          {
+            role: 'system',
+            content: `你是严谨的课件笔记审计员。逐条核对「笔记条目」是否被「课件原文」支持。
+判定等级（只能四选一）：
+- ok：原文完全支持（允许同义改写；数字、公式、术语一致）
+- partial：部分支持——有原文没有的细节、过度推测、或丢了关键限定条件
+- unsupported：原文不支持或与之矛盾
+- figure：该条依赖图片/图表才能核实，纯文本无法判断
+从严对待「原文没有而笔记自己添加的内容」；reason 用中文、不超过 30 字。
+只输出 JSON：{"items":[{"i":1,"verdict":"ok","reason":"..."}]}，i 是条目序号。`,
+          },
+          {
+            role: 'user',
+            content: `【第 ${g.page} 页课件原文】\n${src}\n\n【待核对的笔记条目】\n${list}`,
+          },
+        ],
+        { profile: 'text', temperature: 0.1, maxTokens: 1500 },
+      );
+      addUsage(job, usage);
+      const parsed = parseJsonLoose(content);
+      const by = new Map((parsed.items || []).map((x) => [Number(x.i), x]));
+      g.items.forEach((it, k) => {
+        const r = by.get(k + 1) || {};
+        it.verdict = ['ok', 'partial', 'unsupported', 'figure'].includes(r.verdict) ? r.verdict : 'figure';
+        it.reason = String(r.reason || '').slice(0, 60);
+      });
+    } catch (e) {
+      job.log.push(`第 ${g.page} 页核对失败：` + String(e?.message || e).slice(0, 60));
+      g.items.forEach((it) => { it.verdict = 'figure'; it.reason = '核对失败，建议人工查看'; });
+    }
+    done += 1;
+    job.progress.done = done;
+    job.progress.current = `核对第 ${g.page} 页`;
+    emit(job);
+  });
+
+  const stats = { ok: 0, partial: 0, unsupported: 0, figure: 0 };
+  const outItems = items.map((it) => {
+    if (stats[it.verdict] === undefined) it.verdict = 'figure';
+    stats[it.verdict] += 1;
+    return { text: it.text.slice(0, 140), pages: it.pages, verdict: it.verdict, reason: it.reason || '' };
+  });
+
+  const report = {
+    generatedAt: Date.now(),
+    lesson: lessonName,
+    coverage: cov,
+    stats,
+    items: outItems,
+  };
+  const jsonPath = mdPath.replace(/\.md$/i, '.audit.json');
+  fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf8');
+  job.resultRel = relOf(jsonPath);
+
+  // 人类可读报告
+  const lines = [
+    `# ${lessonName} · 质量审计报告`,
+    '',
+    `> ${new Date(report.generatedAt).toLocaleString('zh-CN')} · AI 辅助审计，可能误判，请以课件原文为准`,
+    '',
+    '## ① 覆盖检查',
+    '',
+    `- 笔记引用：**${cov.covered}/${cov.total}** 页`,
+  ];
+  if (cov.gaps.length) lines.push(`- ⚠️ 有文字但没进笔记：${cov.gaps.map((g) => `第 ${g.n} 页`).join('、')}`);
+  if (cov.picOnly.length) lines.push(`- 🖼 图片页未被引用（建议翻原 PPT 确认）：${cov.picOnly.map((g) => `第 ${g.n} 页`).join('、')}`);
+  if (cov.noText.length) lines.push(`- 无实质内容、自动忽略：${cov.noText.map((n) => `第 ${n} 页`).join('、')}`);
+  lines.push('', '## ② 忠实度核对', '', `- ✅ ${stats.ok} 条 · ⚠️ ${stats.partial} 条 · ❌ ${stats.unsupported} 条 · 🔍 ${stats.figure} 条`);
+  const bad = outItems.filter((it) => it.verdict !== 'ok');
+  if (bad.length) {
+    lines.push('', '### 需要注意的条目', '');
+    for (const it of bad) {
+      const mark = { partial: '⚠️', unsupported: '❌', figure: '🔍' }[it.verdict] || '?';
+      lines.push(`- ${mark} ${it.text}（第 ${it.pages.join('、')} 页）—— ${it.reason}`);
+    }
+  } else {
+    lines.push('', '全部条目都能在课件原文里找到支持。');
+  }
+  lines.push('');
+  fs.writeFileSync(mdPath.replace(/\.md$/i, '.audit.md'), lines.join('\n'), 'utf8');
+
+  job.progress.done = job.progress.total;
+  job.progress.current = '完成';
+  emit(job);
+  return { pages: cov.total, covered: cov.covered, gaps: cov.gaps.length + cov.picOnly.length, ok: stats.ok, partial: stats.partial, unsupported: stats.unsupported, figure: stats.figure };
 }
 
 /** 课程内知识链：生成课程索引 + 每个课次的「相关课次」块 */
@@ -862,7 +1030,7 @@ export function getLlmJob(id) {
 }
 
 export function createLlmJob({ op, dir, mode, scope }) {
-  if (!['proofread', 'summarize', 'weave', 'fixmath', 'note'].includes(op)) throw new Error(`不支持的操作：${op}`);
+  if (!['proofread', 'summarize', 'weave', 'fixmath', 'note', 'audit'].includes(op)) throw new Error(`不支持的操作：${op}`);
   const relDir = String(dir || '').replace(/^[/\\]+/, '');
   let absDir = null;
   let mdPath = null;
@@ -887,6 +1055,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
       if (!lessonName) throw new Error('dir 需要是「课程/课次」');
       mdPath = path.join(NOTES_DIR, courseName, `${lessonName}.md`);
       if (!fs.existsSync(mdPath)) throw new Error('还没有 Markdown——先对该课次「转 MD」');
+      if (op === 'audit' && !fs.existsSync(mdPath.replace(/\.md$/i, '.note.md'))) throw new Error('还没有 AI 笔记——先点「生成笔记」再做质量审计');
       title = lessonName;
     }
   }
@@ -940,7 +1109,9 @@ export function createLlmJob({ op, dir, mode, scope }) {
             ? await runFixMath(job)
             : op === 'note'
               ? await runNote(job)
-              : await runWeave(job);
+              : op === 'audit'
+                ? await runAudit(job)
+                : await runWeave(job);
       if (job.canceled) {
         job.status = 'canceled';
       } else {
@@ -950,6 +1121,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
         else if (op === 'summarize') job.log.push(`完成：分 ${r.chunks} 块提取并汇总；${tok}`);
         else if (op === 'fixmath') job.log.push(`完成：检查 ${r.checked} 条公式，修复 ${r.fixed}/${r.broken} 条；${tok}`);
         else if (op === 'note') job.log.push(`完成：${r.pages} 页原文 → ${r.chunks} 段笔记（${r.note}）；${tok}`);
+        else if (op === 'audit') job.log.push('完成：覆盖 ' + r.covered + '/' + r.pages + ' 页；条目 OK ' + r.ok + ' / 部分 ' + r.partial + ' / 不支持 ' + r.unsupported + ' / 需看图 ' + r.figure + '；' + tok);
         else if (job.scope === 'all') job.log.push(`完成：${r.courses} 门课，识别关联 ${r.related} 对；${tok}`);
         else job.log.push(`完成：${r.lessons} 个课次，关联 ${r.related} 对；${tok}`);
         job.progress.done = job.progress.total;
