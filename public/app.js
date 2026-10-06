@@ -649,7 +649,7 @@ async function fetchLlmModels(key) {
     const body = { profile: key, baseUrl: $(f.base).value.trim() };
     const typedKey = $(f.key).value;
     if (typedKey) body.apiKey = typedKey; // 还没保存时也能先拉一把
-    const { models } = await api('/llm-models', { method: 'POST', body });
+    const { models, caps } = await api('/llm-models', { method: 'POST', body });
     const list = $(ui.list);
     list.innerHTML = '';
     for (const m of models) {
@@ -659,7 +659,10 @@ async function fetchLlmModels(key) {
     }
     if (models.length) {
       if (!$(f.model).value.trim()) $(f.model).value = models[0];
-      span.textContent = `✓ 找到 ${models.length} 个模型：${models.slice(0, 4).join('、')}${models.length > 4 ? '…' : ''}（点模型输入框可选）`;
+      const capText = caps && caps.context
+        ? ` · 上下文 ${(caps.context / 1024).toFixed(0)}K / 最大输出 ${caps.output ? (caps.output / 1024).toFixed(0) + 'K' : '?'}（${caps.source}）`
+        : '';
+      span.textContent = `✓ 找到 ${models.length} 个模型：${models.slice(0, 4).join('、')}${models.length > 4 ? '…' : ''}${capText}`;
       span.className = 'test-result ok';
     } else {
       span.textContent = '接口没返回模型，手动填写即可';

@@ -39,7 +39,7 @@ import { autoParallel } from './gpu.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
-  testProfile, expandQuery, generateQaCards, feynmanReview, listModels,
+  testProfile, expandQuery, generateQaCards, feynmanReview, listModels, getCaps,
   events as llmEvents,
 } from './llm.mjs';
 import {
@@ -300,6 +300,16 @@ app.put('/api/md-config', asyncRoute(async (req, res) => {
   res.json({ parallel, resolved: await autoParallel() });
 }));
 
+/** 当前模型的能力（上下文 / 最大输出），能自动获取就返回真值 */
+app.get('/api/llm-limits', (req, res) => {
+  const profile = String(req.query.profile || 'text');
+  try {
+    res.json(getCaps(profile));
+  } catch (e) {
+    res.status(400).json({ error: String(e.message || e) });
+  }
+});
+
 app.get('/api/llm-config', (_req, res) => res.json(publicConfig()));
 
 app.put('/api/llm-config', asyncRoute(async (req, res) => {
@@ -335,8 +345,9 @@ app.post('/api/llm-models', asyncRoute(async (req, res) => {
   const override = {};
   if (baseUrl) override.baseUrl = String(baseUrl).trim();
   if (apiKey) override.apiKey = String(apiKey);
-  const models = await listModels(profile || 'text', override);
-  res.json({ models });
+  const key = profile || 'text';
+  const models = await listModels(key, override);
+  res.json({ models, caps: getCaps(key) });
 }));
 
 app.post('/api/llm-jobs', asyncRoute(async (req, res) => {

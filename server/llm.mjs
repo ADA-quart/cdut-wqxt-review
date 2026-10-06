@@ -31,6 +31,36 @@ const MODE_LABELS = { text: '纯文本', visionCloud: '图片上云', visionLoca
 /**
  * @returns {Promise<{content: string, usage: {prompt_tokens?: number, completion_tokens?: number}|null}>}
  */
+/**
+ * 模型能力（上下文 / 最大输出）：能从 /v1/models 拿到就用真值，否则查内置表，
+ * 再不行给保守默认值。key = baseUrl|model。
+ */
+const modelCaps = new Map();
+
+function guessCaps(model) {
+  const m = String(model || '').toLowerCase();
+  if (/deepseek/.test(m)) return { context: 65536, output: 8192, source: '内置估算' };
+  if (/gpt-4o|gpt-4\.1|o[13]/.test(m)) return { context: 128000, output: 16384, source: '内置估算' };
+  if (/qwen/.test(m)) return { context: 131072, output: 8192, source: '内置估算' };
+  if (/glm/.test(m)) return { context: 128000, output: 4096, source: '内置估算' };
+  if (/kimi|moonshot/.test(m)) return { context: 262144, output: 8192, source: '内置估算' };
+  if (/llama|mistral|qwen2\.5vl/.test(m)) return { context: 32768, output: 4096, source: '内置估算' };
+  return { context: 32768, output: 4096, source: '默认值' };
+}
+
+export function rememberCaps(base, model, caps) {
+  if (!base || !model) return;
+  modelCaps.set(base + '|' + model, { ...caps, at: Date.now() });
+}
+
+export function getCaps(profile = 'text') {
+  const prof = getProfile(profile);
+  const key = String(prof.baseUrl || '').replace(/\/+$/, '') + '|' + prof.model;
+  const hit = modelCaps.get(key);
+  if (hit) return hit;
+  return guessCaps(prof.model);
+}
+
 async function chat(messages, { profile = 'text', temperature, maxTokens } = {}) {
   const cfg = loadConfig().llm;
   const prof = getProfile(profile);
@@ -45,7 +75,8 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
     temperature: temperature ?? cfg.temperature ?? 0.2,
     stream: false,
   };
-  if (maxTokens) body.max_tokens = maxTokens;
+  const caps = getCaps(profile);
+  if (maxTokens) body.max_tokens = caps.output ? Math.min(maxTokens, caps.output) : maxTokens;
 
   let res;
   try {
@@ -65,14 +96,45 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
     const text = await res.text().catch(() => '');
     throw new Error(`LLM 接口 ${res.status}：${text.slice(0, 300)}`);
   }
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
+  let data = await res.json();
+  let message = data?.choices?.[0]?.message;
+  let content = message?.content;
+
+  // 推理型模型（deepseek-v4-pro / deepseek-flash 等）：思考也吃 max_tokens，
+  // 预算给小了会"只有思考、没有正文"。这里自动翻倍重试，最多放到 8000。
+  if (!String(content || '').trim() && message?.reasoning_content) {
+    const curTokens = Number(body.max_tokens) || 1200;
+    const bigger = Math.min(curTokens * 3, caps.output || 8000);
+    if (bigger > curTokens) {
+      body.max_tokens = bigger;
+      let res2;
+      try {
+        res2 = await fetch(`${base}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${prof.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(180000),
+        });
+      } catch (err) {
+        throw describeFetchError(err, { base, label, timeoutSec: 180 });
+      }
+      if (res2.ok) {
+        data = await res2.json();
+        message = data?.choices?.[0]?.message;
+        content = message?.content;
+      }
+    }
+  }
+
   if (!content || !String(content).trim()) {
     const finish = data?.choices?.[0]?.finish_reason;
-    const reasoning = data?.choices?.[0]?.message?.reasoning_content;
+    const reasoning = message?.reasoning_content;
     throw new Error(
       finish === 'length' || reasoning
-        ? '模型返回为空（推理型模型把 token 用在了思考上，请调大 max_tokens 或换非推理模型）'
+        ? '模型返回为空（推理型模型把 token 用在思考上了；该模型上限：输出 ' + (caps.output || '?') + ' tokens，已按上限重试仍为空，建议换非推理模型或降低思考强度）'
         : 'LLM 返回为空',
     );
   }
@@ -921,6 +983,20 @@ export async function listModels(profile = 'text', override = {}) {
   }
   const data = await res.json().catch(() => null);
   const raw = data?.data ?? data?.models ?? [];
+  // 顺手记录上下文 / 最大输出（DeepSeek 返回 context_window/max_output_tokens，
+  // OpenRouter 返回 context_length/top_provider.max_completion_tokens，vLLM 返回 max_model_len）
+  for (const m of raw) {
+    if (!m || typeof m !== 'object') continue;
+    const ctx = m.context_window ?? m.context_length ?? m.max_model_len ?? m.top_provider?.context_length;
+    const out = m.max_output_tokens ?? m.max_completion_tokens ?? m.top_provider?.max_completion_tokens ?? m.max_tokens;
+    if (ctx || out) {
+      rememberCaps(String(prof.baseUrl || '').replace(/\/+$/, ''), m.id || m.name, {
+        context: Number(ctx) || null,
+        output: Number(out) || null,
+        source: 'models 接口',
+      });
+    }
+  }
   const models = raw
     .map((m) => (typeof m === 'string' ? m : m?.id || m?.name))
     .filter((s) => typeof s === 'string' && s.trim())
