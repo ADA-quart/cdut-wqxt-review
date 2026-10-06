@@ -692,11 +692,14 @@ async function runNote(job) {
         {
           role: 'system',
           content: `你是《${ctx.course || '本课程'}》的助教。下面给你课件第 ${from}-${to} 页的 OCR 原文（可能有零星错字）。
-第一遍：把它**消化后整理**成一份「知识整理稿」（后面还要基于它写正式笔记，所以不要照抄原句）：
-1) 先用一句话说清这一部分在讲什么；
-2) 把关键概念 / 公式 / 结论逐条整理清楚，每条末尾标注来源页码，格式 [[${lessonName}.pdf#page=N|N]]（N 必须来自上方「[第 N 页]」）；
-3) 说明知识点之间关系（因果 / 对比 / 流程 / 条件），以及能看出的考点、易错点；
-4) 只整理原文里有的内容：明显 OCR 错字可以改顺，但不要编造。
+第一遍：按 SOAR 笔记框架把它**消化后整理**成一份「知识整理稿」（后面还要基于它写正式笔记，不要照抄原句）：
+1) Select（筛选）：只留关键——概念 / 公式 / 结论 / 对比 / 流程；先用一句话说清这一部分在讲什么；
+2) Organize + Associate（组织与关联）：把要点按知识逻辑组织，并显式写出相互关系（因果 / 对比 / 流程 / 条件）；
+3) Regulate（调节）：标出能看出的考点、易错点和理解难点；
+4) **逐页覆盖**：这一块里的每一页都至少有一条整理内容（哪怕该页只有图表，也要写一条「该页在讲什么」）；
+5) **题目**：课件里的习题 / 例题要原样保留题干和选项，前面标【题目】；
+6) 每条关键内容末尾标注来源页码，格式 [[${lessonName}.pdf#page=N|N]]（N 必须来自上方「[第 N 页]」）；
+7) 只整理原文里有的内容：明显 OCR 错字可以改顺，但不要编造。
 直接输出 Markdown 文本（可用小标题和「- 」列表），不要前言、不要代码块。`,
         },
         { role: 'user', content: body },
@@ -738,11 +741,11 @@ async function runNote(job) {
       [
         {
           role: 'system',
-          content: `你是《${ctx.course || '本课程'}》的学霸助教。下面是课件的「知识整理稿」${segments.length > 1 ? `（第 ${idx + 1}/${segments.length} 部分）` : ''}。请把它写成**有思考的复习笔记**：
-1) 按知识逻辑组织小节，标题用知识主题（### 开头），不要用「第几页」「第几块」这类标题；
-2) 每个小节先用 1-2 句讲清「核心结论 / 这节在讲什么」，再列关键要点（「- 」开头），每条末尾保留来源页码角标 [[${lessonName}.pdf#page=N|N]]（N 必须出现过）；
-3) 对重点内容加讲解：为什么成立、怎么用、容易和什么混淆——写成「- 💭 讲解：…」的行，**不带页码角标**；讲解要短，一条 1-2 句；
-4) 整理稿里有习题 / 例题的，补「参考答案（AI 推断）」和解析，用 <details><summary>先自己想，点开看答案</summary>……</details> 包起来；
+          content: `你是《${ctx.course || '本课程'}》的学霸助教。下面是课件的「知识整理稿」${segments.length > 1 ? `（第 ${idx + 1}/${segments.length} 部分）` : ''}。请按 SOAR 框架把它写成**有思考的复习笔记**：
+1) Organize（组织）：按知识逻辑重组小节（### 知识主题标题），不要按页码流水账，也不要用「第几页」「第几块」这类标题；每个小节先用 1-2 句讲清核心结论；
+2) Associate（关联）：显式写出与前面知识的联系、对比、适用条件——写成「- 💭 讲解：…」的行（为什么成立、怎么用、容易和什么混淆），**不带页码角标**，一条 1-2 句；
+3) 关键要点用「- 」开头，每条末尾保留来源页码角标 [[${lessonName}.pdf#page=N|N]]（N 必须出现过）；**整理稿里出现过的每一页，在成稿里至少要被引用一次**（合并条目时必须保留角标）；
+4) 整理稿里标了【题目】的，逐题处理：先原样给出题干和选项，然后紧跟 <details><summary>先自己想，点开看答案</summary>参考答案（AI 推断）+ 解析（为什么选它、其他选项错在哪）</details>；**每道【题目】都必须有一个 details 块**；
 5) 公式用 LaTeX（$…$）；不要代码块、不要前言；不要编造整理稿之外的知识。
 直接输出笔记正文（从 ### 开始），不要写全课总结（后面统一写）。`,
         },
@@ -761,6 +764,34 @@ async function runNote(job) {
   const sectionTexts = [];
   for (let i = 0; i < segments.length; i++) sectionTexts.push(await makeSection(segments[i], i));
   let note = sectionTexts.join('\n\n').trim();
+
+  // ---------- ②.5 覆盖自检 + 补漏（Self-Refine 式：发现遗漏页就定点补写） ----------
+  {
+    const coveredNow = new Set([...note.matchAll(/#page=(\d+)/g)].map((m) => Number(m[1])));
+    const missing = pages.filter((p) => !coveredNow.has(p.n));
+    if (missing.length) {
+      job.progress.total += 1;
+      const missText = missing.map((p) => `[第 ${p.n} 页]
+${p.text}`).join('\n\n').slice(0, 12000);
+      const { content: patch, usage: pUsage } = await chatRetry(
+        [
+          {
+            role: 'system',
+            content: `下面是《${ctx.course || '本课程'}》课件里**还没有写进复习笔记**的页面原文。请为每一页补 1-2 条要点（「- 」开头，末尾带 [[${lessonName}.pdf#page=N|N]] 角标）；如果该页主要是图片 / 图表，就写「第 N 页为图表页：……（对照课件查看）」，只依据给出的文字和页名，不要编造。
+输出格式：以「### 📌 补充要点（自动补漏）」开头，按页顺序逐条列出。`,
+          },
+          { role: 'user', content: missText },
+        ],
+        { profile: 'text', temperature: 0.2, maxTokens: 2500, thinking: 'off' },
+      );
+      addUsage(job, pUsage);
+      done += 1;
+      job.progress.current = `补漏 ${missing.length} 页`;
+      emit(job);
+      job.log.push(`覆盖补漏：为未覆盖的 ${missing.length} 页补写要点（${missing.map((p) => p.n).join('、')}）`);
+      note = note + '\n\n' + patch.trim();
+    }
+  }
 
   // ---------- ③ 本课脉络 + 课末必记 ----------
   const { content: digest, usage: dUsage } = await chatRetry(
