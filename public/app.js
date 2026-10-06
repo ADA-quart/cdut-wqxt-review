@@ -1,4 +1,4 @@
-/* 问渠学堂 PPT 下载器 — 前端逻辑（零依赖） */
+/* 清渠 — 前端逻辑（零依赖） */
 
 const $ = (id) => document.getElementById(id);
 const state = {

@@ -1,5 +1,5 @@
 /**
- * 问渠学堂复习工具 — Electron 桌面壳。
+ * 清渠 — Electron 桌面壳。
  *
  * 行为：
  *  - 启动时先探测本地服务（默认 3901）；没在跑就自己拉起 server/index.mjs
@@ -77,7 +77,7 @@ function createWindow() {
     height: 900,
     minWidth: 1080,
     minHeight: 680,
-    title: '问渠学堂复习工具',
+    title: '清渠',
     backgroundColor: '#f5f6f8',
     show: false,
     autoHideMenuBar: true,
@@ -120,7 +120,7 @@ async function boot() {
   if (!(await isOurServer())) {
     const ok = await startServer();
     if (!ok) {
-      dialog.showErrorBox('无法启动本地服务', `端口 ${PORT} 没有运行问渠学堂服务，且自动启动失败。\n请检查项目目录是否完整，或先运行项目里的启动脚本。`);
+      dialog.showErrorBox('无法启动本地服务', `端口 ${PORT} 没有运行清渠本地服务，且自动启动失败。\n请检查项目目录是否完整，或先运行项目里的启动脚本。`);
       app.quit();
       return;
     }

@@ -1995,7 +1995,7 @@ async function markCardBadges() {
 
 (async function init() {
   if (!dir) {
-    $('mdContent').innerHTML = '<p class="empty">缺少 dir 参数，请从下载器的课次列表进入「复习」。</p>';
+$('mdContent').innerHTML = '<p class="empty">缺少 dir 参数，请从主界面的课次列表进入「复习」。</p>';
     return;
   }
   $('lessonTitle').textContent = lessonName || dir;
@@ -2015,7 +2015,7 @@ async function markCardBadges() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     state.md = await r.text();
   } catch (e) {
-    $('mdContent').innerHTML = `<p class="empty">读取 Markdown 失败（${e.message}）。<br>如果这个课次还没转过 Markdown，请回下载器先点「转 MD」。</p>`;
+$('mdContent').innerHTML = `<p class="empty">读取 Markdown 失败（${e.message}）。<br>如果这个课次还没转过 Markdown，请回主界面先点「转 MD」。</p>`;
     return;
   }
 
