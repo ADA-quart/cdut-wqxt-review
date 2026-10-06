@@ -87,10 +87,10 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
         Authorization: `Bearer ${prof.apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(180000),
+      signal: AbortSignal.timeout(240000),
     });
   } catch (err) {
-    throw describeFetchError(err, { base, label, timeoutSec: 180 });
+    throw describeFetchError(err, { base, label, timeoutSec: 240 });
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -118,10 +118,10 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
           Authorization: `Bearer ${prof.apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(180000),
+        signal: AbortSignal.timeout(240000),
       });
     } catch (err) {
-      throw describeFetchError(err, { base, label, timeoutSec: 180 });
+      throw describeFetchError(err, { base, label, timeoutSec: 240 });
     }
     if (!res2.ok) break;
     data = await res2.json();
@@ -492,6 +492,40 @@ function parseJsonLoose(text) {
   return JSON.parse(t);
 }
 
+/** JSON 破损抢救（LLM 长输出常见：截断/未转义反斜杠）：
+ *  从文本里直接捞 {"point":"...","page":N} 对 */
+function salvagePoints(text) {
+  const out = [];
+  const push = (point, page) => {
+    const p = String(point || '').replace(/\\(.)/g, '$1').trim();
+    if (p) out.push({ point: p, page: Number(page) || 0 });
+  };
+  let m;
+  const reA = /"point"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"page"\s*:\s*(\d+)/g;
+  while ((m = reA.exec(text))) push(m[1], m[2]);
+  const reB = /"page"\s*:\s*(\d+)\s*,\s*"point"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+  while ((m = reB.exec(text))) push(m[2], m[1]);
+  return out;
+}
+
+/** JSON 破损抢救：从文本里直接捞 {"i":N,"status":"..."} 对 */
+function salvageItems(text) {
+  const out = [];
+  const re = /"i"\s*:\s*(\d+)\s*,\s*"status"\s*:\s*"([a-z]+)"/g;
+  let m;
+  while ((m = re.exec(text))) out.push({ i: Number(m[1]), status: m[2] });
+  return out;
+}
+
+/** JSON 破损抢救：{"i":N,"verdict":"...","reason":"..."} */
+function salvageVerdicts(text) {
+  const out = [];
+  const re = /"i"\s*:\s*(\d+)\s*,\s*"verdict"\s*:\s*"([a-z]+)"(?:\s*,\s*"reason"\s*:\s*"((?:[^"\\]|\\.)*)")?/g;
+  let m;
+  while ((m = re.exec(text))) out.push({ i: Number(m[1]), verdict: m[2], reason: (m[3] || '').replace(/\\(.)/g, '$1') });
+  return out;
+}
+
 function extractBlock(text, marker) {
   const re = new RegExp(`<!-- ${marker}:start -->[\\s\\S]*?<!-- ${marker}:end -->`);
   const m = re.exec(text);
@@ -711,7 +745,7 @@ async function runAudit(job) {
   });
   const groupList = [...groups.values()];
 
-  job.progress.total = groupList.length + 1;
+  job.progress.total = groupList.length + 3;
   job.progress.done = 1;
   job.progress.current = '覆盖检查完成，开始核对条目';
   emit(job);
@@ -744,8 +778,9 @@ async function runAudit(job) {
         { profile: 'text', temperature: 0.1, maxTokens: 1500 },
       );
       addUsage(job, usage);
-      const parsed = parseJsonLoose(content);
-      const by = new Map((parsed.items || []).map((x) => [Number(x.i), x]));
+      let ilist2;
+      try { ilist2 = parseJsonLoose(content).items || []; } catch { ilist2 = salvageVerdicts(content); }
+      const by = new Map(ilist2.map((x) => [Number(x.i), x]));
       g.items.forEach((it, k) => {
         const r = by.get(k + 1) || {};
         it.verdict = ['ok', 'partial', 'unsupported', 'figure'].includes(r.verdict) ? r.verdict : 'figure';
@@ -768,16 +803,150 @@ async function runAudit(job) {
     return { text: it.text.slice(0, 140), pages: it.pages, verdict: it.verdict, reason: it.reason || '' };
   });
 
+  // ③ 知识点清单：LLM 从课件原文提取「可自测的独立知识点」（分批，避免单次调用超时）
+  job.progress.current = '准备知识点清单';
+  emit(job);
+  const pointChunks = [];
+  {
+    let cur = [];
+    let size = 0;
+    for (const p of pages) {
+      const txt = pageMap.get(Number(p.n)) || '';
+      if (cur.length && (cur.length >= 12 || size + txt.length > 15000)) {
+        pointChunks.push(cur);
+        cur = [];
+        size = 0;
+      }
+      cur.push(p);
+      size += txt.length;
+    }
+    if (cur.length) pointChunks.push(cur);
+  }
+  job.progress.total = groupList.length + 2 + pointChunks.length;
+  emit(job);
+  let points = [];
+  await mapLimit(pointChunks, 2, async (chunk) => {
+    if (job.canceled) return;
+    const from = Number(chunk[0].n);
+    const to = Number(chunk[chunk.length - 1].n);
+    job.progress.current = `提取知识点（第 ${from}-${to} 页）`;
+    emit(job);
+    const body = chunk.map((p) => `[第 ${p.n} 页]\n${pageMap.get(Number(p.n)) || ''}`).join('\n\n');
+    try {
+      const { content, usage } = await chatRetry(
+        [
+          {
+            role: 'system',
+            content: `你是《${ctx.course || '本课程'}》的助教。从课件原文提取「知识点清单」：每条 = 一个可考试/可自测的独立知识点（概念、公式、结论、方法、现象解释等）。
+要求：
+1) 覆盖全部页面，宁多勿漏；完全重复的合并；
+2) 每条给出来源页码（取原文里的「[第 N 页]」标记）；
+3) point 用中文 15-40 字，公式保留 LaTeX；
+4) 本段最多 60 条。
+只输出 JSON：{"points":[{"point":"...","page":12}]}`,
+          },
+          { role: 'user', content: body },
+        ],
+        { profile: 'text', temperature: 0.1, maxTokens: 6000 },
+      );
+      addUsage(job, usage);
+      let plist;
+      try { plist = parseJsonLoose(content).points || []; } catch { plist = salvagePoints(content); }
+      const batch = plist
+        .map((p) => ({ point: String(p.point || '').trim(), page: Number(p.page) || 0 }))
+        .filter((p) => p.point);
+      points.push(...batch);
+      job.log.push(`第 ${from}-${to} 页：提取 ${batch.length} 个知识点`);
+    } catch (e) {
+      job.log.push(`第 ${from}-${to} 页知识点提取失败：` + String(e?.message || e).slice(0, 60));
+    }
+    job.progress.done += 1;
+    emit(job);
+  });
+  points.sort((a, b) => (a.page || 0) - (b.page || 0));
+
+  points = points.slice(0, 150);
+  if (points.length) job.log.push(`共提取 ${points.length} 个知识点`);
+
+  // ④ 覆盖判定：分批逐条判断笔记里有没有讲到（文本行输出，避免长 JSON 破损）
+  let knowledge = null;
+  if (points.length) {
+    const K_BATCH = 25;
+    const kStarts = [];
+    for (let s = 0; s < points.length; s += K_BATCH) kStarts.push(s);
+    job.progress.total = groupList.length + 1 + pointChunks.length + kStarts.length;
+    job.progress.current = '核对知识点覆盖';
+    emit(job);
+    const kStatus = new Array(points.length).fill('unknown');
+    await mapLimit(kStarts, 2, async (s) => {
+      if (job.canceled) return;
+      const slice = points.slice(s, s + K_BATCH);
+      try {
+        const { content, usage } = await chatRetry(
+          [
+            {
+              role: 'system',
+              content: `给定「知识点清单」和「笔记全文」，逐条判断笔记是否讲到了该知识点：
+- covered：笔记中有对应内容（允许换措辞）
+- partial：提到了但不完整或含糊
+- missing：笔记里完全没有
+输出格式：每行一条「编号 状态」，不要 JSON、不要解释。例如：
+1 covered
+2 missing
+3 partial`,
+            },
+            {
+              role: 'user',
+              content: `【知识点清单】\n${slice.map((p, i) => `${i + 1}. ${p.point}（第 ${p.page} 页）`).join('\n')}\n\n【笔记全文】\n${noteText.slice(0, 30000)}`,
+            },
+          ],
+          { profile: 'text', temperature: 0.1, maxTokens: 6000 },
+        );
+        addUsage(job, usage);
+        const re = /(\d+)\s*[,:：\s]\s*(covered|partial|missing)/gi;
+        let m;
+        while ((m = re.exec(content))) {
+          const k = Number(m[1]) - 1;
+          if (k >= 0 && k < slice.length) kStatus[s + k] = m[2].toLowerCase();
+        }
+      } catch (e) {
+        job.log.push(`知识点判定（第 ${s + 1}-${Math.min(s + K_BATCH, points.length)} 条）失败：` + String(e?.message || e).slice(0, 60));
+      }
+      job.progress.done += 1;
+      emit(job);
+    });
+    const kItems = points.map((p, i) => ({ ...p, status: kStatus[i] }));
+    const kStats = { covered: 0, partial: 0, missing: 0, unknown: 0 };
+    kItems.forEach((k) => { kStats[k.status] += 1; });
+    knowledge = { total: kItems.length, ...kStats, items: kItems };
+    job.log.push(`知识点核对：${kStats.covered}/${kItems.length} 已覆盖，${kStats.partial} 条不完整，${kStats.missing} 条缺失`);
+  }
+
   const report = {
     generatedAt: Date.now(),
     lesson: lessonName,
     coverage: cov,
     stats,
+    knowledge,
     items: outItems,
   };
   const jsonPath = mdPath.replace(/\.md$/i, '.audit.json');
   fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf8');
   job.resultRel = relOf(jsonPath);
+
+  // 知识点清单落盘（含覆盖状态），当复习大纲用
+  if (knowledge) {
+    const kMark = { covered: '✅', partial: '⚠️', missing: '❌', unknown: '·' };
+    const pl = [
+      `# ${lessonName} · 知识点清单`,
+      '',
+      `> AI 从课件提取的考点清单（共 ${knowledge.total} 条）；✅ 笔记已覆盖 · ⚠️ 不完整 · ❌ 缺失`,
+      '',
+      ...knowledge.items.map((p) => `- ${kMark[p.status] || '·'} ${p.point} [[${lessonName}.pdf#page=${p.page}|${p.page}]]`),
+      '',
+    ];
+    fs.writeFileSync(mdPath.replace(/\.md$/i, '.points.md'), pl.join('\n'), 'utf8');
+  }
 
   // 人类可读报告
   const lines = [

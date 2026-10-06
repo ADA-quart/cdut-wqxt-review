@@ -413,7 +413,7 @@ function readTree(dir, depth) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
-  const HIDDEN = /\.(dedup\.(json|html)|ocr-backup\.md|cards\.json)$/i;
+  const HIDDEN = /\.(dedup\.(json|html)|ocr-backup\.md|cards\.json|note\.marks\.json)$/i;
   return entries
     .filter((e) => !e.name.startsWith('.') && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
@@ -458,6 +458,26 @@ app.use('/vendor/marked', express.static(path.join(ROOT_DIR, 'node_modules/marke
 app.use('/vendor/katex', express.static(path.join(ROOT_DIR, 'node_modules/katex/dist')));
 
 // ---------- 复习工作台：对话 / 反链 / 课程索引 ----------
+
+// 笔记多色标记：读取走 /notes 静态文件，写入走这里
+app.post('/api/note-marks', asyncRoute(async (req, res) => {
+  const relDir = String(req.body?.dir || '').replace(/^[/\\]+/, '');
+  const marks = Array.isArray(req.body?.marks) ? req.body.marks : null;
+  if (!relDir || !marks) return res.status(400).json({ error: '缺少 dir 或 marks' });
+  const file = ensureInside(NOTES_DIR, path.join(NOTES_DIR, `${relDir}.note.marks.json`));
+  const ALLOWED = ['red', 'yellow', 'green', 'blue'];
+  const clean = marks
+    .filter((m) => m && Number.isInteger(m.i) && m.i >= 0 && ALLOWED.includes(m.color))
+    .map((m) => ({ i: m.i, head: String(m.head || '').slice(0, 24), color: m.color }))
+    .slice(0, 500);
+  if (!clean.length) {
+    try { fs.unlinkSync(file); } catch { /* 没有就算了 */ }
+  } else {
+    ensureDir(path.dirname(file));
+    fs.writeFileSync(file, JSON.stringify({ v: 1, marks: clean }), 'utf8');
+  }
+  res.json({ ok: true, count: clean.length });
+}));
 
 app.post('/api/chat', asyncRoute(async (req, res) => {
   const { messages, profile = 'text', temperature } = req.body || {};

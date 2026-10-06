@@ -630,3 +630,27 @@ li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230,
 .audit-item-text { color: var(--ink-2); line-height: 1.6; }
 .audit-item-reason { color: #9a6a1f; margin-top: 4px; font-size: 12px; }
 .audit-note { font-size: 12px; margin-top: 10px; }
+
+/* ---------- 笔记多色标记（荧光笔） ---------- */
+#mdContent li { position: relative; }
+.mark-picker {
+  position: absolute; right: 2px; top: 2px;
+  display: none; gap: 4px; align-items: center;
+  background: rgba(255,255,255,.95); border: 1px solid var(--line);
+  border-radius: 8px; padding: 2px 5px; z-index: 6;
+  box-shadow: 0 2px 6px rgba(0,0,0,.08);
+}
+#mdContent li:hover .mark-picker { display: inline-flex; }
+.mark-dot { width: 13px; height: 13px; border-radius: 50%; border: 1px solid rgba(0,0,0,.18); cursor: pointer; padding: 0; }
+.mark-dot.red { background: #e74c3c; }
+.mark-dot.yellow { background: #f1c40f; }
+.mark-dot.green { background: #27ae60; }
+.mark-dot.blue { background: #3498db; }
+#mdContent li.note-color-red { background: rgba(231, 76, 60, .13); }
+#mdContent li.note-color-yellow { background: rgba(241, 196, 15, .18); }
+#mdContent li.note-color-green { background: rgba(39, 174, 96, .13); }
+#mdContent li.note-color-blue { background: rgba(52, 152, 219, .13); }
+#mdContent li.note-color-red,
+#mdContent li.note-color-yellow,
+#mdContent li.note-color-green,
+#mdContent li.note-color-blue { border-radius: 6px; padding: 4px 8px 4px 10px; margin-left: -10px; }

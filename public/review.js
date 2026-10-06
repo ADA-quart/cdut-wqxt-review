@@ -12,6 +12,7 @@ const state = {
   md: '',
   note: null,     // AI 整理的复习笔记（左栏默认显示它）
   audit: null,    // 质量审计结果（<课次>.audit.json）
+  noteMarks: null, // 笔记多色标记 [{i, head, color}]
   view: 'note',   // note | raw
   pages: [],        // [{ n, name }] 顺序 = PDF 页序
   pageIndex: 0,
@@ -167,6 +168,7 @@ function renderLeftPane() {
   resolveMdAssets(container);
   markMathErrors(container);
   decorateNote(container);
+  applyNoteColors(container);
   applyAuditMarks(container);
   container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = "_blank"; a.rel = "noreferrer"; });
 }
@@ -879,6 +881,7 @@ async function reloadMd() {
   state.md = await r.text();
   await loadNote();
   await loadAudit();
+  await loadNoteMarks();
   state.view = state.note ? 'note' : 'raw';
   renderLeftPane();
   buildPages();
@@ -988,6 +991,18 @@ function renderAuditPanel() {
           ${it.reason ? `<div class="audit-item-reason">${escapeHtml(it.reason)}</div>` : ''}
         </div>`).join('')}</div>`
       : '<p class="audit-ok">✓ 所有条目都能在课件原文里找到支持</p>',
+    (a.knowledge ? [
+      `<h4>③ 知识点核对 <span class="muted">（${a.knowledge.covered || 0}/${a.knowledge.total || 0} 条已覆盖）</span></h4>`,
+      `<div class="audit-stats"><span class="ok">✅ ${a.knowledge.covered || 0} 覆盖</span><span class="warn">⚠️ ${a.knowledge.partial || 0} 不完整</span><span class="bad">❌ ${a.knowledge.missing || 0} 缺失</span></div>`,
+      ((a.knowledge.items || []).filter((k) => k.status !== 'covered').length
+        ? `<div class="audit-items">${(a.knowledge.items || []).filter((k) => k.status !== 'covered').map((k) => `
+          <div class="audit-item ${k.status === 'missing' ? 'unsupported' : 'partial'}" data-page="${k.page || ''}">
+            <div class="audit-item-head">${k.status === 'missing' ? '❌ 笔记没提' : '⚠️ 讲得不完整'} <span class="muted">· 第 ${k.page || '?'} 页</span></div>
+            <div class="audit-item-text">${escapeHtml(k.point)}</div>
+          </div>`).join('')}</div>`
+        : '<p class="audit-ok">✓ 全部知识点在笔记里都有对应内容</p>'),
+    ].join('') : ''),
+
     '<p class="muted audit-note">审计由 AI 辅助，可能有误判，看到 ⚠️/❌ 请点条目跳去核对原文。</p>',
   ].join('');
   box.querySelectorAll('.audit-chip[data-page]').forEach((el) => {
@@ -1024,6 +1039,83 @@ async function handleAudit(force) {
     btn.disabled = false;
     btn.textContent = old;
   }
+}
+
+// ---------- 笔记多色标记（荧光笔） ----------
+const MARK_COLORS = { red: '核心考点', yellow: '要背/公式', green: '已掌握', blue: '存疑待问' };
+
+async function loadNoteMarks() {
+  state.noteMarks = null;
+  try {
+    const r = await fetch(noteUrl(`${dir}.note.marks.json`), { cache: 'no-store' });
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data && Array.isArray(data.marks)) state.noteMarks = data.marks;
+  } catch { /* 没有就没有 */ }
+}
+
+/** note.md 里的条目行（与渲染后的 li 一一对应） */
+function noteLines() {
+  return String(state.note || '').split('\n')
+    .filter((l) => l.trim().startsWith('- '))
+    .map((l) => l.trim().slice(2));
+}
+
+/** 条目前 12 个有效字符：用于对账，笔记重生成后旧标记自动失效 */
+function markHead(text) {
+  return String(text || '')
+    .replace(/\$\$[\s\S]*?\$\$/g, '')
+    .replace(/\$[^$\n]*\$/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .slice(0, 12);
+}
+
+let markSaveTimer = null;
+function scheduleMarksSave() {
+  clearTimeout(markSaveTimer);
+  markSaveTimer = setTimeout(async () => {
+    try {
+      await fetch('/api/note-marks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir, marks: state.noteMarks || [] }),
+      });
+    } catch { /* 静默失败：下次改动会再存一次 */ }
+  }, 500);
+}
+
+/** 恢复已保存的颜色 + 给每条挂颜色选择器 */
+function applyNoteColors(container) {
+  const lis = [...container.querySelectorAll('li')];
+  const lines = noteLines();
+  if (!lis.length || lis.length !== lines.length) return;
+  const saved = new Map((state.noteMarks || []).map((m) => [m.i, m]));
+  lis.forEach((li, i) => {
+    const head = markHead(lines[i]);
+    const m = saved.get(i);
+    if (m && MARK_COLORS[m.color] && m.head === head) li.classList.add('note-color-' + m.color);
+    const picker = document.createElement('span');
+    picker.className = 'mark-picker';
+    picker.innerHTML = Object.keys(MARK_COLORS)
+      .map((c) => `<button type="button" class="mark-dot ${c}" data-color="${c}" title="${MARK_COLORS[c]}（再点一次取消）"></button>`)
+      .join('');
+    picker.addEventListener('click', (e) => {
+      const b = e.target.closest('.mark-dot');
+      if (!b) return;
+      e.stopPropagation();
+      const color = b.dataset.color;
+      const off = li.classList.contains('note-color-' + color);
+      for (const c of Object.keys(MARK_COLORS)) li.classList.remove('note-color-' + c);
+      const arr = (state.noteMarks || []).filter((x) => x.i !== i);
+      if (!off) {
+        arr.push({ i, head, color });
+        li.classList.add('note-color-' + color);
+      }
+      state.noteMarks = arr.sort((a, b2) => a.i - b2.i);
+      scheduleMarksSave();
+    });
+    li.appendChild(picker);
+  });
 }
 
 async function handleWeave(scope) {
@@ -1795,6 +1887,7 @@ async function markCardBadges() {
 
   await loadNote();
   await loadAudit();
+  await loadNoteMarks();
   state.view = state.note ? 'note' : 'raw';
   renderLeftPane();
   buildPages();
