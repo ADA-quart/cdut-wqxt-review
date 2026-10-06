@@ -307,7 +307,17 @@
       </section>
 
       <section class="profile-section">
-        <h4>④ 升级 / 退出</h4>
+        <h4>④ 回收站</h4>
+        <p class="hint">删除的课次先放到这里（按「课件与转换文件 / 学习记录」分类保存）。确认不再需要后可以彻底删除释放空间。</p>
+        <div id="trashList" class="trash-list"><p class="empty">（空）</p></div>
+        <div class="test-row">
+          <button class="btn tiny" id="btnTrashClear">清空回收站</button>
+          <span class="test-result" id="trashHint"></span>
+        </div>
+      </section>
+
+      <section class="profile-section">
+        <h4>⑤ 升级 / 退出</h4>
         <p class="hint">升级走 git（需要是 git clone 安装的）；退出会关闭服务与后台浏览器进程。</p>
         <div class="test-row">
           <button class="btn tiny" id="btnBrowser">显示浏览器</button>
@@ -326,6 +336,22 @@
     </div>
     <div class="modal-actions">
       <button class="btn ghost" id="btnCloseSettings">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 删除课次确认弹窗 -->
+<div class="modal-mask" id="delModal" hidden>
+  <div class="modal">
+    <h3>删除课次</h3>
+    <p class="hint" id="delTitle"></p>
+    <label class="chk"><input type="checkbox" id="delMedia" checked> 课件与转换文件（原图 / Markdown / PDF / 素材）<span class="test-result" id="delMediaInfo"></span></label>
+    <label class="chk"><input type="checkbox" id="delRecords"> 学习记录（整理稿 / 对话 / 复习卡 / 备份）<span class="test-result" id="delRecordsInfo"></span></label>
+    <p class="hint">删除的内容会移到回收站，可在「设置 → 回收站」里恢复；确认不要了再彻底删除。</p>
+    <p class="test-result" id="delHint"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="delCancel">取消</button>
+      <button class="btn danger" id="delConfirm">删除到回收站</button>
     </div>
   </div>
 </div>

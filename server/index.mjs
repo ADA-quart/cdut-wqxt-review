@@ -12,7 +12,7 @@ import { spawn, execFile } from 'node:child_process';
 import AdmZip from 'adm-zip';
 import {
   DOWNLOAD_DIR, DATA_DIR, NOTES_DIR, PUBLIC_DIR, ROOT_DIR,
-  ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf,
+  ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf, sanitizeName,
 } from './paths.mjs';
 import { checkLogin, login, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
@@ -1123,6 +1123,199 @@ app.post('/api/import', express.raw({ type: () => true, limit: '2048mb' }), asyn
   res.json({ ok: true, written, skipped, errors, paths: getPaths() });
 }));
 
+// ---------- 删除已下载（移入回收站，可恢复） ----------
+// 删除只做「搬家」：把选中的文件移动到数据目录下的 _回收站/<id>/，写入 meta.json，随时可还原。
+
+const trashRootOf = () => path.join(DATA_DIR, '_回收站');
+
+function sizeOfPath(abs) {
+  let total = 0;
+  const stack = [abs];
+  while (stack.length) {
+    const cur = stack.pop();
+    let st;
+    try { st = fs.lstatSync(cur); } catch { continue; }
+    if (st.isDirectory()) {
+      let kids = [];
+      try { kids = fs.readdirSync(cur); } catch { continue; }
+      for (const k of kids) stack.push(path.join(cur, k));
+    } else {
+      total += st.size;
+    }
+  }
+  return total;
+}
+
+function assertLessonKey(course, lesson) {
+  const bad = (s) => !s || s.includes('..') || s.includes('/') || s.includes('\\');
+  if (bad(course) || bad(lesson)) {
+    const err = new Error('课程 / 课次名不合法');
+    err.status = 400;
+    throw err;
+  }
+}
+
+/**
+ * 汇总某课次要删除的内容。
+ * slot='media'  课件与转换文件：原图目录、Markdown、PDF、_assets、清洗复核页
+ * slot='records' 学习记录：整理稿、对话、复习卡、备份、审计
+ */
+function collectLessonFiles(course, lesson) {
+  const out = [];
+  const seen = new Set();
+  const add = (root, rel, slot) => {
+    const rootDir = root === 'data' ? DATA_DIR : NOTES_DIR;
+    const abs = ensureInside(rootDir, path.join(rootDir, ...rel.split('/')));
+    const key = path.resolve(abs).toLowerCase();
+    if (seen.has(key)) return;
+    if (fs.existsSync(abs)) {
+      out.push({ root, rel, slot });
+      seen.add(key);
+    }
+  };
+  add('data', `${course}/${lesson}`, 'media');
+  add('data', `${course}/${lesson}.dedup.html`, 'media');
+  add('data', `${course}/${lesson}.dedup.json`, 'media');
+  add('data', `${course}/_回收站/${lesson}`, 'media');
+  add('data', `.review/${course}/${lesson}.json`, 'records');
+  let names = [];
+  try { names = fs.readdirSync(path.join(NOTES_DIR, course)); } catch { /* 没有笔记目录 */ }
+  for (const name of names) {
+    if (name === `${lesson}_assets`) { add('notes', `${course}/${name}`, 'media'); continue; }
+    if (!name.startsWith(`${lesson}.`)) continue;
+    const tail = name.slice(lesson.length).toLowerCase();
+    const isMedia = tail === '.md' || tail === '.pdf';
+    add('notes', `${course}/${name}`, isMedia ? 'media' : 'records');
+  }
+  return out;
+}
+
+function movePath(from, to) {
+  ensureDir(path.dirname(to));
+  try {
+    fs.renameSync(from, to);
+  } catch {
+    fs.cpSync(from, to, { recursive: true });
+    fs.rmSync(from, { recursive: true, force: true });
+  }
+}
+
+app.get('/api/trash/preview', asyncRoute(async (req, res) => {
+  const course = String(req.query.course || '').trim();
+  const lesson = String(req.query.lesson || '').trim();
+  assertLessonKey(course, lesson);
+  const files = collectLessonFiles(course, lesson);
+  const sum = { media: { size: 0, count: 0 }, records: { size: 0, count: 0 } };
+  for (const f of files) {
+    const rootDir = f.root === 'data' ? DATA_DIR : NOTES_DIR;
+    sum[f.slot].size += sizeOfPath(path.join(rootDir, ...f.rel.split('/')));
+    sum[f.slot].count += 1;
+  }
+  res.json(sum);
+}));
+
+app.post('/api/trash/remove', asyncRoute(async (req, res) => {
+  const course = String(req.body?.course || '').trim();
+  const lesson = String(req.body?.lesson || '').trim();
+  const wantMedia = req.body?.media !== false;
+  const wantRecords = req.body?.records === true;
+  assertLessonKey(course, lesson);
+  if (!wantMedia && !wantRecords) return res.status(400).json({ error: '没有选择要删除的内容' });
+
+  const files = collectLessonFiles(course, lesson)
+    .filter((f) => (f.slot === 'media' ? wantMedia : wantRecords));
+  if (!files.length) return res.status(404).json({ error: '没有找到可删除的内容（可能已经删过了）' });
+
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const id = `${stamp}_${sanitizeName(course)}_${sanitizeName(lesson)}`;
+  const box = path.join(trashRootOf(), id);
+  ensureDir(box);
+
+  const items = [];
+  const errors = [];
+  let size = 0;
+  for (const f of files) {
+    const rootDir = f.root === 'data' ? DATA_DIR : NOTES_DIR;
+    const from = path.join(rootDir, ...f.rel.split('/'));
+    const to = path.join(box, f.slot, ...f.rel.split('/'));
+    try {
+      size += sizeOfPath(from);
+      movePath(from, to);
+      items.push({ root: f.root, slot: f.slot, rel: f.rel });
+    } catch (e) {
+      errors.push(`${f.rel}: ${e.message}`);
+    }
+  }
+  if (!items.length) {
+    try { fs.rmSync(box, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    return res.status(500).json({ error: '删除失败', errors });
+  }
+  fs.writeFileSync(path.join(box, 'meta.json'), JSON.stringify({
+    id, course, lesson, at: new Date().toISOString(), size, items,
+  }, null, 2));
+  res.json({ ok: true, id, size, removed: items.length, errors });
+}));
+
+app.get('/api/trash/list', asyncRoute(async (_req, res) => {
+  const root = trashRootOf();
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { /* 空回收站 */ }
+  const items = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(root, e.name, 'meta.json'), 'utf8'));
+      items.push({
+        id: e.name, course: meta.course || '', lesson: meta.lesson || '',
+        at: meta.at || '', size: meta.size || 0, count: (meta.items || []).length,
+      });
+    } catch { /* 没有 meta 的目录不展示 */ }
+  }
+  items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  res.json({ items, total: items.reduce((s, x) => s + x.size, 0) });
+}));
+
+app.post('/api/trash/restore', asyncRoute(async (req, res) => {
+  const id = String(req.body?.id || '');
+  const root = trashRootOf();
+  const box = ensureInside(root, path.join(root, id));
+  const metaPath = path.join(box, 'meta.json');
+  if (!id || !fs.existsSync(metaPath)) return res.status(404).json({ error: '回收站里找不到这一项' });
+  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  let restored = 0;
+  const blocked = [];
+  for (const item of meta.items || []) {
+    const rootDir = item.root === 'data' ? DATA_DIR : NOTES_DIR;
+    const from = path.join(box, item.slot, ...item.rel.split('/'));
+    const to = path.join(rootDir, ...item.rel.split('/'));
+    if (!fs.existsSync(from)) continue;
+    if (fs.existsSync(to)) { blocked.push(item.rel); continue; }
+    try {
+      movePath(from, to);
+      restored++;
+    } catch (e) {
+      blocked.push(`${item.rel}（${e.message}）`);
+    }
+  }
+  if (!blocked.length) {
+    try { fs.rmSync(box, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  }
+  res.json({ ok: true, restored, blocked });
+}));
+
+app.post('/api/trash/purge', asyncRoute(async (req, res) => {
+  const root = trashRootOf();
+  if (req.body?.all === true) {
+    fs.rmSync(root, { recursive: true, force: true });
+    return res.json({ ok: true, all: true });
+  }
+  const id = String(req.body?.id || '');
+  const box = ensureInside(root, path.join(root, id));
+  if (!id || !fs.existsSync(box)) return res.status(404).json({ error: '回收站里找不到这一项' });
+  fs.rmSync(box, { recursive: true, force: true });
+  res.json({ ok: true });
+}));
+
 // ---------- 一键退出 / 一键升级 ----------
 
 const runCmd = (file, args, opts = {}) => new Promise((resolve) => {
@@ -1214,11 +1407,11 @@ app.post('/api/system/update', asyncRoute(async (_req, res) => {
 // 统一错误处理
 app.use((err, _req, res, _next) => {
   console.error('[api error]', err);
-  res.status(500).json({ error: String(err?.message || err) });
+  res.status(Number(err?.status || err?.statusCode) || 500).json({ error: String(err?.message || err) });
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`问渠学堂 PPT 下载器已启动: http://127.0.0.1:${PORT}`);
+  console.log(`清渠已启动: http://127.0.0.1:${PORT}`);
 });
 
 async function shutdown() {

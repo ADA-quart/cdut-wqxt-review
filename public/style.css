@@ -117,6 +117,12 @@ body {
 .btn.primary:hover { background: #1746a8; }
 .btn.ghost { background: transparent; }
 .btn.danger { color: var(--err); border-color: #f0c8c6; }
+
+/* ---------- 回收站列表 ---------- */
+.trash-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.trash-item { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; background: var(--panel); }
+.trash-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-item .meta { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 .btn.tiny { padding: 2px 8px; font-size: 11px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
 

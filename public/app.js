@@ -41,6 +41,15 @@ function toast(msg, kind = '') {
   setTimeout(() => el.remove(), 4200);
 }
 
+function fmtSize(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + ' B';
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let x = v, i = -1;
+  do { x /= 1024; i++; } while (x >= 1024 && i < u.length - 1);
+  return (x >= 100 ? x.toFixed(0) : x.toFixed(1)) + ' ' + u[i];
+}
+
 function pct(done, total) {
   if (!total) return 0;
   return Math.round((done / total) * 100);
@@ -898,6 +907,15 @@ function renderTreeLevel(nodes, level) {
         };
         summary.appendChild(report);
       }
+      // 删除课次（移到回收站，可恢复）
+      if (hasImages || node.hasMd) {
+        const del = document.createElement('button');
+        del.className = 'btn tiny danger';
+        del.textContent = '删除';
+        del.title = '把这个课次移到回收站（可恢复，设置里能找回）';
+        del.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openDeleteModal(node); };
+        summary.appendChild(del);
+      }
       details.appendChild(summary);
       if (kids.length) details.appendChild(renderTreeLevel(kids, level + 1));
       root.appendChild(details);
@@ -1090,6 +1108,7 @@ $('btnRefresh').onclick = loadCourses;
 
 async function openSettings() {
   $('settingsModal').hidden = false;
+  loadTrash();
   try {
     const m = await api('/md-config');
     $('mdParallel').value = String(m.parallel ?? 'auto');
@@ -1125,6 +1144,127 @@ async function pickFolderInto(inputId, hintId) {
 }
 
 $('btnSettings').onclick = openSettings;
+
+// ---------- 删除已下载（回收站） ----------
+
+let delTarget = null;
+
+async function openDeleteModal(node) {
+  delTarget = node;
+  const parts = String(node.rel || '').split('/');
+  const course = parts[0] || '';
+  const lesson = parts.slice(1).join('/') || node.name || '';
+  $('delTitle').textContent = `「${parts.join(' / ')}」`;
+  $('delMediaInfo').textContent = '统计中…';
+  $('delRecordsInfo').textContent = '统计中…';
+  $('delHint').textContent = '';
+  $('delMedia').checked = true;
+  $('delRecords').checked = false;
+  $('delRecords').disabled = false;
+  $('delModal').hidden = false;
+  try {
+    const p = await api(`/trash/preview?course=${encodeURIComponent(course)}&lesson=${encodeURIComponent(lesson)}`);
+    $('delMediaInfo').textContent = p.media.count ? `${fmtSize(p.media.size)} · ${p.media.count} 项` : '（没有）';
+    $('delRecordsInfo').textContent = p.records.count ? `${fmtSize(p.records.size)} · ${p.records.count} 项` : '（没有）';
+    if (!p.media.count) $('delMedia').checked = false;
+    $('delRecords').disabled = !p.records.count;
+  } catch (e) {
+    $('delMediaInfo').textContent = '';
+    $('delRecordsInfo').textContent = '';
+    $('delHint').textContent = '统计失败：' + e.message;
+  }
+}
+
+$('delCancel').onclick = () => { $('delModal').hidden = true; };
+
+$('delConfirm').onclick = async () => {
+  if (!delTarget) return;
+  const parts = String(delTarget.rel || '').split('/');
+  const course = parts[0] || '';
+  const lesson = parts.slice(1).join('/') || delTarget.name || '';
+  const media = $('delMedia').checked;
+  const records = $('delRecords').checked;
+  if (!media && !records) { $('delHint').textContent = '至少勾选一项'; return; }
+  $('delHint').textContent = '正在移到回收站…';
+  try {
+    const r = await api('/trash/remove', { method: 'POST', body: { course, lesson, media, records } });
+    try { localStorage.removeItem('wqppt_page:' + delTarget.rel); } catch { /* 忽略 */ }
+    $('delModal').hidden = true;
+    toast(`已移到回收站（${fmtSize(r.size)}），可在「设置 → 回收站」恢复`, 'ok');
+    loadFiles();
+  } catch (e) {
+    $('delHint').textContent = '删除失败：' + e.message;
+  }
+};
+
+async function loadTrash() {
+  const box = $('trashList');
+  if (!box) return;
+  try {
+    const r = await api('/trash/list');
+    if (!r.items.length) { box.innerHTML = '<p class="empty">（空）</p>'; return; }
+    box.innerHTML = '';
+    for (const it of r.items) {
+      const row = document.createElement('div');
+      row.className = 'trash-item';
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = `${it.course} · ${it.lesson}`;
+      name.title = `${it.course} / ${it.lesson}`;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      let atText = '';
+      try { atText = new Date(it.at).toLocaleString('zh-CN', { hour12: false }); } catch { atText = ''; }
+      meta.textContent = `${fmtSize(it.size)}${atText ? ' · ' + atText : ''}`;
+      const restore = document.createElement('button');
+      restore.className = 'btn tiny';
+      restore.textContent = '恢复';
+      restore.onclick = async () => {
+        restore.disabled = true;
+        try {
+          const rr = await api('/trash/restore', { method: 'POST', body: { id: it.id } });
+          const skipped = (rr.blocked || []).length;
+          toast(skipped ? `已恢复 ${rr.restored} 项；${skipped} 项因目标已存在被跳过` : `已恢复（${rr.restored} 项）`, skipped ? '' : 'ok');
+          loadTrash();
+          loadFiles();
+        } catch (e) {
+          toast('恢复失败：' + e.message, 'err');
+          restore.disabled = false;
+        }
+      };
+      const purge = document.createElement('button');
+      purge.className = 'btn tiny danger';
+      purge.textContent = '彻底删除';
+      purge.onclick = async () => {
+        if (!confirm(`彻底删除「${it.course} / ${it.lesson}」？此操作不可恢复。`)) return;
+        purge.disabled = true;
+        try {
+          await api('/trash/purge', { method: 'POST', body: { id: it.id } });
+          toast('已彻底删除', 'ok');
+          loadTrash();
+        } catch (e) {
+          toast('删除失败：' + e.message, 'err');
+          purge.disabled = false;
+        }
+      };
+      row.append(name, meta, restore, purge);
+      box.appendChild(row);
+    }
+  } catch (e) {
+    box.innerHTML = `<p class="empty">加载失败：${e.message}</p>`;
+  }
+}
+
+$('btnTrashClear').onclick = async () => {
+  if (!confirm('清空回收站？其中所有内容将被彻底删除，无法恢复。')) return;
+  try {
+    await api('/trash/purge', { method: 'POST', body: { all: true } });
+    toast('回收站已清空', 'ok');
+    loadTrash();
+  } catch (e) {
+    $('trashHint').textContent = '清空失败：' + e.message;
+  }
+};
 
 // ---------- 使用说明 & 四步流程指示 ----------
 
