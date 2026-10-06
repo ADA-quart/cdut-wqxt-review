@@ -1343,6 +1343,7 @@ $('btnTrashClear').onclick = async () => {
 function openImportLesson() {
   $('impLessonFiles').value = '';
   $('impLessonName').value = '';
+  $('impLessonDpiWrap').hidden = true;
   $('impLessonHint').textContent = '';
   $('impLessonHint').className = 'test-result';
   $('impLessonModal').hidden = false;
@@ -1371,13 +1372,16 @@ $('impLessonCancel').onclick = () => { $('impLessonModal').hidden = true; };
 $('impLessonFiles').onchange = () => {
   const files = [...$('impLessonFiles').files];
   if (!files.length) return;
+  const hasPdf = files.some((f) => /\.pdf$/i.test(f.name));
+  $('impLessonDpiWrap').hidden = !hasPdf;
   if (!$('impLessonName').value.trim()) {
     $('impLessonName').value = files[0].name.replace(/\.[^.]+$/, '');
   }
 };
 
-async function uploadLessonFile(file, { course, lesson, kind, seq }) {
+async function uploadLessonFile(file, { course, lesson, kind, seq, dpi }) {
   const q = new URLSearchParams({ course, lesson, filename: file.name, kind, seq: String(seq) });
+  if (dpi) q.set('dpi', String(dpi));
   const res = await fetch('/api/import-lesson?' + q.toString(), { method: 'POST', body: file });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1420,7 +1424,10 @@ $('impLessonGo').onclick = async () => {
       const f = mains[0];
       hint.textContent = `正在上传 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）…转换可能需要一会儿`;
       hint.className = 'test-result';
-      const r = await uploadLessonFile(f, { course, lesson, kind: isPdf(f) ? 'pdf' : 'pptx', seq: 1 });
+      const r = await uploadLessonFile(f, {
+        course, lesson, kind: isPdf(f) ? 'pdf' : 'pptx', seq: 1,
+        dpi: isPdf(f) ? Number($('impLessonDpi').value) || 160 : 0,
+      });
       hint.textContent = `✓ 已导入 ${r.pages} 页 →「${course} / ${lesson}」，现在可以「转 MD」了`;
     } else {
       imgs.sort((a, b) => a.name.localeCompare(b.name, 'zh', { numeric: true }));

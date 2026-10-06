@@ -1418,7 +1418,8 @@ app.post('/api/import-lesson', express.raw({ type: () => true, limit: '1024mb' }
     if (kind === 'pdf') {
       const py = findPython();
       if (!py) return res.status(500).json({ error: '找不到 Python 环境（.venv-p2t），无法转换 PDF' });
-      const r = await runCmd(py, [path.join(ROOT_DIR, 'tools', 'pdf2images.py'), tmpFile, dir], { timeout: 900000 });
+      const dpi = Math.min(300, Math.max(120, Number(req.query.dpi) || 160));
+      const r = await runCmd(py, [path.join(ROOT_DIR, 'tools', 'pdf2images.py'), tmpFile, dir, '--dpi', String(dpi)], { timeout: 900000 });
       if (!r.ok) return res.status(500).json({ error: 'PDF 转换失败：' + String(r.stderr || r.error || '').slice(0, 300) });
       return res.json({ ok: true, pages: countLessonImages(dir), course, lesson });
     }

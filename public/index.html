@@ -369,6 +369,12 @@
     <h3>导入自定义课件</h3>
     <p class="hint">支持 <b>PPT / PPTX</b>（用本机 PowerPoint 导出每页图）、<b>PDF</b>（逐页渲染）、<b>图片</b>（可多选，按文件名顺序合成一节课）。导入后即可像问渠课件一样「转 MD → 生成笔记 → 复习」。</p>
     <label class="field"><span>课件文件</span><input type="file" id="impLessonFiles" multiple accept=".ppt,.pptx,.pdf,.jpg,.jpeg,.png,.webp,.bmp"></label>
+    <label class="field" id="impLessonDpiWrap" hidden><span>PDF 清晰度</span>
+      <select id="impLessonDpi">
+        <option value="160">标准（160 dpi，一般讲义够用）</option>
+        <option value="220">高清（220 dpi，扫描件 / 照片拼的 PDF 推荐）</option>
+      </select>
+    </label>
     <label class="field"><span>课程名</span><input type="text" id="impLessonCourse" list="dlCourseOptions" placeholder="选已有课程，或输入新课程名"><datalist id="dlCourseOptions"></datalist></label>
     <label class="field"><span>课次名</span><input type="text" id="impLessonName" placeholder="默认取文件名"></label>
     <p class="test-result" id="impLessonHint"></p>
