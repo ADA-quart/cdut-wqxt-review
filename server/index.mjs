@@ -902,10 +902,11 @@ app.get('/api/export', asyncRoute(async (req, res) => {
   const includePdf = req.query.pdf !== '0';
   const includeAssets = req.query.assets !== '0';
   const includeCards = req.query.cards !== '0';
+  const includeChats = req.query.chats !== '0';
 
   const zip = new AdmZip();
   const courses = [];
-  const counts = { courses: 0, lessons: 0, notes: 0, pdfs: 0, assets: 0, cards: 0, images: 0 };
+  const counts = { courses: 0, lessons: 0, notes: 0, pdfs: 0, assets: 0, cards: 0, chats: 0, images: 0 };
 
   for (const course of listCourses()) {
     const lessons = listLessons(course);
@@ -928,6 +929,7 @@ app.get('/api/export', asyncRoute(async (req, res) => {
         chars: md.length,
         pdf: false,
         cards: 0,
+        chats: 0,
       };
       if (includePdf && addFileToZip(zip, path.join(NOTES_DIR, `${rel}.pdf`), `notes/${rel}.pdf`)) {
         info.pdf = true;
@@ -939,6 +941,13 @@ app.get('/api/export', asyncRoute(async (req, res) => {
         if (addFileToZip(zip, cardsAbs, `cards/${rel}.json`)) {
           try { info.cards = (JSON.parse(fs.readFileSync(cardsAbs, 'utf8')) || []).length; } catch { /* 忽略 */ }
           counts.cards += info.cards;
+        }
+      }
+      if (includeChats) {
+        const chatAbs = path.join(NOTES_DIR, `${rel}.chat.json`);
+        if (addFileToZip(zip, chatAbs, `chats/${rel}.json`)) {
+          try { info.chats = (JSON.parse(fs.readFileSync(chatAbs, 'utf8')).messages || []).length; } catch { /* 忽略 */ }
+          counts.chats += info.chats;
         }
       }
       if (includeImages) {
@@ -964,7 +973,7 @@ app.get('/api/export', asyncRoute(async (req, res) => {
     format: 1,
     version: PKG.version || '0.0.0',
     exportedAt: new Date().toISOString(),
-    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards },
+    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards, chats: includeChats },
     paths: getPaths(),
     counts,
     courses,
@@ -1018,6 +1027,9 @@ app.post('/api/import', express.raw({ type: () => true, limit: '2048mb' }), asyn
       target = ensureInside(DATA_DIR, path.join(DATA_DIR, name.slice(7)));
     } else if (name.startsWith('cards/')) {
       target = ensureInside(DATA_DIR, path.join(DATA_DIR, '.review', name.slice(6)));
+    } else if (name.startsWith('chats/')) {
+      const rel = name.slice(6).replace(/\.json$/i, '');
+      target = ensureInside(NOTES_DIR, path.join(NOTES_DIR, `${rel}.chat.json`));
     } else {
       continue; // manifest.json 等元数据不入库
     }

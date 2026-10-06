@@ -80,8 +80,8 @@ npm start
 
 「设置 → 导出 / 导入」：
 
-- **一键导出**：打包 zip，含 `manifest.json` + `notes/`（md、pdf、assets）+ `cards/`（复习卡）；
-  勾选「包含 PPT 原始图片」会额外带上 `images/`（体积大）。
+- **一键导出**：打包 zip，含 `manifest.json` + `notes/`（md、pdf、assets）+ `cards/`（复习卡）+ `chats/`（对话历史）；
+  勾选「包含 PPT 原始图片」会额外带上 `images/`（体积大）；不想带对话历史就取消「包含对话历史」勾选。
 - **一键导入**：把 zip 合并进当前目录，默认跳过已存在的文件，可勾选覆盖。
 
 `manifest.json` 就是给未来移动端的接口约定：
@@ -89,7 +89,7 @@ npm start
 ```json
 {
   "app": "wqppt", "format": 1, "version": "0.1.0",
-  "counts": { "courses": 2, "lessons": 3, "notes": 3, "pdfs": 3, "assets": 143, "cards": 6, "images": 0 },
+  "counts": { "courses": 2, "lessons": 3, "notes": 3, "pdfs": 3, "assets": 143, "cards": 6, "chats": 3, "images": 0 },
   "courses": [{ "name": "地球物理测井原理", "lessons": [{ "name": "2026-09-15第7-8节", "pages": 2, "chars": 1606, "pdf": true, "cards": 3 }] }],
   "pages": [{ "dir": "地球物理测井原理/2026-09-15第7-8节", "pages": 2,
               "md": "notes/地球物理测井原理/2026-09-15第7-8节.md",
@@ -99,6 +99,7 @@ npm start
 
 移动端只需读 `manifest.json` 渲染课程树、按 `pages` 定位课件页；
 复习卡在 `cards/<课程>/<课次>.json`，结构与服务端一致（`front` / `back` / `due` / `interval` / `ease`）。
+对话历史在 `chats/<课程>/<课次>.json`，结构 `{ v, updatedAt, messages: [{ role, content, at, ... }] }`。
 
 ### 可选：启用「转 Markdown」（复习/喂 AI 用）
 
@@ -422,7 +423,7 @@ PPT 清单  /pptnote/v1/schedule/search-ppt?course_id=X&sub_id=Y&page=1&per_page
 | POST | `/api/pick-folder` | 弹系统「选择文件夹」对话框 `{initial}` |
 | GET | `/api/system/update-check` | 检查更新（git fetch + 比较落后提交数） |
 | POST | `/api/system/update` | 一键升级（git pull --ff-only，必要时 npm install） |
-| GET | `/api/export` | 一键导出 zip（`?images=1` 含原始图片，`?pdf=0&assets=0&cards=0` 可裁剪） |
+| GET | `/api/export` | 一键导出 zip（`?images=1` 含原始图片，`?pdf=0&assets=0&cards=0&chats=0` 可裁剪） |
 | POST | `/api/import` | 一键导入 zip（`?overwrite=1` 覆盖，`?force=1` 跳过 manifest 校验） |
 | POST | `/api/system/shutdown` | 优雅退出（关闭服务 + 后台浏览器） |
 | GET | `/api/backlinks?dir=` | 反链：全库扫描引用某课次的 wiki 链接 |

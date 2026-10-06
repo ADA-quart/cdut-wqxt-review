@@ -1117,7 +1117,10 @@ $('btnSavePaths').onclick = async () => {
 };
 
 $('btnExport').onclick = () => {
-  const q = $('expImages').checked ? '?images=1' : '';
+  const qp = new URLSearchParams();
+  if ($('expImages').checked) qp.set('images', '1');
+  if (!$('expChats').checked) qp.set('chats', '0');
+  const q = qp.toString() ? '?' + qp.toString() : '';
   $('exportHint').textContent = $('expImages').checked ? '正在打包（含图片，可能较慢）…' : '正在打包…';
   $('exportHint').className = 'test-result';
   // 用隐藏 iframe 触发下载，避免整页跳转
