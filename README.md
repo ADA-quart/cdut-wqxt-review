@@ -42,6 +42,10 @@ downloads/
 **Windows 一键**：双击 `start.cmd` 启动（后台运行 + 自动开浏览器），`stop.cmd` 退出，
 `update.cmd` 升级，`uninstall.cmd` 卸载；也可以用 `powershell -ExecutionPolicy Bypass -File wqppt.ps1 <start|stop|restart|status|update|uninstall>`。
 
+**桌面软件模式（推荐日常使用）**：双击 `启动复习软件.vbs`（Windows）或 `启动复习软件.command`（macOS），
+以**独立窗口**打开界面（没有浏览器地址栏和标签页，任务栏有自己的图标）；壳会自动拉起本地服务，
+关闭窗口即退出（服务一起关掉）。命令行等价：`npm install` 之后跑 `npm run app`。
+
 **macOS 一键**：双击 `wqppt.command` 启动，`wqppt-stop.command` 退出；
 命令行同 `bash wqppt.sh <start|stop|restart|status|update|uninstall [--purge]>`。
 
