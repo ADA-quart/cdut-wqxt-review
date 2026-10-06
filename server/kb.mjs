@@ -24,12 +24,15 @@ export function listCourses() {
   return [...names].sort((a, b) => a.localeCompare(b, 'zh'));
 }
 
-/** 某课程下已转 MD 的课次（不含课程索引自身） */
+/** 辅助文件（笔记/审计/知识点/备份）不算课次 */
+const AUX_LESSON_MD = /\.(note|audit|points|ocr-backup|math-backup|note-backup)\.md$/i;
+
+/** 某课程下已转 MD 的课次（不含课程索引自身与辅助文件） */
 export function listLessons(course) {
   const dir = path.join(NOTES_DIR, course);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith('.md') && !e.name.includes('.ocr-backup.'))
+    .filter((e) => e.isFile() && e.name.endsWith('.md') && !AUX_LESSON_MD.test(e.name))
     .map((e) => e.name.replace(/\.md$/i, ''))
     .filter((name) => name !== course)
     .sort((a, b) => a.localeCompare(b, 'zh'));

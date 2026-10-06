@@ -35,15 +35,18 @@ body {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   flex: none;
+  flex-wrap: wrap;
 }
 
-.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 340px; }
 .back { color: var(--brand); text-decoration: none; font-size: 13px; flex: none; }
 .back:hover { text-decoration: underline; }
-.titles { min-width: 0; }
+.titles { min-width: 0; flex: 1; }
 .topbar h1 { margin: 0; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lesson-nav { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+.lesson-nav .nav-sel { max-width: 230px; font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
 .sub { margin: 1px 0 0; font-size: 12px; color: var(--ink-3); }
-.actions { display: flex; gap: 8px; flex: none; }
+.actions { display: flex; gap: 8px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 
 .btn {
   display: inline-block;

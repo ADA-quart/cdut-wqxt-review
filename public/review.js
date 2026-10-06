@@ -1217,6 +1217,54 @@ async function handleWeave(scope) {
   }
 }
 
+// ---------- 课次导航（课程 / 课次下拉 + 上一节 / 下一节） ----------
+
+async function setupLessonNav() {
+  const nav = $('lessonNav');
+  let courses = [];
+  try {
+    const r = await fetch('/api/courses-tree');
+    if (r.ok) courses = (await r.json()).courses || [];
+  } catch { /* 忽略 */ }
+  const cur = courses.find((c) => c.name === courseName);
+  if (!cur || !cur.lessons.length) return;
+
+  const courseSel = $('coursePick');
+  const lessonSel = $('lessonPick');
+  const fill = (sel, items, selected) => {
+    sel.innerHTML = '';
+    for (const item of items) {
+      const o = document.createElement('option');
+      o.value = item;
+      o.textContent = item;
+      sel.appendChild(o);
+    }
+    if (selected && items.includes(selected)) sel.value = selected;
+  };
+  fill(courseSel, courses.map((c) => c.name), cur.name);
+  fill(lessonSel, cur.lessons, lessonName);
+
+  const go = (c, l) => { location.href = '/review.html?dir=' + encodeURIComponent(`${c}/${l}`); };
+  courseSel.onchange = () => {
+    const c = courses.find((x) => x.name === courseSel.value);
+    if (!c || !c.lessons.length) return;
+    fill(lessonSel, c.lessons, c.lessons[0]);
+    go(c.name, c.lessons[0]);
+  };
+  lessonSel.onchange = () => {
+    if (lessonSel.value && lessonSel.value !== lessonName) go(cur.name, lessonSel.value);
+  };
+
+  const idx = cur.lessons.indexOf(lessonName);
+  const prev = $('btnPrevLesson');
+  const next = $('btnNextLesson');
+  prev.disabled = idx <= 0;
+  next.disabled = idx < 0 || idx >= cur.lessons.length - 1;
+  prev.onclick = () => { if (idx > 0) go(cur.name, cur.lessons[idx - 1]); };
+  next.onclick = () => { if (idx >= 0 && idx < cur.lessons.length - 1) go(cur.name, cur.lessons[idx + 1]); };
+  nav.hidden = false;
+}
+
 // ---------- 分隔条 ----------
 
 function setupSplitters() {
@@ -1353,8 +1401,16 @@ function setupEvents() {
   $('btnIndex').onclick = generateIndex;
   $('btnSummarize').onclick = handleSummarize;
   $('btnMakeNote').onclick = handleMakeNote;
-  $('tabNote').onclick = () => { state.view = 'note'; renderLeftPane(); };
-  $('tabRaw').onclick = () => { state.view = 'raw'; renderLeftPane(); };
+  $('tabNote').onclick = () => {
+    state.view = 'note';
+    renderLeftPane();
+    try { localStorage.setItem('wqppt_view:' + dir, 'note'); } catch { /* 忽略 */ }
+  };
+  $('tabRaw').onclick = () => {
+    state.view = 'raw';
+    renderLeftPane();
+    try { localStorage.setItem('wqppt_view:' + dir, 'raw'); } catch { /* 忽略 */ }
+  };
   $('btnFixMath').onclick = handleFixMath;
   $('btnAudit').onclick = () => handleAudit(false);
   $('btnCloseAudit').onclick = () => { $('auditDrawer').hidden = true; };
@@ -1965,6 +2021,7 @@ async function markCardBadges() {
   setupEvents();
   setupSelection();
   void loadChatHistory();
+  void setupLessonNav();
 
   try {
     const r = await fetch(state.mdUrl);
@@ -1978,7 +2035,9 @@ async function markCardBadges() {
   await loadNote();
   await loadAudit();
   await loadNoteMarks();
-  state.view = state.note ? 'note' : 'raw';
+  let savedView = null;
+  try { savedView = localStorage.getItem('wqppt_view:' + dir); } catch { /* 忽略 */ }
+  state.view = (savedView === 'raw' || (savedView === 'note' && state.note)) ? savedView : (state.note ? 'note' : 'raw');
   renderLeftPane();
   buildPages();
   renderThumbs();

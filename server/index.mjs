@@ -608,6 +608,14 @@ app.post('/api/chat', asyncRoute(async (req, res) => {
   }
 }));
 
+/** 复习页导航：课程 → 已转 MD 的课次 */
+app.get('/api/courses-tree', (_req, res) => {
+  const courses = listCourses()
+    .map((name) => ({ name, lessons: listLessons(name) }))
+    .filter((c) => c.lessons.length > 0);
+  res.json({ courses });
+});
+
 /** 反链：扫描 downloads 下所有 .md，找引用某课次的 wiki 链接 */
 app.get('/api/backlinks', asyncRoute(async (req, res) => {
   const relDir = String(req.query.dir || '').replace(/^[/\\]+/, '');
