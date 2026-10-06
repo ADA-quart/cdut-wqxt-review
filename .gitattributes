@@ -1,0 +1,2 @@
+# .vbs 是 UTF-16 编码，禁止 git 做行尾转换（否则 WSH 会编译报错）
+*.vbs -text
