@@ -844,6 +844,7 @@ ${digest.trim()}
   // 把「本课脉络 + 课末必记」同步回原文 md 顶部（upsert llm-summary 块），两处重点保持一致
   try {
     const summaryBlock = `<!-- llm-summary:start -->\n${digest.trim()}\n<!-- llm-summary:end -->\n\n`;
+    const mdStat = fs.statSync(mdPath);
     let mdText = fs.readFileSync(mdPath, 'utf8');
     if (/<!-- llm-summary:start -->/.test(mdText)) {
       mdText = mdText.replace(/<!-- llm-summary:start -->[\s\S]*?<!-- llm-summary:end -->\n?/, summaryBlock);
@@ -852,6 +853,8 @@ ${digest.trim()}
       mdText = firstPage > 0 ? mdText.slice(0, firstPage) + summaryBlock + mdText.slice(firstPage) : summaryBlock + mdText;
     }
     fs.writeFileSync(mdPath, mdText, 'utf8');
+    // 只加了摘要块、页内容没变：恢复原 mtime，避免让 .note.work.md 的整理稿缓存失效
+    try { fs.utimesSync(mdPath, mdStat.atime, mdStat.mtime); } catch { /* 忽略 */ }
     job.log.push('重点已同步到原文顶部（llm-summary 块）');
   } catch (e) {
     job.log.push('重点同步失败：' + String(e?.message || e).slice(0, 60));
