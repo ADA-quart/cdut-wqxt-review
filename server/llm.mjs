@@ -265,6 +265,14 @@ const PROOF_SYSTEM_VISION = `${PROOF_SYSTEM_TEXT}
 特别是专业术语、公式符号、上下标、变量名（如 ρ、ΔU、K、AM 等）要与截图一致。
 仍然遵守上述硬性要求：图片引用、链接、注释、LaTeX 公式的结构不变。`;
 
+/** 从 job 里取出课程 / 课次名，拼成提示词用的上下文 */
+function courseContext(job) {
+  const parts = String(job?.relDir || '').split('/').filter(Boolean);
+  const course = job?.courseName || parts[0] || '';
+  const lesson = parts[1] || job?.title || '';
+  return { course, lesson };
+}
+
 async function proofreadPage(page, { mode, mediaDir, job }) {
   const raw = page.body;
   const body = raw.trim();
@@ -274,7 +282,14 @@ async function proofreadPage(page, { mode, mediaDir, job }) {
   const trail = /\s*$/.exec(raw)[0];
 
   const profile = mode === 'text' ? 'text' : mode;
-  const system = mode === 'text' ? PROOF_SYSTEM_TEXT : PROOF_SYSTEM_VISION;
+  const ctx = courseContext(job);
+  if (ctx.course && !job._ctxLogged) { job._ctxLogged = true; job.log.push('提示词上下文：《' + ctx.course + '》'); }
+  const scopeNote = ctx.course
+    ? `\n\n【当前课程】${ctx.course}\n` +
+      '请按这门课的专业术语（该领域的行话、符号、变量名）来判断哪些是 OCR 错字；'
+      + '拿不准的术语保持原样，不要改成通用词。'
+    : '';
+  const system = (mode === 'text' ? PROOF_SYSTEM_TEXT : PROOF_SYSTEM_VISION) + scopeNote;
   let userContent = body;
 
   if (mode !== 'text') {
@@ -373,6 +388,8 @@ async function runSummarize(job) {
   if (!text) throw new Error('内容为空，无法总结');
 
   const chunks = chunkText(text, 6000);
+  const ctx = courseContext(job);
+  if (ctx.course) job.log.push('提示词上下文：《' + ctx.course + '》');
   job.progress.total = chunks.length + 1;
   emit(job);
 
@@ -381,7 +398,7 @@ async function runSummarize(job) {
   const partSummaries = await mapLimit(chunks, limit, async (c, i) => {
     const { content: s, usage } = await chatRetry(
       [
-        { role: 'system', content: '你在帮大学生整理课件复习提纲。提取给定内容的重点，用中文输出 3-8 条要点（- 开头）。公式用 LaTeX（$...$）。只输出要点，不要前言后语。' },
+        { role: 'system', content: `你在帮大学生整理《${ctx.course || '本课程'}》这门课的复习提纲。提取给定内容的重点，用中文输出 3-8 条要点（- 开头）。公式用 LaTeX（$...$）。只输出要点，不要前言后语。` },
         { role: 'user', content: `第 ${i + 1}/${chunks.length} 段课件内容：\n\n${c}` },
       ],
       { profile: 'text', temperature: 0.3, maxTokens: 1200 },
@@ -400,7 +417,7 @@ async function runSummarize(job) {
     [
       {
         role: 'system',
-        content: `你在帮大学生生成一节课的复习要点。下面是分块提取的要点，请合并去重、按主题重新组织，输出一份精炼的「重点总结」，包含：
+        content: `你在帮大学生生成《${ctx.course || '本课程'}》这门课课件的复习要点。下面是分块提取的要点，请合并去重、按主题重新组织，输出一份精炼的「重点总结」，包含：
 1) ## 重点总结（标题行固定用这个）
 2) 随后按内容组织成 2-4 个三级标题（### xxx），每节 3-6 条要点
 3) 关键公式用 LaTeX（$...$ 或 $$...$$），保留课程中的符号定义
@@ -486,6 +503,8 @@ async function runFixMath(job) {
   const original = fs.readFileSync(mdPath, 'utf8');
   const all = findMath(original);
   const broken = findBrokenMath(original);
+  const ctx2 = courseContext(job);
+  if (ctx2.course) job.log.push('提示词上下文：《' + ctx2.course + '》');
   job.progress.total = broken.length;
   emit(job);
   if (!broken.length) {
@@ -501,7 +520,7 @@ async function runFixMath(job) {
     job.progress.current = `公式 ${done + 1}/${broken.length}`;
     emit(job);
     const ask = [
-      '下面是从课件 OCR 得到的 LaTeX 公式，KaTeX 解析报错。请把它改成等价的、KaTeX 能解析的 LaTeX。',
+      `下面是从《${ctx2.course || '课件'}》OCR 得到的 LaTeX 公式，KaTeX 解析报错。请把它改成等价的、KaTeX 能解析的 LaTeX。`,
       '要求：只输出修正后的 LaTeX 本体，不要 $ 或 $ 包裹，不要解释；保持符号含义不变（如 \\slash → /、\\verb( → ( 、括号配平）。',
       '',
       'KaTeX 报错：' + item.error,
