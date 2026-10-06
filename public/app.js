@@ -12,6 +12,8 @@ const state = {
   mdTool: null,
   subsCache: new Map(),
   selectedCourses: new Set(),
+  delSel: new Set(),
+  lessonRels: [],
 };
 
 // ---------- 工具 ----------
@@ -812,6 +814,12 @@ async function loadFiles() {
       }
     }
     state.flow = { lessons: lessons.length, withMd: lessons.filter((l) => l.hasMd).length };
+    state.lessonRels = lessons.map((l) => l.rel);
+    // 清理已经不存在的选中项
+    for (const rel of [...state.delSel]) {
+      if (!state.lessonRels.includes(rel)) state.delSel.delete(rel);
+    }
+    updateDelBar();
     updateFlowBar();
     if (tree.length === 0) {
       box.innerHTML = state.loggedIn
@@ -874,6 +882,21 @@ function renderTreeLevel(nodes, level) {
         btn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startMdJob(node, btn); };
         summary.appendChild(btn);
       }
+      // 批量选择：课次行加复选框
+      if (hasImages || node.hasMd) {
+        const pick = document.createElement('input');
+        pick.type = 'checkbox';
+        pick.className = 'pick';
+        pick.dataset.rel = node.rel;
+        pick.checked = state.delSel.has(node.rel);
+        pick.title = '选中以便批量删除';
+        pick.onclick = (e) => e.stopPropagation();
+        pick.onchange = () => {
+          if (pick.checked) state.delSel.add(node.rel); else state.delSel.delete(node.rel);
+          updateDelBar();
+        };
+        summary.insertBefore(pick, summary.firstChild);
+      }
       if (node.hasMd) {
         const review = document.createElement('button');
         review.className = 'btn tiny';
@@ -913,7 +936,12 @@ function renderTreeLevel(nodes, level) {
         del.className = 'btn tiny danger';
         del.textContent = '删除';
         del.title = '把这个课次移到回收站（可恢复，设置里能找回）';
-        del.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openDeleteModal(node); };
+        del.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const parts = String(node.rel || '').split('/');
+          openDeleteModal([{ course: parts[0] || '', lesson: parts.slice(1).join('/') || node.name || '', rel: node.rel }]);
+        };
         summary.appendChild(del);
       }
       details.appendChild(summary);
@@ -1147,14 +1175,28 @@ $('btnSettings').onclick = openSettings;
 
 // ---------- 删除已下载（回收站） ----------
 
-let delTarget = null;
+let delItems = [];
 
-async function openDeleteModal(node) {
-  delTarget = node;
-  const parts = String(node.rel || '').split('/');
-  const course = parts[0] || '';
-  const lesson = parts.slice(1).join('/') || node.name || '';
-  $('delTitle').textContent = `「${parts.join(' / ')}」`;
+function updateDelBar() {
+  const bar = $('fileTools');
+  if (!bar) return;
+  const n = state.delSel.size;
+  bar.hidden = n === 0;
+  $('fileSelCount').textContent = `已选 ${n} 个课次`;
+}
+
+function syncDelChecks() {
+  document.querySelectorAll('#fileTree input.pick').forEach((cb) => {
+    cb.checked = state.delSel.has(cb.dataset.rel);
+  });
+}
+
+async function openDeleteModal(items) {
+  delItems = Array.isArray(items) ? items : [];
+  if (!delItems.length) return;
+  $('delTitle').textContent = delItems.length === 1
+    ? `「${delItems[0].course} / ${delItems[0].lesson}」`
+    : `${delItems.length} 个课次（${delItems[0].course} 等）`;
   $('delMediaInfo').textContent = '统计中…';
   $('delRecordsInfo').textContent = '统计中…';
   $('delHint').textContent = '';
@@ -1163,7 +1205,10 @@ async function openDeleteModal(node) {
   $('delRecords').disabled = false;
   $('delModal').hidden = false;
   try {
-    const p = await api(`/trash/preview?course=${encodeURIComponent(course)}&lesson=${encodeURIComponent(lesson)}`);
+    const p = await api('/trash/preview-multi', {
+      method: 'POST',
+      body: { items: delItems.map((x) => ({ course: x.course, lesson: x.lesson })) },
+    });
     $('delMediaInfo').textContent = p.media.count ? `${fmtSize(p.media.size)} · ${p.media.count} 项` : '（没有）';
     $('delRecordsInfo').textContent = p.records.count ? `${fmtSize(p.records.size)} · ${p.records.count} 项` : '（没有）';
     if (!p.media.count) $('delMedia').checked = false;
@@ -1178,23 +1223,50 @@ async function openDeleteModal(node) {
 $('delCancel').onclick = () => { $('delModal').hidden = true; };
 
 $('delConfirm').onclick = async () => {
-  if (!delTarget) return;
-  const parts = String(delTarget.rel || '').split('/');
-  const course = parts[0] || '';
-  const lesson = parts.slice(1).join('/') || delTarget.name || '';
+  if (!delItems.length) return;
   const media = $('delMedia').checked;
   const records = $('delRecords').checked;
   if (!media && !records) { $('delHint').textContent = '至少勾选一项'; return; }
   $('delHint').textContent = '正在移到回收站…';
   try {
-    const r = await api('/trash/remove', { method: 'POST', body: { course, lesson, media, records } });
-    try { localStorage.removeItem('wqppt_page:' + delTarget.rel); } catch { /* 忽略 */ }
+    const r = await api('/trash/remove', {
+      method: 'POST',
+      body: {
+        items: delItems.map((x) => ({ course: x.course, lesson: x.lesson })),
+        media,
+        records,
+      },
+    });
+    for (const it of delItems) {
+      if (it.rel) { try { localStorage.removeItem('wqppt_page:' + it.rel); } catch { /* 忽略 */ } }
+    }
+    state.delSel.clear();
     $('delModal').hidden = true;
     toast(`已移到回收站（${fmtSize(r.size)}），可在「设置 → 回收站」恢复`, 'ok');
     loadFiles();
   } catch (e) {
     $('delHint').textContent = '删除失败：' + e.message;
   }
+};
+
+$('btnSelAll').onclick = () => {
+  for (const rel of state.lessonRels) state.delSel.add(rel);
+  syncDelChecks();
+  updateDelBar();
+};
+
+$('btnSelClear').onclick = () => {
+  state.delSel.clear();
+  syncDelChecks();
+  updateDelBar();
+};
+
+$('btnDelSelected').onclick = () => {
+  if (!state.delSel.size) return;
+  openDeleteModal([...state.delSel].map((rel) => {
+    const parts = String(rel).split('/');
+    return { course: parts[0] || '', lesson: parts.slice(1).join('/') || '', rel };
+  }));
 };
 
 async function loadTrash() {
@@ -1209,8 +1281,8 @@ async function loadTrash() {
       row.className = 'trash-item';
       const name = document.createElement('span');
       name.className = 'name';
-      name.textContent = `${it.course} · ${it.lesson}`;
-      name.title = `${it.course} / ${it.lesson}`;
+      name.textContent = it.summary || `${it.course} · ${it.lesson}`;
+      name.title = it.summary || `${it.course} / ${it.lesson}`;
       const meta = document.createElement('span');
       meta.className = 'meta';
       let atText = '';
@@ -1263,6 +1335,110 @@ $('btnTrashClear').onclick = async () => {
     loadTrash();
   } catch (e) {
     $('trashHint').textContent = '清空失败：' + e.message;
+  }
+};
+
+// ---------- 导入自定义课件（PPT / PDF / 图片） ----------
+
+function openImportLesson() {
+  $('impLessonFiles').value = '';
+  $('impLessonName').value = '';
+  $('impLessonHint').textContent = '';
+  $('impLessonHint').className = 'test-result';
+  $('impLessonModal').hidden = false;
+  const dl = $('dlCourseOptions');
+  dl.innerHTML = '';
+  for (const name of state.dlCourseNames || []) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    dl.appendChild(opt);
+  }
+  if (!$('impLessonCourse').value.trim() && (state.dlCourseNames || []).length === 1) {
+    $('impLessonCourse').value = state.dlCourseNames[0];
+  }
+}
+
+$('btnImportCourse').onclick = async () => {
+  try {
+    const { tree } = await api('/files');
+    state.dlCourseNames = tree.filter((x) => x.type === 'dir').map((x) => x.name);
+  } catch { /* 忽略 */ }
+  openImportLesson();
+};
+
+$('impLessonCancel').onclick = () => { $('impLessonModal').hidden = true; };
+
+$('impLessonFiles').onchange = () => {
+  const files = [...$('impLessonFiles').files];
+  if (!files.length) return;
+  if (!$('impLessonName').value.trim()) {
+    $('impLessonName').value = files[0].name.replace(/\.[^.]+$/, '');
+  }
+};
+
+async function uploadLessonFile(file, { course, lesson, kind, seq }) {
+  const q = new URLSearchParams({ course, lesson, filename: file.name, kind, seq: String(seq) });
+  const res = await fetch('/api/import-lesson?' + q.toString(), { method: 'POST', body: file });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+$('impLessonGo').onclick = async () => {
+  const hint = $('impLessonHint');
+  const files = [...$('impLessonFiles').files];
+  const course = $('impLessonCourse').value.trim();
+  let lesson = $('impLessonName').value.trim();
+  if (!files.length) { hint.textContent = '先选择课件文件'; hint.className = 'test-result err'; return; }
+  if (!course) { hint.textContent = '请填写课程名'; hint.className = 'test-result err'; return; }
+  if (!lesson) lesson = files[0].name.replace(/\.[^.]+$/, '');
+  const isImg = (f) => /\.(jpe?g|png|webp|bmp)$/i.test(f.name);
+  const isPdf = (f) => /\.pdf$/i.test(f.name);
+  const isPpt = (f) => /\.(ppt|pptx)$/i.test(f.name);
+  const mains = files.filter((f) => isPdf(f) || isPpt(f));
+  const imgs = files.filter(isImg);
+  const others = files.filter((f) => !isImg(f) && !isPdf(f) && !isPpt(f));
+  if (others.length) {
+    hint.textContent = `不支持的文件：${others[0].name}（可先另存为 PDF 再导入）`;
+    hint.className = 'test-result err';
+    return;
+  }
+  if (mains.length > 1 || (mains.length === 1 && imgs.length)) {
+    hint.textContent = '一次只导入一个 PPT/PDF；图片可以多选（多张合成一节课）';
+    hint.className = 'test-result err';
+    return;
+  }
+  try {
+    const chk = await api(`/import-lesson/check?course=${encodeURIComponent(course)}&lesson=${encodeURIComponent(lesson)}`);
+    if (chk.images > 0 || chk.exists) {
+      if (!confirm(`「${course} / ${lesson}」已存在（${chk.images} 张图片）。继续导入会与已有内容合并（同名序号会被覆盖）。是否继续？`)) return;
+    }
+  } catch { /* 检查失败不拦截，后端会再校验 */ }
+  $('impLessonGo').disabled = true;
+  try {
+    if (mains.length === 1) {
+      const f = mains[0];
+      hint.textContent = `正在上传 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）…转换可能需要一会儿`;
+      hint.className = 'test-result';
+      const r = await uploadLessonFile(f, { course, lesson, kind: isPdf(f) ? 'pdf' : 'pptx', seq: 1 });
+      hint.textContent = `✓ 已导入 ${r.pages} 页 →「${course} / ${lesson}」，现在可以「转 MD」了`;
+    } else {
+      imgs.sort((a, b) => a.name.localeCompare(b.name, 'zh', { numeric: true }));
+      for (let i = 0; i < imgs.length; i++) {
+        hint.textContent = `上传中 ${i + 1}/${imgs.length}…`;
+        hint.className = 'test-result';
+        await uploadLessonFile(imgs[i], { course, lesson, kind: 'image', seq: i + 1 });
+      }
+      hint.textContent = `✓ 已导入 ${imgs.length} 张图片 →「${course} / ${lesson}」，现在可以「转 MD」了`;
+    }
+    hint.className = 'test-result ok';
+    toast('课件导入完成', 'ok');
+    loadFiles();
+  } catch (e) {
+    hint.textContent = '导入失败：' + e.message;
+    hint.className = 'test-result err';
+  } finally {
+    $('impLessonGo').disabled = false;
   }
 };
 

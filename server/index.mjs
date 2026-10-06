@@ -1214,20 +1214,62 @@ app.get('/api/trash/preview', asyncRoute(async (req, res) => {
   res.json(sum);
 }));
 
+app.post('/api/trash/preview-multi', asyncRoute(async (req, res) => {
+  const rawList = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!rawList.length) return res.status(400).json({ error: '没有选择课次' });
+  const sum = { media: { size: 0, count: 0 }, records: { size: 0, count: 0 }, lessons: 0 };
+  const seenKey = new Set();
+  for (const it of rawList) {
+    const course = String(it?.course || '').trim();
+    const lesson = String(it?.lesson || '').trim();
+    assertLessonKey(course, lesson);
+    const key = `${course}/${lesson}`;
+    if (seenKey.has(key)) continue;
+    seenKey.add(key);
+    sum.lessons++;
+    for (const f of collectLessonFiles(course, lesson)) {
+      const rootDir = f.root === 'data' ? DATA_DIR : NOTES_DIR;
+      sum[f.slot].size += sizeOfPath(path.join(rootDir, ...f.rel.split('/')));
+      sum[f.slot].count += 1;
+    }
+  }
+  res.json(sum);
+}));
+
 app.post('/api/trash/remove', asyncRoute(async (req, res) => {
-  const course = String(req.body?.course || '').trim();
-  const lesson = String(req.body?.lesson || '').trim();
   const wantMedia = req.body?.media !== false;
   const wantRecords = req.body?.records === true;
-  assertLessonKey(course, lesson);
   if (!wantMedia && !wantRecords) return res.status(400).json({ error: '没有选择要删除的内容' });
 
-  const files = collectLessonFiles(course, lesson)
-    .filter((f) => (f.slot === 'media' ? wantMedia : wantRecords));
+  const rawList = Array.isArray(req.body?.items) && req.body.items.length
+    ? req.body.items
+    : [{ course: req.body?.course, lesson: req.body?.lesson }];
+  const seenKey = new Set();
+  const list = [];
+  for (const it of rawList) {
+    const course = String(it?.course || '').trim();
+    const lesson = String(it?.lesson || '').trim();
+    assertLessonKey(course, lesson);
+    const key = `${course}/${lesson}`;
+    if (seenKey.has(key)) continue;
+    seenKey.add(key);
+    list.push({ course, lesson });
+  }
+  if (!list.length) return res.status(400).json({ error: '没有选择课次' });
+
+  const files = [];
+  for (const it of list) {
+    for (const f of collectLessonFiles(it.course, it.lesson)) {
+      if (f.slot === 'media' ? wantMedia : wantRecords) files.push(f);
+    }
+  }
   if (!files.length) return res.status(404).json({ error: '没有找到可删除的内容（可能已经删过了）' });
 
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-  const id = `${stamp}_${sanitizeName(course)}_${sanitizeName(lesson)}`;
+  const first = list[0];
+  const id = list.length > 1
+    ? `${stamp}_${sanitizeName(first.course)}_等${list.length}个课次`
+    : `${stamp}_${sanitizeName(first.course)}_${sanitizeName(first.lesson)}`;
   const box = path.join(trashRootOf(), id);
   ensureDir(box);
 
@@ -1250,8 +1292,15 @@ app.post('/api/trash/remove', asyncRoute(async (req, res) => {
     try { fs.rmSync(box, { recursive: true, force: true }); } catch { /* 忽略 */ }
     return res.status(500).json({ error: '删除失败', errors });
   }
+  const courseSet = [...new Set(list.map((x) => x.course))];
+  const summary = list.length === 1
+    ? `${first.course} · ${first.lesson}`
+    : (courseSet.length === 1
+      ? `${courseSet[0]} · ${list.length} 个课次`
+      : `${courseSet.slice(0, 2).join('、')} 等 ${list.length} 个课次`);
   fs.writeFileSync(path.join(box, 'meta.json'), JSON.stringify({
-    id, course, lesson, at: new Date().toISOString(), size, items,
+    id, course: first.course, lesson: list.length > 1 ? `${list.length} 个课次` : first.lesson,
+    summary, at: new Date().toISOString(), size, lessons: list, items,
   }, null, 2));
   res.json({ ok: true, id, size, removed: items.length, errors });
 }));
@@ -1267,6 +1316,7 @@ app.get('/api/trash/list', asyncRoute(async (_req, res) => {
       const meta = JSON.parse(fs.readFileSync(path.join(root, e.name, 'meta.json'), 'utf8'));
       items.push({
         id: e.name, course: meta.course || '', lesson: meta.lesson || '',
+        summary: meta.summary || `${meta.course || ''} · ${meta.lesson || ''}`,
         at: meta.at || '', size: meta.size || 0, count: (meta.items || []).length,
       });
     } catch { /* 没有 meta 的目录不展示 */ }
@@ -1314,6 +1364,89 @@ app.post('/api/trash/purge', asyncRoute(async (req, res) => {
   if (!id || !fs.existsSync(box)) return res.status(404).json({ error: '回收站里找不到这一项' });
   fs.rmSync(box, { recursive: true, force: true });
   res.json({ ok: true });
+}));
+
+// ---------- 导入自定义课件（PPT / PPTX / PDF / 图片 → 课次图片目录） ----------
+
+function lessonDirOf(course, lesson) {
+  return ensureInside(DATA_DIR, path.join(DATA_DIR, course, lesson));
+}
+
+function countLessonImages(dir) {
+  try {
+    return fs.readdirSync(dir).filter((f) => /\.(jpe?g|png|webp|bmp)$/i.test(f)).length;
+  } catch { return 0; }
+}
+
+app.get('/api/import-lesson/check', asyncRoute(async (req, res) => {
+  const course = sanitizeName(String(req.query.course || '').trim());
+  const lesson = sanitizeName(String(req.query.lesson || '').trim());
+  if (!course || !lesson) return res.status(400).json({ error: '请先填写课程名和课次名' });
+  const dir = lessonDirOf(course, lesson);
+  res.json({ exists: fs.existsSync(dir), images: countLessonImages(dir), course, lesson });
+}));
+
+app.post('/api/import-lesson', express.raw({ type: () => true, limit: '1024mb' }), asyncRoute(async (req, res) => {
+  const course = sanitizeName(String(req.query.course || '').trim());
+  const lesson = sanitizeName(String(req.query.lesson || '').trim());
+  const filename = String(req.query.filename || '').trim();
+  const kind = String(req.query.kind || '').trim();
+  const seq = Math.max(1, Number(req.query.seq) || 1);
+  if (!course || !lesson || !filename) return res.status(400).json({ error: '缺课程名 / 课次名 / 文件名' });
+  const buf = req.body;
+  if (!buf || !buf.length) return res.status(400).json({ error: '文件内容为空' });
+  const ext = path.extname(filename).toLowerCase();
+  const dir = lessonDirOf(course, lesson);
+  ensureDir(dir);
+
+  if (kind === 'image') {
+    if (!/\.(jpe?g|png|webp|bmp)$/i.test(ext)) return res.status(400).json({ error: `不支持的图片格式：${ext}` });
+    const fixedExt = ext === '.jpeg' ? '.jpg' : ext;
+    const target = ensureInside(dir, path.join(dir, `${String(seq).padStart(4, '0')}${fixedExt}`));
+    fs.writeFileSync(target, buf);
+    return res.json({ ok: true, file: path.basename(target), course, lesson });
+  }
+
+  if (kind === 'pdf' && ext !== '.pdf') return res.status(400).json({ error: '文件与类型不匹配（期望 PDF）' });
+  if (kind === 'pptx' && !['.ppt', '.pptx'].includes(ext)) return res.status(400).json({ error: '文件与类型不匹配（期望 PPT / PPTX）' });
+
+  // 先落临时目录再转换，课次目录里只出现最终图片
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wqppt-import-'));
+  const tmpFile = path.join(tmpDir, sanitizeName(path.basename(filename)));
+  fs.writeFileSync(tmpFile, buf);
+  try {
+    if (kind === 'pdf') {
+      const py = findPython();
+      if (!py) return res.status(500).json({ error: '找不到 Python 环境（.venv-p2t），无法转换 PDF' });
+      const r = await runCmd(py, [path.join(ROOT_DIR, 'tools', 'pdf2images.py'), tmpFile, dir], { timeout: 900000 });
+      if (!r.ok) return res.status(500).json({ error: 'PDF 转换失败：' + String(r.stderr || r.error || '').slice(0, 300) });
+      return res.json({ ok: true, pages: countLessonImages(dir), course, lesson });
+    }
+    // PPT / PPTX：PowerPoint COM 导出到临时目录，再按页码自然序复制进课次目录
+    const outTmp = path.join(tmpDir, 'out');
+    ensureDir(outTmp);
+    const psExe = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+    const r = await runCmd(psExe, [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ROOT_DIR, 'tools', 'pptx2images.ps1'),
+      '-PptPath', tmpFile, '-OutDir', outTmp,
+    ], { timeout: 900000 });
+    if (!r.ok) return res.status(500).json({ error: 'PPT 转换失败（需要本机安装 PowerPoint）：' + String(r.stderr || r.error || '').slice(0, 300) });
+    const imgs = fs.readdirSync(outTmp)
+      .filter((f) => /\.(jpe?g|png)$/i.test(f))
+      .sort((a, b) => {
+        const na = Number((a.match(/\d+/) || ['0'])[0]);
+        const nb = Number((b.match(/\d+/) || ['0'])[0]);
+        return na - nb;
+      });
+    if (!imgs.length) return res.status(500).json({ error: 'PPT 转换没有产生图片（演示文稿可能为空）' });
+    imgs.forEach((f, i) => {
+      const target = ensureInside(dir, path.join(dir, `${String(i + 1).padStart(4, '0')}.jpg`));
+      fs.copyFileSync(path.join(outTmp, f), target);
+    });
+    return res.json({ ok: true, pages: imgs.length, course, lesson });
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  }
 }));
 
 // ---------- 一键退出 / 一键升级 ----------

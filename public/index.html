@@ -78,7 +78,14 @@
           <span>转 MD 前先自动去重（推荐）</span>
         </label>
         <button class="btn" id="btnRefreshFiles">刷新</button>
+        <button class="btn" id="btnImportCourse" title="把老师发的 PPT / PDF / 图片导入成课次，走同一套转 MD → 笔记 → 复习流程">＋ 导入课件</button>
       </div>
+    </div>
+    <div class="selbar-row" id="fileTools" hidden>
+      <span id="fileSelCount">已选 0 个课次</span>
+      <button class="btn tiny" id="btnSelAll">全选</button>
+      <button class="btn tiny" id="btnSelClear">清除</button>
+      <button class="btn tiny danger" id="btnDelSelected">删除所选</button>
     </div>
     <div class="panel-body scroll" id="fileTree">
       <p class="empty">downloads/ 目录为空</p>
@@ -352,6 +359,22 @@
     <div class="modal-actions">
       <button class="btn ghost" id="delCancel">取消</button>
       <button class="btn danger" id="delConfirm">删除到回收站</button>
+    </div>
+  </div>
+</div>
+
+<!-- 导入自定义课件弹窗 -->
+<div class="modal-mask" id="impLessonModal" hidden>
+  <div class="modal">
+    <h3>导入自定义课件</h3>
+    <p class="hint">支持 <b>PPT / PPTX</b>（用本机 PowerPoint 导出每页图）、<b>PDF</b>（逐页渲染）、<b>图片</b>（可多选，按文件名顺序合成一节课）。导入后即可像问渠课件一样「转 MD → 生成笔记 → 复习」。</p>
+    <label class="field"><span>课件文件</span><input type="file" id="impLessonFiles" multiple accept=".ppt,.pptx,.pdf,.jpg,.jpeg,.png,.webp,.bmp"></label>
+    <label class="field"><span>课程名</span><input type="text" id="impLessonCourse" list="dlCourseOptions" placeholder="选已有课程，或输入新课程名"><datalist id="dlCourseOptions"></datalist></label>
+    <label class="field"><span>课次名</span><input type="text" id="impLessonName" placeholder="默认取文件名"></label>
+    <p class="test-result" id="impLessonHint"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="impLessonCancel">取消</button>
+      <button class="btn primary" id="impLessonGo">开始导入</button>
     </div>
   </div>
 </div>
