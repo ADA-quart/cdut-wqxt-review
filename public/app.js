@@ -854,8 +854,12 @@ async function startMdJob(node, btn) {
   btn.textContent = '提交中…';
   try {
     const dedup = $('dedupChk') ? $('dedupChk').checked : true;
-    await api('/md-jobs', { method: 'POST', body: { dir: node.rel, dedup } });
-    toast(`已提交转换：${node.name}${dedup ? '（自动去重）' : ''}`, 'ok');
+    const r = await api('/md-jobs', { method: 'POST', body: { dir: node.rel, dedup } });
+    if (r.job && r.job.reused) {
+      toast(`「${node.name}」已有转换任务在跑（#${r.job.id}），等它出结果就行`, 'ok');
+    } else {
+      toast(`已提交转换：${node.name}${dedup ? '（自动去重）' : ''}`, 'ok');
+    }
   } catch (e) {
     toast('转换提交失败：' + e.message, 'err');
   } finally {
@@ -894,8 +898,13 @@ async function startLlmJob(node, op, btn) {
   btn.disabled = true;
   btn.textContent = '提交中…';
   try {
-    await api('/llm-jobs', { method: 'POST', body: { op, dir: node.rel, mode } });
-    toast(`已提交${op === 'proofread' ? '纠错' : '总结'}：${node.name}（${LLM_FIELDS[mode]?.label || mode}）`, 'ok');
+    const r = await api('/llm-jobs', { method: 'POST', body: { op, dir: node.rel, mode } });
+    const label = op === 'proofread' ? '纠错' : '总结';
+    if (r.job && r.job.reused) {
+      toast(`${node.name} 的「${label}」已在跑（#${r.job.id}），等它完成就行`, 'ok');
+    } else {
+      toast(`已提交${label}：${node.name}（${LLM_FIELDS[mode]?.label || mode}）`, 'ok');
+    }
   } catch (e) {
     toast('提交失败：' + e.message, 'err');
   } finally {

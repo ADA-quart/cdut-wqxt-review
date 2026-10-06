@@ -100,6 +100,7 @@
           <label class="chk" id="attachWrap" title="发送时附带当前页的 OCR 文字">
             <input type="checkbox" id="attachPage" checked> 附带当前页
           </label>
+          <button class="btn tiny" id="btnHistory" title="查看该课次的完整对话历史">历史</button>
           <button class="btn tiny" id="btnClearChat">清空</button>
         </div>
       </div>
@@ -142,6 +143,17 @@
     <h4>反链 · 谁引用了本课</h4>
     <div id="backLinks" class="links"><p class="empty">加载中…</p></div>
   </div>
+</aside>
+
+<aside class="drawer" id="historyDrawer" hidden>
+  <div class="drawer-head">
+    <h3>💬 历史对话</h3>
+    <div class="tools">
+      <span class="muted" id="historyCount"></span>
+      <button class="btn tiny" id="btnCloseHistory">×</button>
+    </div>
+  </div>
+  <div class="drawer-body" id="historyBody"><p class="empty">还没有对话记录。</p></div>
 </aside>
 
 <aside class="drawer" id="auditDrawer" hidden>

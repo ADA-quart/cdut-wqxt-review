@@ -154,6 +154,12 @@ export function createMdJob(opts) {
   const hasImages = fs.readdirSync(absDir).some((f) => /\.(jpe?g|png|webp|bmp)$/i.test(f));
   if (!hasImages) throw new Error(`目录中没有图片：${relDir}`);
 
+  // 幂等：同一课次已有排队/进行中的转换任务 → 复用，避免重复排队烧 GPU
+  const dup = [...mdJobs.values()].find(
+    (j) => j.relDir === relDir && (j.status === 'pending' || j.status === 'running'),
+  );
+  if (dup) return { ...publicMdJob(dup), reused: true };
+
   const job = {
     id: nextJobId++,
     status: 'pending',

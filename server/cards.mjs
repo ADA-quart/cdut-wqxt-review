@@ -65,11 +65,22 @@ export function dueCount() {
   return listCards({ dueOnly: true }).length;
 }
 
+const normText = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
 export function addCard({ dir, page = null, kind = 'star', text = '', front = '', back = '' }) {
   const rel = safeRel(dir);
   if (!KINDS.includes(kind)) throw new Error(`未知标记类型：${kind}`);
   const cards = readCards(rel);
   const now = Date.now();
+  const pageNo = page ? Number(page) : null;
+  // 判重：同一课次、同类型、内容相同（问答卡看题干）→ 不重复入队
+  const dup = cards.find((c) =>
+    c.kind === kind && (
+      kind === 'qa'
+        ? normText(front) && normText(c.front) === normText(front)
+        : normText(text) && normText(c.text) === normText(text) && (c.page || null) === pageNo
+    ));
+  if (dup) return { ...dup, duplicate: true };
   const card = {
     id: now.toString(36) + Math.random().toString(36).slice(2, 6),
     dir: rel,
@@ -95,7 +106,7 @@ export function addCards(dir, items) {
   let added = 0;
   for (const it of items || []) {
     if (!it || !String(it.front || '').trim()) continue;
-    addCard({
+    const card = addCard({
       dir,
       page: it.page ?? null,
       kind: it.kind && KINDS.includes(it.kind) ? it.kind : 'qa',
@@ -103,7 +114,7 @@ export function addCards(dir, items) {
       front: String(it.front).slice(0, 500),
       back: String(it.back || '').slice(0, 1200),
     });
-    added++;
+    if (!card.duplicate) added++;
   }
   return added;
 }

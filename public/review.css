@@ -245,6 +245,14 @@ body.dragging { user-select: none; cursor: col-resize; }
 .drawer-body { padding: 14px 16px; overflow: auto; }
 .drawer-body h4 { margin: 14px 0 8px; font-size: 13px; color: var(--ink-2); }
 .drawer-body h4:first-child { margin-top: 0; }
+
+/* 历史对话抽屉 */
+.hist-item { border-bottom: 1px solid var(--line); padding: 10px 0; }
+.hist-item:last-child { border-bottom: 0; }
+.hist-meta { font-size: 11.5px; color: var(--ink-3); margin-bottom: 5px; }
+.hist-body { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.hist-item.assistant .hist-body { background: #f2f3f5; border-radius: 8px; padding: 8px 10px; }
+.hist-item.user .hist-body { background: var(--brand); color: #fff; border-radius: 8px; padding: 8px 10px; display: inline-block; max-width: 92%; white-space: pre-wrap; }
 .links { display: flex; flex-direction: column; gap: 8px; }
 .link-item {
   border: 1px solid var(--line);

@@ -803,10 +803,38 @@ async function runAudit(job) {
     return { text: it.text.slice(0, 140), pages: it.pages, verdict: it.verdict, reason: it.reason || '' };
   });
 
-  // ③ 知识点清单：LLM 从课件原文提取「可自测的独立知识点」（分批，避免单次调用超时）
+  // ③ 知识点清单：优先复用上次审计留下的清单（原文没变就不重复调用 LLM，省 token）
   job.progress.current = '准备知识点清单';
   emit(job);
+  const pointsJsonPath = mdPath.replace(/\.md$/i, '.points.json');
+  const pointsMdPath = mdPath.replace(/\.md$/i, '.points.md');
+  let points = [];
+  let reusedPoints = false;
+  try {
+    const mdMtime = fs.statSync(mdPath).mtimeMs;
+    if (fs.existsSync(pointsJsonPath)) {
+      const cached = JSON.parse(fs.readFileSync(pointsJsonPath, 'utf8'));
+      if (cached && Number(cached.sourceMtimeMs || 0) + 500 >= mdMtime && Array.isArray(cached.items)) {
+        points = cached.items
+          .map((p) => ({ point: String(p.point || '').trim(), page: Number(p.page) || 0 }))
+          .filter((p) => p.point);
+        reusedPoints = points.length > 0;
+      }
+    }
+    // 兼容旧版：只有 .points.md 时从清单里解析
+    if (!reusedPoints && fs.existsSync(pointsMdPath) && fs.statSync(pointsMdPath).mtimeMs + 500 >= mdMtime) {
+      for (const line of fs.readFileSync(pointsMdPath, 'utf8').split('\n')) {
+        const m = /^- (?:✅|⚠️|❌|·)\s+(.+?)\s*\[\[[^\]]*#page=(\d+)\|[^\]]*\]\]\s*$/.exec(line.trim());
+        if (m) points.push({ point: m[1].trim(), page: Number(m[2]) || 0 });
+      }
+      reusedPoints = points.length > 0;
+    }
+  } catch { points = []; reusedPoints = false; }
+
   const pointChunks = [];
+  if (reusedPoints) {
+    job.log.push(`复用上次的知识点清单（${points.length} 条，跳过提取）`);
+  } else {
   {
     let cur = [];
     let size = 0;
@@ -824,7 +852,7 @@ async function runAudit(job) {
   }
   job.progress.total = groupList.length + 2 + pointChunks.length;
   emit(job);
-  let points = [];
+  points = [];
   await mapLimit(pointChunks, 2, async (chunk) => {
     if (job.canceled) return;
     const from = Number(chunk[0].n);
@@ -864,9 +892,10 @@ async function runAudit(job) {
     emit(job);
   });
   points.sort((a, b) => (a.page || 0) - (b.page || 0));
+  }
 
   points = points.slice(0, 150);
-  if (points.length) job.log.push(`共提取 ${points.length} 个知识点`);
+  if (points.length) job.log.push(`${reusedPoints ? '使用' : '提取到'} ${points.length} 个知识点`);
 
   // ④ 覆盖判定：分批逐条判断笔记里有没有讲到（文本行输出，避免长 JSON 破损）
   let knowledge = null;
@@ -936,6 +965,18 @@ async function runAudit(job) {
 
   // 知识点清单落盘（含覆盖状态），当复习大纲用
   if (knowledge) {
+    // 结构化清单：下次审计直接读取，不再重复调用 LLM 提取
+    let knownMtime = 0;
+    try { knownMtime = fs.statSync(mdPath).mtimeMs; } catch { /* 忽略 */ }
+    try {
+      fs.writeFileSync(pointsJsonPath, JSON.stringify({
+        v: 1,
+        generatedAt: Date.now(),
+        lesson: lessonName,
+        sourceMtimeMs: knownMtime,
+        items: knowledge.items.map((p) => ({ point: p.point, page: p.page })),
+      }, null, 2), 'utf8');
+    } catch { /* 写不进去不影响审计结果 */ }
     const kMark = { covered: '✅', partial: '⚠️', missing: '❌', unknown: '·' };
     const pl = [
       `# ${lessonName} · 知识点清单`,
@@ -1234,9 +1275,17 @@ export function createLlmJob({ op, dir, mode, scope }) {
     ? (PROFILE_KEYS.includes(mode) ? mode : cfg.defaultMode || 'text')
     : 'text';
 
+  // 幂等：同一目标 + 同一操作已有排队/进行中的任务 → 复用，避免重复烧 token
+  const jobKey = op === 'weave' && scope === 'all' ? 'weave:*ALL*' : `${op}:${relDir}`;
+  const dup = [...llmJobs.values()].find(
+    (j) => j.jobKey === jobKey && (j.status === 'pending' || j.status === 'running'),
+  );
+  if (dup) return { ...publicJob(dup), reused: true };
+
   const job = {
     id: nextJobId++,
     op,
+    jobKey,
     mode: useMode,
     scope: scope === 'all' ? 'all' : 'course',
     status: 'pending',

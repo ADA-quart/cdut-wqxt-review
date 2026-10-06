@@ -413,7 +413,7 @@ function readTree(dir, depth) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
-  const HIDDEN = /\.(dedup\.(json|html)|ocr-backup\.md|cards\.json|note\.marks\.json)$/i;
+  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math)-backup\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json)$/i;
   return entries
     .filter((e) => !e.name.startsWith('.') && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
@@ -477,6 +477,68 @@ app.post('/api/note-marks', asyncRoute(async (req, res) => {
     fs.writeFileSync(file, JSON.stringify({ v: 1, marks: clean }), 'utf8');
   }
   res.json({ ok: true, count: clean.length });
+}));
+
+// 对话历史：按课次存 <课次>.chat.json —— 刷新/重开浏览器后能继续看，也能回看更早的内容
+function chatHistoryFile(relDir) {
+  const rel = String(relDir || '').replace(/^[/\\]+/, '');
+  if (rel.split('/').filter(Boolean).length < 2) throw new Error('dir 需要是「课程/课次」');
+  return ensureInside(NOTES_DIR, path.join(NOTES_DIR, `${rel}.chat.json`));
+}
+
+app.get('/api/chat-history', asyncRoute(async (req, res) => {
+  const rel = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  const file = chatHistoryFile(rel);
+  let messages = [];
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (Array.isArray(data.messages)) messages = data.messages;
+  } catch { /* 还没有历史 */ }
+  res.json({ messages, count: messages.length });
+}));
+
+app.post('/api/chat-history', asyncRoute(async (req, res) => {
+  const { dir: relDir, messages } = req.body || {};
+  if (!Array.isArray(messages)) return res.status(400).json({ error: '缺少 messages' });
+  const file = chatHistoryFile(relDir);
+  let stored = [];
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (Array.isArray(data.messages)) stored = data.messages;
+  } catch { /* 忽略 */ }
+  const seen = new Set(stored.map((m) => m && m.id).filter(Boolean));
+  const clean = [];
+  for (const m of messages) {
+    if (!m || !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string') continue;
+    const id = m.id ? String(m.id).slice(0, 64) : '';
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    clean.push({
+      ...(id ? { id } : {}),
+      role: m.role,
+      content: m.content.slice(0, 20000),
+      ...(typeof m.display === 'string' ? { display: m.display.slice(0, 20000) } : {}),
+      ...(Array.isArray(m.sources) ? {
+        sources: m.sources.slice(0, 8).map((s) => ({
+          course: String(s?.course || ''), lesson: String(s?.lesson || ''),
+          page: Number(s?.page) || null, rel: String(s?.rel || ''),
+          snippet: String(s?.snippet || '').slice(0, 200),
+        })),
+      } : {}),
+      at: Number(m.at) || Date.now(),
+    });
+  }
+  const next = [...stored, ...clean].slice(-2000);
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, JSON.stringify({ v: 1, updatedAt: Date.now(), messages: next }, null, 2), 'utf8');
+  res.json({ ok: true, count: next.length, added: clean.length });
+}));
+
+app.delete('/api/chat-history', asyncRoute(async (req, res) => {
+  const rel = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  const file = chatHistoryFile(rel);
+  try { fs.unlinkSync(file); } catch { /* 没有就算了 */ }
+  res.json({ ok: true });
 }));
 
 app.post('/api/chat', asyncRoute(async (req, res) => {
@@ -597,7 +659,7 @@ app.post('/api/cards', asyncRoute(async (req, res) => {
   const { dir, page, kind, text, front, back } = req.body || {};
   if (!dir) return res.status(400).json({ error: '缺少 dir' });
   const card = addCard({ dir: String(dir), page, kind: kind || 'star', text, front, back });
-  res.status(201).json({ card, dueCount: dueCount() });
+  res.status(201).json({ card, duplicate: Boolean(card.duplicate), dueCount: dueCount() });
 }));
 
 app.post('/api/cards/:id/grade', asyncRoute(async (req, res) => {
@@ -642,9 +704,9 @@ app.post('/api/cards/gen-qa', asyncRoute(async (req, res) => {
   text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ').replace(/<!--[\s\S]*?-->/g, ' ').trim();
   if (!text) return res.status(404).json({ error: page ? `md 里没有第 ${page} 页` : '内容为空' });
   const items = await generateQaCards(text, { count: Number(count) || 3, lesson: `${course} / ${lesson}`, page: pageNo });
-  if (!items.length) return res.json({ added: 0, cards: [] });
+  if (!items.length) return res.json({ added: 0, skipped: 0, cards: [] });
   const added = addCards(rel, items);
-  res.json({ added, cards: items, dueCount: dueCount() });
+  res.json({ added, skipped: Math.max(0, items.length - added), cards: items, dueCount: dueCount() });
 }));
 
 /** 费曼回评：学生复述 → 缺漏/纠错/追问 */

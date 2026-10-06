@@ -18,10 +18,13 @@ const state = {
   pageIndex: 0,
   messages: [],     // [{ role, content, display? }]
   sending: false,
+  chatPending: [],
   mdUrl: '',
 };
 
 const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
+// 阅读进度按课次保存在浏览器本地（对话历史走服务端 <课次>.chat.json）
+const pageStoreKey = () => 'wqppt_page:' + dir;
 const fileUrl = (p) => '/files/' + enc(p);
 const noteUrl = (p) => '/notes/' + enc(p);
 const imgUrl = (name) => fileUrl(`${dir}/${name}`);
@@ -391,6 +394,7 @@ function showPage(i) {
   const idx = Math.max(0, Math.min(i, state.pages.length - 1));
   state.pageIndex = idx;
   const p = state.pages[idx];
+  try { localStorage.setItem(pageStoreKey(), String(p.n)); } catch { /* 忽略 */ }
 
   const stage = $('imgStage');
   stage.innerHTML = '';
@@ -620,6 +624,74 @@ function jumpToPage(n) {
   if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/** 消息 id：服务端历史按 id 去重，防重复追加 */
+const newMsgId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+/** 加载该课次的服务端对话历史（<课次>.chat.json） */
+async function loadChatHistory() {
+  try {
+    const r = await fetch('/api/chat-history?dir=' + encodeURIComponent(dir));
+    if (!r.ok) return;
+    const data = await r.json();
+    const arr = Array.isArray(data.messages) ? data.messages : [];
+    if (!arr.length) return;
+    state.messages = arr;
+    renderChatMessages(true);
+  } catch { /* 服务端不可用时保持空 */ }
+}
+
+/** 聊天区只渲染最近 30 条；更早的完整历史在「历史」抽屉里看 */
+function renderChatMessages(scrollBottom = false) {
+  const box = $('chatMsgs');
+  box.innerHTML = '';
+  for (const m of state.messages.slice(-30)) {
+    if (!m || typeof m.content !== 'string') continue;
+    if (m.role === 'assistant') {
+      const el = addMessage('assistant', renderAssistantHtml(m.content), { html: true });
+      if (Array.isArray(m.sources) && m.sources.length) {
+        try { decorateCitations(el, m.sources); appendSources(el, m.sources); } catch { /* 旧数据不兼容就算了 */ }
+      }
+    } else if (m.role === 'user') {
+      addMessage('user', m.display ?? m.content);
+    }
+  }
+  if (scrollBottom) box.scrollTop = box.scrollHeight;
+}
+
+/** 增量把新消息推到服务端；失败时暂存，下一次发送时一起补 */
+async function pushChatHistory(msgs) {
+  const batch = [...(state.chatPending || []), ...msgs].filter(Boolean);
+  if (!batch.length) return;
+  try {
+    const r = await fetch('/api/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir, messages: batch }),
+    });
+    state.chatPending = r.ok ? [] : batch.slice(-50);
+  } catch {
+    state.chatPending = batch.slice(-50);
+  }
+}
+
+/** 历史抽屉：展示该课次的完整对话 */
+function renderHistoryPanel() {
+  const box = $('historyBody');
+  const arr = state.messages || [];
+  $('historyCount').textContent = arr.length ? `共 ${arr.length} 条` : '';
+  if (!arr.length) {
+    box.innerHTML = '<p class="empty">还没有对话记录。在右下角提问后，这里会保留完整历史。</p>';
+    return;
+  }
+  box.innerHTML = arr.map((m) => {
+    const when = m.at ? new Date(m.at).toLocaleString('zh-CN') : '';
+    const who = m.role === 'user' ? '你' : 'AI';
+    const body = m.role === 'assistant' ? renderAssistantHtml(m.content) : escapeHtml(m.display ?? m.content);
+    return `<div class="hist-item ${m.role}"><div class="hist-meta">${who}${when ? ' · ' + when : ''}</div><div class="hist-body">${body}</div></div>`;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
 async function send(text, { display } = {}) {
   const q = String(text || '').trim();
   if (!q || state.sending) return;
@@ -627,7 +699,9 @@ async function send(text, { display } = {}) {
   $('btnSend').disabled = true;
 
   const shown = display ?? q;
-  state.messages.push({ role: 'user', content: q, display: shown });
+  let asstMsg = null;
+  const userMsg = { id: newMsgId(), role: 'user', content: q, display: shown, at: Date.now() };
+  state.messages.push(userMsg);
   addMessage('user', shown);
 
   const bubble = addMessage('assistant', '思考中…');
@@ -698,7 +772,8 @@ async function send(text, { display } = {}) {
       decorateCitations(bubble, sources);
       appendSources(bubble, sources);
     }
-    state.messages.push({ role: 'assistant', content: acc });
+    asstMsg = { id: newMsgId(), role: 'assistant', content: acc, sources: sources.length ? sources : undefined, at: Date.now() };
+    state.messages.push(asstMsg);
   } catch (e) {
     bubble.textContent = '请求失败：' + String(e.message || e);
     bubble.classList.add('error');
@@ -706,6 +781,7 @@ async function send(text, { display } = {}) {
     state.sending = false;
     $('btnSend').disabled = false;
     $('chatMsgs').scrollTop = $('chatMsgs').scrollHeight;
+    void pushChatHistory([userMsg, asstMsg].filter(Boolean));
   }
 }
 
@@ -858,7 +934,8 @@ async function runLlmJob(body, { onDone, label } = {}) {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   const id = data.job.id;
-  toast(`${label}已提交（任务 #${id}），处理中…`);
+  if (data.job.reused) toast(`${label}已有相同任务在跑（#${id}），直接等这个结果…`);
+  else toast(`${label}已提交（任务 #${id}），处理中…`);
 
   const started = Date.now();
   while (true) {
@@ -1252,11 +1329,16 @@ function setupEvents() {
       $('btnSend').click();
     }
   });
-  $('btnClearChat').onclick = () => {
-    if (!confirm('清空当前对话？')) return;
+  $('btnClearChat').onclick = async () => {
+    if (!confirm('清空当前对话？（服务端保存的该课次历史也会一起删除）')) return;
     state.messages = [];
+    state.chatPending = [];
     $('chatMsgs').innerHTML = '';
+    try { await fetch('/api/chat-history?dir=' + encodeURIComponent(dir), { method: 'DELETE' }); } catch { /* 忽略 */ }
+    if (!$('historyDrawer').hidden) renderHistoryPanel();
   };
+  $('btnHistory').onclick = () => { renderHistoryPanel(); $('historyDrawer').hidden = false; };
+  $('btnCloseHistory').onclick = () => { $('historyDrawer').hidden = true; };
 
   $('btnCopyMd').onclick = async () => {
     try {
@@ -1730,7 +1812,7 @@ async function markCurrent(kind) {
       body: JSON.stringify({ dir, page, kind, text }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const { dueCount } = await r.json();
+    const { dueCount, duplicate } = await r.json();
     const badge = $('dueBadge');
     badge.textContent = String(dueCount);
     badge.hidden = !dueCount;
@@ -1741,7 +1823,9 @@ async function markCurrent(kind) {
       b.title = KIND_META[kind].label;
       sec.prepend(b);
     }
-    toast(`${KIND_META[kind].icon} 第 ${page} 页已加入复习队列`);
+    toast(duplicate
+      ? '这一页的内容已经在复习队列里，没有重复添加'
+      : `${KIND_META[kind].icon} 第 ${page} 页已加入复习队列`);
   } catch (e) {
     toast('标记失败：' + String(e.message || e));
   }
@@ -1762,8 +1846,11 @@ async function genQaCurrent() {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
-    if (!data.added) { toast('这一页没生成出卡片（内容可能太少）'); return; }
-    toast(`🧠 第 ${page} 页已生成 ${data.added} 张问答卡，打开「复习」开始自测`);
+    if (!data.added) {
+      toast(data.skipped ? '这一页的题目已经在卡里了（没有重复添加）' : '这一页没生成出卡片（内容可能太少）');
+      return;
+    }
+    toast(`🧠 第 ${page} 页已生成 ${data.added} 张问答卡${data.skipped ? `（跳过 ${data.skipped} 张重复）` : ''}，打开「复习」开始自测`);
     await refreshDueBadge();
     await markCardBadges();
   } catch (e) {
@@ -1875,6 +1962,7 @@ async function markCardBadges() {
   setupSplitters();
   setupEvents();
   setupSelection();
+  void loadChatHistory();
 
   try {
     const r = await fetch(state.mdUrl);
@@ -1893,9 +1981,17 @@ async function markCardBadges() {
   buildPages();
   renderThumbs();
   const pageParam = Number(params.get('page')) || 0;
-  if (state.pages.length) showPage(pageParam > 0 ? Math.min(pageParam, state.pages.length) - 1 : 0);
-  if (pageParam > 0) {
-    const sec = document.getElementById('sec-' + pageParam);
+  let savedPage = 0;
+  if (!pageParam) {
+    try { savedPage = Number(localStorage.getItem(pageStoreKey())) || 0; } catch { /* 忽略 */ }
+  }
+  const initialPage = pageParam > 0 ? pageParam : savedPage;
+  if (state.pages.length) {
+    const idx = initialPage > 0 ? pageIndexByNumber(initialPage) : -1;
+    showPage(idx >= 0 ? idx : 0);
+  }
+  if (initialPage > 0) {
+    const sec = document.getElementById('sec-' + initialPage);
     if (sec) setTimeout(() => sec.scrollIntoView({ block: 'start' }), 80);
   }
   const blkParam = params.get('blk');
