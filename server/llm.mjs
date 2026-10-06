@@ -727,12 +727,14 @@ async function runAudit(job) {
   const pageMap = new Map(pages.map((p) => [Number(p.n), stripForSummary(p.body)]));
   const items = [];
   let noRef = 0;
-  for (const line of noteText.split('\n')) {
+  const noteLinesArr = noteText.split('\n');
+  for (let ln = 0; ln < noteLinesArr.length; ln++) {
+    const line = noteLinesArr[ln];
     const t = line.trim();
     if (!t.startsWith('- ')) continue;
     const refs = [...t.matchAll(/#page=(\d+)/g)].map((m) => Number(m[1]));
     if (!refs.length) { noRef += 1; continue; }
-    items.push({ text: t.slice(2).replace(/\[\[[^\]]*\]\]/g, '').trim(), pages: refs });
+    items.push({ text: t.slice(2).replace(/\[\[[^\]]*\]\]/g, '').trim(), pages: refs, lineNo: ln });
   }
   if (noRef) job.log.push(`有 ${noRef} 条笔记没带页码角标，未参与核对`);
   if (!items.length) throw new Error('笔记里没有可核对的条目（都没有页码角标）');
@@ -768,7 +770,8 @@ async function runAudit(job) {
 - unsupported：原文不支持或与之矛盾
 - figure：该条依赖图片/图表才能核实，纯文本无法判断
 从严对待「原文没有而笔记自己添加的内容」；reason 用中文、不超过 30 字。
-只输出 JSON：{"items":[{"i":1,"verdict":"ok","reason":"..."}]}，i 是条目序号。`,
+对 partial / unsupported 的条目：如果与原文不符的部分能依据原文改对（错字、公式、数字、术语、丢掉的限定条件），在 fix 里给出「修正后的完整条目正文」——保留条目里属于 AI 自己的补充内容，只把与原文不符/矛盾的部分改对；不要新增知识、不要删掉补充、不要带页码角标。无法确定或整条主要是 AI 补充时省略 fix。
+只输出 JSON：{"items":[{"i":1,"verdict":"ok","reason":"...","fix":"..."}]}，i 是条目序号，fix 可选。`,
           },
           {
             role: 'user',
@@ -785,6 +788,7 @@ async function runAudit(job) {
         const r = by.get(k + 1) || {};
         it.verdict = ['ok', 'partial', 'unsupported', 'figure'].includes(r.verdict) ? r.verdict : 'figure';
         it.reason = String(r.reason || '').slice(0, 60);
+        it.fix = typeof r.fix === 'string' ? r.fix.trim().slice(0, 600) : '';
       });
     } catch (e) {
       job.log.push(`第 ${g.page} 页核对失败：` + String(e?.message || e).slice(0, 60));
@@ -796,11 +800,40 @@ async function runAudit(job) {
     emit(job);
   });
 
-  const stats = { ok: 0, partial: 0, unsupported: 0, figure: 0 };
+  // ②.5 依据审计结果修正笔记：把与原文不符的表述改对；AI 自己的补充内容保留不动
+  let fixedCount = 0;
+  let noteText2 = noteText;
+  const fixable = items.filter((it) => it.fix && Number.isInteger(it.lineNo));
+  if (fixable.length) {
+    const lines = noteText2.split('\n');
+    for (const it of fixable) {
+      const raw = lines[it.lineNo];
+      if (!raw || !raw.trim().startsWith('- ')) continue;
+      const clean = it.fix.replace(/^[-•]\s*/, '').replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!clean || clean === it.text.replace(/\s+/g, ' ').trim()) continue;
+      const angleAt = raw.indexOf('[[');
+      const suffix = angleAt >= 0 ? raw.slice(angleAt).trimEnd() : '';
+      lines[it.lineNo] = `- ${clean}${suffix ? ' ' + suffix : ''}`;
+      it.prev = it.text;
+      it.text = clean;
+      it.fixed = true;
+      fixedCount += 1;
+    }
+    if (fixedCount) noteText2 = lines.join('\n');
+  }
+  if (fixedCount) job.log.push(`自动修正 ${fixedCount} 条与原文不符的表述（原笔记已备份为 <课次>.note-backup.md）`);
+
+  const stats = { ok: 0, partial: 0, unsupported: 0, figure: 0, fixed: fixedCount };
   const outItems = items.map((it) => {
     if (stats[it.verdict] === undefined) it.verdict = 'figure';
     stats[it.verdict] += 1;
-    return { text: it.text.slice(0, 140), pages: it.pages, verdict: it.verdict, reason: it.reason || '' };
+    return {
+      text: it.text.slice(0, 300),
+      pages: it.pages,
+      verdict: it.verdict,
+      reason: it.reason || '',
+      ...(it.fixed ? { fixed: true, prev: (it.prev || '').slice(0, 300) } : {}),
+    };
   });
 
   // ③ 知识点清单：优先复用上次审计留下的清单（原文没变就不重复调用 LLM，省 token）
@@ -926,7 +959,7 @@ async function runAudit(job) {
             },
             {
               role: 'user',
-              content: `【知识点清单】\n${slice.map((p, i) => `${i + 1}. ${p.point}（第 ${p.page} 页）`).join('\n')}\n\n【笔记全文】\n${noteText.slice(0, 30000)}`,
+              content: `【知识点清单】\n${slice.map((p, i) => `${i + 1}. ${p.point}（第 ${p.page} 页）`).join('\n')}\n\n【笔记全文】\n${noteText2.slice(0, 30000)}`,
             },
           ],
           { profile: 'text', temperature: 0.1, maxTokens: 6000 },
@@ -949,6 +982,16 @@ async function runAudit(job) {
     kItems.forEach((k) => { kStats[k.status] += 1; });
     knowledge = { total: kItems.length, ...kStats, items: kItems };
     job.log.push(`知识点核对：${kStats.covered}/${kItems.length} 已覆盖，${kStats.partial} 条不完整，${kStats.missing} 条缺失`);
+  }
+
+  // 修正后的笔记落盘（先备份原文件；AI 补充内容原样保留）
+  if (fixedCount) {
+    try {
+      fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md'));
+      fs.writeFileSync(notePath, noteText2, 'utf8');
+    } catch (e) {
+      job.log.push('修正落盘失败：' + String(e?.message || e).slice(0, 60));
+    }
   }
 
   const report = {
@@ -1003,12 +1046,14 @@ async function runAudit(job) {
   if (cov.picOnly.length) lines.push(`- 🖼 图片页未被引用（建议翻原 PPT 确认）：${cov.picOnly.map((g) => `第 ${g.n} 页`).join('、')}`);
   if (cov.noText.length) lines.push(`- 无实质内容、自动忽略：${cov.noText.map((n) => `第 ${n} 页`).join('、')}`);
   lines.push('', '## ② 忠实度核对', '', `- ✅ ${stats.ok} 条 · ⚠️ ${stats.partial} 条 · ❌ ${stats.unsupported} 条 · 🔍 ${stats.figure} 条`);
+  if (stats.fixed) lines.push(`- ✏️ 已按课件原文自动修正 ${stats.fixed} 条（AI 自己的补充内容保留不动；原版见 .note-backup.md）`);
   const bad = outItems.filter((it) => it.verdict !== 'ok');
   if (bad.length) {
     lines.push('', '### 需要注意的条目', '');
     for (const it of bad) {
       const mark = { partial: '⚠️', unsupported: '❌', figure: '🔍' }[it.verdict] || '?';
-      lines.push(`- ${mark} ${it.text}（第 ${it.pages.join('、')} 页）—— ${it.reason}`);
+      const fixNote = it.fixed && it.prev ? `（✏️ 已自动修正，原为：${it.prev}）` : '';
+      lines.push(`- ${mark} ${it.text}（第 ${it.pages.join('、')} 页）—— ${it.reason}${fixNote}`);
     }
   } else {
     lines.push('', '全部条目都能在课件原文里找到支持。');
@@ -1019,7 +1064,7 @@ async function runAudit(job) {
   job.progress.done = job.progress.total;
   job.progress.current = '完成';
   emit(job);
-  return { pages: cov.total, covered: cov.covered, gaps: cov.gaps.length + cov.picOnly.length, ok: stats.ok, partial: stats.partial, unsupported: stats.unsupported, figure: stats.figure };
+  return { pages: cov.total, covered: cov.covered, gaps: cov.gaps.length + cov.picOnly.length, ok: stats.ok, partial: stats.partial, unsupported: stats.unsupported, figure: stats.figure, fixed: fixedCount };
 }
 
 /** 课程内知识链：生成课程索引 + 每个课次的「相关课次」块 */
@@ -1339,7 +1384,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
         else if (op === 'summarize') job.log.push(`完成：分 ${r.chunks} 块提取并汇总；${tok}`);
         else if (op === 'fixmath') job.log.push(`完成：检查 ${r.checked} 条公式，修复 ${r.fixed}/${r.broken} 条；${tok}`);
         else if (op === 'note') job.log.push(`完成：${r.pages} 页原文 → ${r.chunks} 段笔记（${r.note}）；${tok}`);
-        else if (op === 'audit') job.log.push('完成：覆盖 ' + r.covered + '/' + r.pages + ' 页；条目 OK ' + r.ok + ' / 部分 ' + r.partial + ' / 不支持 ' + r.unsupported + ' / 需看图 ' + r.figure + '；' + tok);
+        else if (op === 'audit') job.log.push('完成：覆盖 ' + r.covered + '/' + r.pages + ' 页；条目 OK ' + r.ok + ' / 部分 ' + r.partial + ' / 不支持 ' + r.unsupported + ' / 需看图 ' + r.figure + (r.fixed ? ' / 已修正 ' + r.fixed : '') + '；' + tok);
         else if (job.scope === 'all') job.log.push(`完成：${r.courses} 门课，识别关联 ${r.related} 对；${tok}`);
         else job.log.push(`完成：${r.lessons} 个课次，关联 ${r.related} 对；${tok}`);
         job.progress.done = job.progress.total;

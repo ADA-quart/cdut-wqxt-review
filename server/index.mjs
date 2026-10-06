@@ -413,7 +413,7 @@ function readTree(dir, depth) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
-  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math)-backup\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json)$/i;
+  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json)$/i;
   return entries
     .filter((e) => !e.name.startsWith('.') && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))

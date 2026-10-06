@@ -618,6 +618,8 @@ li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230,
 .audit-tag { flex: none; font-size: 12px; padding: 1px 8px; border-radius: 10px; margin-top: 2px; }
 .audit-tag.warn { background: #fdf1dd; color: #9a6a1f; }
 .audit-tag.info { background: #e8f2fd; color: #2c6db0; }
+.audit-tag.ok { background: #e6f4ea; color: #2f8a4c; }
+.audit-item.audit-fixed .audit-item-text { font-weight: 600; }
 .audit-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .audit-chip { border: 1px solid var(--line); background: #fff; border-radius: 8px; font-size: 12px; padding: 2px 8px; cursor: pointer; color: var(--ink-2); }
 .audit-chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }

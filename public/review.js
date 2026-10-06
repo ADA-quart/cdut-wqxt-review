@@ -1030,7 +1030,7 @@ function applyAuditMarks(container) {
     const b = document.createElement('span');
     b.className = 'audit-badge';
     b.textContent = mark;
-    b.title = it.reason || '';
+    b.title = (it.fixed ? '已按课件原文自动修正\n' : '') + (it.reason || '');
     li.appendChild(b);
   }
 }
@@ -1059,12 +1059,13 @@ function renderAuditPanel() {
       : '',
     (cov.noText || []).length ? `<p class="audit-skip muted">无实质内容、自动忽略：${cov.noText.map((n) => 'p' + n).join('、')}</p>` : '',
     '<h4>② 忠实度核对 <span class="muted">（逐条对照课件原文）</span></h4>',
-    `<div class="audit-stats"><span class="ok">✓ ${st.ok || 0} 条一致</span><span class="warn">⚠️ ${st.partial || 0} 条部分支持</span><span class="bad">❌ ${st.unsupported || 0} 条不支持</span><span class="info">🔍 ${st.figure || 0} 条需看图</span></div>`,
+    `<div class="audit-stats"><span class="ok">✓ ${st.ok || 0} 条一致</span><span class="warn">⚠️ ${st.partial || 0} 条部分支持</span><span class="bad">❌ ${st.unsupported || 0} 条不支持</span><span class="info">🔍 ${st.figure || 0} 条需看图</span>${st.fixed ? `<span class="ok">✏️ ${st.fixed} 条已按原文修正</span>` : ''}</div>`,
     bad.length
       ? `<div class="audit-items">${bad.map((it) => `
-        <div class="audit-item ${it.verdict}" data-page="${(it.pages || [])[0] || ''}">
-          <div class="audit-item-head">${label[it.verdict] || it.verdict} <span class="muted">· 第 ${(it.pages || []).join('、')} 页</span></div>
+        <div class="audit-item ${it.verdict}${it.fixed ? ' audit-fixed' : ''}" data-page="${(it.pages || [])[0] || ''}">
+          <div class="audit-item-head">${label[it.verdict] || it.verdict} <span class="muted">· 第 ${(it.pages || []).join('、')} 页</span>${it.fixed ? ' <span class="audit-tag ok">✏️ 已自动修正</span>' : ''}</div>
           <div class="audit-item-text">${escapeHtml(it.text)}</div>
+          ${it.fixed && it.prev ? `<div class="audit-item-reason">修正前：${escapeHtml(it.prev)}</div>` : ''}
           ${it.reason ? `<div class="audit-item-reason">${escapeHtml(it.reason)}</div>` : ''}
         </div>`).join('')}</div>`
       : '<p class="audit-ok">✓ 所有条目都能在课件原文里找到支持</p>',
@@ -1080,7 +1081,7 @@ function renderAuditPanel() {
         : '<p class="audit-ok">✓ 全部知识点在笔记里都有对应内容</p>'),
     ].join('') : ''),
 
-    '<p class="muted audit-note">审计由 AI 辅助，可能有误判，看到 ⚠️/❌ 请点条目跳去核对原文。</p>',
+    '<p class="muted audit-note">审计由 AI 辅助，可能有误判，看到 ⚠️/❌ 请点条目跳去核对原文。标了 ✏️ 的条目已按课件原文自动改对（AI 自己的补充内容保留不动，原版备份为 <code>.note-backup.md</code>）。</p>',
   ].join('');
   box.querySelectorAll('.audit-chip[data-page]').forEach((el) => {
     el.onclick = () => { $('auditDrawer').hidden = true; jumpToPage(Number(el.dataset.page)); };
@@ -1105,11 +1106,12 @@ async function handleAudit(force) {
   try {
     await runLlmJob({ op: 'audit', dir }, { label: '「质量审计」' });
     await loadAudit();
+    await loadNote();
     renderLeftPane();
     renderAuditPanel();
     $('auditDrawer').hidden = false;
     const st = (state.audit && state.audit.stats) || {};
-    toast(`审计完成：✓ ${st.ok || 0} · ⚠️ ${st.partial || 0} · ❌ ${st.unsupported || 0} · 🔍 ${st.figure || 0}`);
+    toast(`审计完成：✓ ${st.ok || 0} · ⚠️ ${st.partial || 0} · ❌ ${st.unsupported || 0} · 🔍 ${st.figure || 0}` + (st.fixed ? ` · ✏️ 已修正 ${st.fixed} 条` : ''));
   } catch (e) {
     toast('审计失败：' + String(e.message || e), false);
   } finally {
