@@ -303,8 +303,9 @@ async function startSubJob(course, sub, btn) {
   btn.disabled = true;
   btn.textContent = '创建中…';
   try {
-    await api('/jobs', { method: 'POST', body: { mode: 'sub', courseId: course.courseId, subId: sub.subId, termId: state.termId } });
-    toast(`已创建任务：${course.title} — ${sub.title}`, 'ok');
+    const force = Boolean($('subsForce') && $('subsForce').checked);
+    await api('/jobs', { method: 'POST', body: { mode: 'sub', courseId: course.courseId, subId: sub.subId, termId: state.termId, force } });
+    toast(`已创建任务：${course.title} — ${sub.title}${force ? '（强制重下）' : ''}`, 'ok');
   } catch (e) {
     toast('创建失败：' + e.message, 'err');
   } finally {
@@ -395,7 +396,7 @@ function renderJobs() {
       name.title = t.subTitle;
       const val = document.createElement('span');
       val.textContent = t.status === 'done'
-        ? `${t.done} 张`
+        ? `${t.done} 张${t.forcedClean ? `（清理旧帧 ${t.forcedClean}）` : ''}`
         : t.status === 'error'
           ? (t.error || '失败')
           : t.status === 'skipped'

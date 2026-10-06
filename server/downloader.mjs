@@ -41,6 +41,7 @@ function publicJob(j) {
       subId: t.subId,
       subTitle: t.subTitle,
         skipped: t.skipped || 0,  // 命中已下载文件而跳过的张数
+        forcedClean: t.forcedClean || 0, // 强制模式下移入备份的旧帧数
         status: t.status,         // pending | running | done | error | skipped
       total: t.total,
       done: t.done,
@@ -77,7 +78,7 @@ function emit(job) {
  * @param {{mode:'course'|'all'|'sub', courseId?:string, subId?:string, monthsBack?:number, termId?:number|string}} options
  */
 export async function createJob(options) {
-  const { mode = 'course', courseId, subId, monthsBack = 6, termId } = options;
+  const { mode = 'course', courseId, subId, monthsBack = 6, termId, force = false } = options;
 
   let courses;
   if (termId != null && termId !== '') {
@@ -105,6 +106,7 @@ export async function createJob(options) {
     id: nextJobId++,
     status: 'pending',
     mode,
+    force: Boolean(force),
     courseTitles: targets.map((c) => c.title),
     createdAt: Date.now(),
     startedAt: null,
@@ -212,6 +214,7 @@ async function runTask(job, task) {
     return;
   }
 
+  const trashDir = path.join(path.dirname(absDir), '_回收站', path.basename(absDir));
   const concurrency = 5;
   let cursor = 0;
   const worker = async () => {
@@ -222,8 +225,18 @@ async function runTask(job, task) {
       const fileName = `${String(i + 1).padStart(4, '0')}.jpg`;
       const filePath = path.join(absDir, fileName);
       try {
-        // 已存在且体积正常 → 跳过（再次点下载不会重复拉同一张图）
-        if (fs.existsSync(filePath) && fs.statSync(filePath).size > 100) {
+        if (job.force) {
+          // 强制重下：目录里已有的覆盖更新；已被清洗的帧（只在回收站）不拉回；全新帧正常下载
+          const inDir = fs.existsSync(filePath);
+          const inTrash = fs.existsSync(path.join(trashDir, fileName));
+          if (!inDir && inTrash) {
+            task.skipped = (task.skipped || 0) + 1;
+          } else {
+            await downloadFile(img.url, filePath);
+            task.done++;
+          }
+        } else if (fs.existsSync(filePath) && fs.statSync(filePath).size > 100) {
+          // 已存在且体积正常 → 跳过（再次点下载不会重复拉同一张图）
           task.skipped = (task.skipped || 0) + 1;
         } else {
           await downloadFile(img.url, filePath);
@@ -237,8 +250,26 @@ async function runTask(job, task) {
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
+
+  // 强制模式且全部成功：服务器已不存在的尾部旧帧 → 移入 _回收站/_旧帧备份（不会被清洗自动归位）
+  if (job.force && task.failed === 0 && !job.canceled) {
+    let moved = 0;
+    try {
+      const backupDir = path.join(path.dirname(absDir), '_回收站', '_旧帧备份', `${path.basename(absDir)}_${Date.now()}`);
+      for (const f of fs.readdirSync(absDir)) {
+        const m = /^(\d{4})\.jpg$/i.exec(f);
+        if (!m || Number(m[1]) <= images.length) continue;
+        if (fs.existsSync(path.join(trashDir, f))) continue; // 已在回收站的不动
+        fs.mkdirSync(backupDir, { recursive: true });
+        fs.renameSync(path.join(absDir, f), path.join(backupDir, f));
+        moved += 1;
+      }
+    } catch { /* 忽略 */ }
+    if (moved) task.forcedClean = moved;
+  }
+
   if (task.skipped && !task.failed && task.done === 0) {
-    // 全部命中已下载文件：不重复拉取
+    // 全部命中已下载文件 / 已清洗帧：不重复拉取
     task.error = null;
   }
   emit(job);

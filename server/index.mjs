@@ -119,10 +119,10 @@ app.get('/api/browser/window', (_req, res) => {
 });
 
 app.post('/api/jobs', asyncRoute(async (req, res) => {
-  const { mode = 'course', courseId, subId, monthsBack = 12, termId } = req.body || {};
+  const { mode = 'course', courseId, subId, monthsBack = 12, termId, force } = req.body || {};
   if ((mode === 'course' || mode === 'sub') && !courseId) return res.status(400).json({ error: '缺少 courseId' });
   if (mode === 'sub' && !subId) return res.status(400).json({ error: '缺少 subId' });
-  const job = await createJob({ mode, courseId, subId, monthsBack, termId });
+  const job = await createJob({ mode, courseId, subId, monthsBack, termId, force });
   res.status(201).json({ job });
 }));
 
