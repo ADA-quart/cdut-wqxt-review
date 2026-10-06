@@ -84,7 +84,18 @@ function createWindow() {
     icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     webPreferences: { contextIsolation: true, nodeIntegration: false, spellcheck: false },
   });
-  win.once('ready-to-show', () => { if (!TEST) win.show(); });
+  win.once('ready-to-show', () => {
+    if (TEST) return;
+    win.show();
+    win.focus();
+    // 兜底：个别启动方式（如带隐藏窗口样式启动）会让窗口保持不可见，稍后再确认一次
+    setTimeout(() => {
+      if (win && !win.isDestroyed() && !win.isVisible()) {
+        win.show();
+        win.focus();
+      }
+    }, 1500);
+  });
   win.on('closed', () => { win = null; });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/)/.test(url)) return { action: 'allow' };
@@ -128,6 +139,7 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => {
     if (win) {
+      if (!win.isVisible()) win.show();
       if (win.isMinimized()) win.restore();
       win.focus();
     }
