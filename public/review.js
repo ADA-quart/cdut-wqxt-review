@@ -165,7 +165,50 @@ function renderLeftPane() {
   hydrateBlockIds(container);
   resolveMdAssets(container);
   markMathErrors(container);
+  decorateNote(container);
   container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = "_blank"; a.rel = "noreferrer"; });
+}
+
+/** 笔记美化：每个小节可折叠 + 顶部生成目录 */
+function decorateNote(container) {
+  const heads = [...container.querySelectorAll('h3, h2')].filter((h) => h.textContent.trim());
+  if (!heads.length) return;
+  const titles = heads.map((h) => h.textContent.trim());
+  heads.forEach((h, i) => {
+    const details = document.createElement('details');
+    details.className = 'note-sec';
+    details.open = true;
+    details.id = 'note-sec-' + (i + 1);
+    const summary = document.createElement('summary');
+    summary.textContent = titles[i];
+    h.replaceWith(details);
+    let node = details.nextSibling;
+    const move = [];
+    while (node && !(node.nodeType === 1 && /^H[23]$/.test(node.tagName))) {
+      const next = node.nextSibling;
+      move.push(node);
+      node = next;
+    }
+    for (const n of move) details.appendChild(n);
+    details.prepend(summary);
+  });
+
+  const toc = document.createElement('nav');
+  toc.className = 'note-toc';
+  toc.innerHTML = '<div class="toc-title">目录（点击跳转，标题可折叠）</div>' +
+    titles.map((t, i) => '<a href="#note-sec-' + (i + 1) + '">' + escapeHtml(t) + '</a>').join('');
+  const anchor = container.querySelector('blockquote') || container.firstElementChild;
+  if (anchor && anchor.nextSibling) container.insertBefore(toc, anchor.nextSibling); else container.prepend(toc);
+
+  toc.addEventListener('click', (e) => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    e.preventDefault();
+    const target = container.querySelector(a.getAttribute('href'));
+    if (!target) return;
+    target.open = true;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 async function loadNote() {

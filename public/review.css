@@ -569,3 +569,27 @@ a.pagecite {
 }
 a.pagecite:hover { background: var(--brand); color: #fff; }
 .md-pane .pane-head { border-bottom: 1px solid var(--line); }
+
+/* ---------- 笔记：目录 + 小节折叠 ---------- */
+.note-toc {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 10px 0 14px; padding: 10px 12px;
+  background: #f7f9fc; border: 1px solid #e6ecf6; border-radius: 8px;
+}
+.note-toc .toc-title { width: 100%; font-size: 11.5px; color: var(--ink-3); margin-bottom: 2px; }
+.note-toc a {
+  font-size: 12px; padding: 2px 9px; border-radius: 999px;
+  background: #fff; border: 1px solid #dfe7f5; color: var(--brand); text-decoration: none;
+}
+.note-toc a:hover { background: var(--brand); color: #fff; }
+details.note-sec { margin: 12px 0; }
+details.note-sec > summary {
+  cursor: pointer; font-weight: 700; font-size: 15px; line-height: 1.6;
+  padding: 3px 0; list-style: none; user-select: none;
+}
+details.note-sec > summary::-webkit-details-marker { display: none; }
+details.note-sec > summary::before {
+  content: '▸'; display: inline-block; margin-right: 6px; color: var(--ink-3);
+}
+details.note-sec[open] > summary::before { content: '▾'; }
+details.note-sec > summary:hover { color: var(--brand); }
