@@ -551,3 +551,21 @@ a.cite:hover { text-decoration: underline; }
   border: 1px solid #f0dfb8;
   border-radius: 6px;
 }
+
+/* ---------- 左栏「笔记 / 原文」切换 + 页码角标 ---------- */
+.note-hint { font-size: 11.5px; color: var(--ink-3); }
+#tabNote.active, #tabRaw.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+a.pagecite {
+  font-size: 11px;
+  vertical-align: super;
+  padding: 0 4px;
+  margin-left: 2px;
+  border-radius: 6px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  border: none;
+  text-decoration: none;
+  font-weight: 600;
+}
+a.pagecite:hover { background: var(--brand); color: #fff; }
+.md-pane .pane-head { border-bottom: 1px solid var(--line); }

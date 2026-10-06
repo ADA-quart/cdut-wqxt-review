@@ -24,6 +24,7 @@
     </div>
     <button class="btn" id="btnSummarize" title="LLM 整理这节课的重点，写回笔记顶部">整理重点</button>
     <button class="btn" id="btnFixMath" title="扫描本页笔记里 KaTeX 解析不了的公式（OCR 识别坏的），让 AI 逐条修好后写回">修公式</button>
+    <button class="btn primary" id="btnMakeNote" title="用 AI 把原文整理成带页码引用的复习笔记（左栏显示的就是它）">生成笔记</button>
     <button class="btn" id="btnCopyMd">复制 Markdown</button>
     <a class="btn" id="linkDownloadMd" download>下载 md</a>
     <a class="btn" id="linkOpenMd" target="_blank">原文</a>
@@ -48,6 +49,13 @@
 
 <main class="layout" id="layout">
   <section class="pane md-pane" id="mdPane">
+    <div class="pane-head">
+      <div class="tools">
+        <button class="btn tiny" id="tabNote">📒 笔记</button>
+        <button class="btn tiny" id="tabRaw">原文 md</button>
+      </div>
+      <div class="tools"><span class="note-hint" id="noteHint"></span></div>
+    </div>
     <div class="md-scroll" id="mdScroll">
       <div id="mdContent" class="markdown"><p class="empty">加载中…</p></div>
     </div>

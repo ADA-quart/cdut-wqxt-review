@@ -555,6 +555,95 @@ async function runFixMath(job) {
   return { checked: all.length, broken: broken.length, fixed: fixes.length };
 }
 
+/**
+ * 生成「给人看的笔记」：<课次>.note.md
+ * 特点：按页分块（不按字符瞎切）→ 每块产出带页码引用的小节，
+ * 引用格式沿用 [[xxx.pdf#page=N|N]]，复习页点击即可跳到对应 PPT 页。
+ */
+async function runNote(job) {
+  const mdPath = job.mdPath;
+  const original = fs.readFileSync(mdPath, 'utf8');
+  const ctx = courseContext(job);
+  if (ctx.course) job.log.push('提示词上下文：《' + ctx.course + '》');
+
+  // 按页切分原文
+  const re = /<!-- page (\d+): [^>]+ -->/g;
+  const marks = [...original.matchAll(re)];
+  const pages = marks.map((m, i) => {
+    const start = m.index + m[0].length;
+    const end = i + 1 < marks.length ? marks[i + 1].index : original.length;
+    return { n: Number(m[1]), text: stripForSummary(original.slice(start, end)) };
+  }).filter((p) => p.text);
+  if (!pages.length) throw new Error('没有可用的页面内容（先转 MD）');
+
+  // 按「页数 + 字符预算」分块，保证每块落在页边界上
+  const CHUNK_CHARS = 5200;
+  const chunks = [];
+  let cur = [];
+  let size = 0;
+  for (const p of pages) {
+    if (cur.length && (size + p.text.length > CHUNK_CHARS || cur.length >= 10)) {
+      chunks.push(cur);
+      cur = [];
+      size = 0;
+    }
+    cur.push(p);
+    size += p.text.length;
+  }
+  if (cur.length) chunks.push(cur);
+
+  const lessonName = path.basename(mdPath).replace(/\.md$/i, '');
+  job.progress.total = chunks.length + 1;
+  emit(job);
+
+  const limit = loadConfig().llm.concurrency || 3;
+  let done = 0;
+  const sections = await mapLimit(chunks, limit, async (chunk, i) => {
+    const from = chunk[0].n;
+    const to = chunk[chunk.length - 1].n;
+    const body = chunk.map((p) => `[第 ${p.n} 页]\n${p.text}`).join('\n\n');
+    const { content, usage } = await chatRetry(
+      [
+        {
+          role: 'system',
+          content: `你在帮大学生把《${ctx.course || '本课程'}》的课件原文整理成复习笔记（第 ${from}-${to} 页这一部分）。
+要求：
+1) 按主题分成 1-3 个小节，每节一个三级标题（### 小节名）；
+2) 每节 3-6 条要点，用「- 」开头，一条讲清一个知识点；
+3) **每条要点末尾标注它来自哪一页**，格式固定为 [[${lessonName}.pdf#page=N|N]]（N 是上方「[第 N 页]」里的页码，必须真实存在，不许编）；
+4) 关键公式用 LaTeX（$...$ 或 $...$），保留原文符号；
+5) 只输出笔记正文（从 ### 开始），不要前言、不要解释、不要代码块。`,
+        },
+        { role: 'user', content: body },
+      ],
+      { profile: 'text', temperature: 0.3, maxTokens: 4000 },
+    );
+    addUsage(job, usage);
+    done += 1;
+    job.progress.done = done;
+    job.progress.current = `第 ${from}-${to} 页`;
+    emit(job);
+    return content.trim();
+  });
+
+  // 页码校验：丢掉超出范围的引用编号
+  const valid = new Set(pages.map((p) => String(p.n)));
+  const fix = (s) => s.replace(/\[\[[^\]]*\.pdf#page=(\d+)\|([^\]]*)\]\]/g, (m, n, label) =>
+    valid.has(String(Number(n))) ? m : label);
+  let note = sections.map(fix).join('\n\n').trim();
+  if (!note) throw new Error('笔记生成结果为空');
+
+  const head = `# ${lessonName} · 复习笔记\n\n> 由课件原文整理，每条要点末尾的角标是对应页码，点击可跳到右侧课件。\n\n`;
+  const notePath = mdPath.replace(/\.md$/i, '.note.md');
+  fs.writeFileSync(notePath, head + note + '\n', 'utf8');
+  job.noteRel = path.relative(NOTES_DIR, notePath).split(path.sep).join('/');
+
+  job.progress.done = job.progress.total;
+  job.progress.current = '完成';
+  emit(job);
+  return { chunks: chunks.length, pages: pages.length, note: job.noteRel };
+}
+
 /** 课程内知识链：生成课程索引 + 每个课次的「相关课次」块 */
 async function runWeaveCourse(job) {
   const courseName = job.courseName || path.basename(job.absDir);
@@ -773,7 +862,7 @@ export function getLlmJob(id) {
 }
 
 export function createLlmJob({ op, dir, mode, scope }) {
-  if (!['proofread', 'summarize', 'weave', 'fixmath'].includes(op)) throw new Error(`不支持的操作：${op}`);
+  if (!['proofread', 'summarize', 'weave', 'fixmath', 'note'].includes(op)) throw new Error(`不支持的操作：${op}`);
   const relDir = String(dir || '').replace(/^[/\\]+/, '');
   let absDir = null;
   let mdPath = null;
@@ -849,7 +938,9 @@ export function createLlmJob({ op, dir, mode, scope }) {
           ? await runSummarize(job)
           : op === 'fixmath'
             ? await runFixMath(job)
-            : await runWeave(job);
+            : op === 'note'
+              ? await runNote(job)
+              : await runWeave(job);
       if (job.canceled) {
         job.status = 'canceled';
       } else {
@@ -858,6 +949,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
         if (op === 'proofread') job.log.push(`完成：${r.pages} 页，保留原文 ${r.kept} 页；${tok}`);
         else if (op === 'summarize') job.log.push(`完成：分 ${r.chunks} 块提取并汇总；${tok}`);
         else if (op === 'fixmath') job.log.push(`完成：检查 ${r.checked} 条公式，修复 ${r.fixed}/${r.broken} 条；${tok}`);
+        else if (op === 'note') job.log.push(`完成：${r.pages} 页原文 → ${r.chunks} 段笔记（${r.note}）；${tok}`);
         else if (job.scope === 'all') job.log.push(`完成：${r.courses} 门课，识别关联 ${r.related} 对；${tok}`);
         else job.log.push(`完成：${r.lessons} 个课次，关联 ${r.related} 对；${tok}`);
         job.progress.done = job.progress.total;

@@ -10,6 +10,8 @@ const courseName = dirParts[dirParts.length - 2] || courseDir;
 
 const state = {
   md: '',
+  note: null,     // AI 整理的复习笔记（左栏默认显示它）
+  view: 'note',   // note | raw
   pages: [],        // [{ n, name }] 顺序 = PDF 页序
   pageIndex: 0,
   messages: [],     // [{ role, content, display? }]
@@ -135,8 +137,10 @@ function transformWikilinks(root) {
       matched = true;
       if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
       const a = document.createElement('a');
-      a.className = 'wikilink';
-      a.dataset.target = m[1].trim();
+      const target = m[1].trim();
+      // 指向 PPT 页码的链接渲染成小角标（笔记里的引用）
+      a.className = /\.pdf#page=\d+/i.test(target) ? 'wikilink pagecite' : 'wikilink';
+      a.dataset.target = target;
       a.textContent = (m[2] ?? m[1]).trim();
       a.href = '#';
       frag.appendChild(a);
@@ -145,6 +149,48 @@ function transformWikilinks(root) {
     if (!matched) continue;
     if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
     tn.parentNode.replaceChild(frag, tn);
+  }
+}
+
+/** 渲染左栏：默认显示 AI 笔记，没有笔记时回落到原文 */
+function renderLeftPane() {
+  const noteMode = state.view === 'note' && state.note;
+  $('tabNote').classList.toggle('active', Boolean(noteMode));
+  $('tabRaw').classList.toggle('active', !noteMode);
+  $('noteHint').textContent = state.note ? '' : '还没有笔记，点右上「生成笔记」';
+  if (!noteMode) { renderFullMd(); return; }
+  const container = $('mdContent');
+  container.innerHTML = renderMarkdown(state.note);
+  transformWikilinks(container);
+  hydrateBlockIds(container);
+  resolveMdAssets(container);
+  markMathErrors(container);
+  container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = "_blank"; a.rel = "noreferrer"; });
+}
+
+async function loadNote() {
+  state.note = null;
+  try {
+    const r = await fetch(noteUrl(`${dir}.note.md`), { cache: 'no-store' });
+    if (r.ok) state.note = await r.text();
+  } catch { /* 没有就没有 */ }
+}
+
+async function handleMakeNote() {
+  const btn = $('btnMakeNote');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '生成中…';
+  try {
+    await runLlmJob({ op: 'note', dir }, { label: '「生成笔记」' });
+    await loadNote();
+    if (state.note) { state.view = 'note'; renderLeftPane(); $('mdScroll').scrollTop = 0; toast('笔记已生成（左栏已切换）'); }
+    else toast('笔记生成完成，但没有拿到内容', false);
+  } catch (e) {
+    toast('生成笔记失败：' + String(e.message || e), false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
   }
 }
 
@@ -778,7 +824,9 @@ async function reloadMd() {
   const r = await fetch(state.mdUrl + '?t=' + Date.now());
   if (!r.ok) throw new Error(`重新读取 Markdown 失败：HTTP ${r.status}`);
   state.md = await r.text();
-  renderFullMd();
+  await loadNote();
+  state.view = state.note ? 'note' : 'raw';
+  renderLeftPane();
   buildPages();
   renderThumbs();
   if (state.pages.length) showPage(Math.min(keepPage, state.pages.length - 1));
@@ -972,6 +1020,9 @@ function setupEvents() {
   };
   $('btnIndex').onclick = generateIndex;
   $('btnSummarize').onclick = handleSummarize;
+  $('btnMakeNote').onclick = handleMakeNote;
+  $('tabNote').onclick = () => { state.view = 'note'; renderLeftPane(); };
+  $('tabRaw').onclick = () => { state.view = 'raw'; renderLeftPane(); };
   $('btnFixMath').onclick = handleFixMath;
   $('btnWeaveCourse').onclick = () => handleWeave('course');
   $('btnWeaveAll').onclick = () => handleWeave('all');
@@ -1583,7 +1634,9 @@ async function markCardBadges() {
     return;
   }
 
-  renderFullMd();
+  await loadNote();
+  state.view = state.note ? 'note' : 'raw';
+  renderLeftPane();
   buildPages();
   renderThumbs();
   const pageParam = Number(params.get('page')) || 0;
