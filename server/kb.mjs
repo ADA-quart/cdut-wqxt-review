@@ -25,7 +25,7 @@ export function listCourses() {
 }
 
 /** 辅助文件（笔记/审计/知识点/备份）不算课次 */
-const AUX_LESSON_MD = /\.(note|audit|points|ocr-backup|math-backup|note-backup)\.md$/i;
+const AUX_LESSON_MD = /\.(note|note\.work|audit|points|ocr-backup|math-backup|note-backup)\.md$/i;
 
 /** 某课程下已转 MD 的课次（不含课程索引自身与辅助文件） */
 export function listLessons(course) {

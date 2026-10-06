@@ -61,7 +61,7 @@ export function getCaps(profile = 'text') {
   return guessCaps(prof.model);
 }
 
-async function chat(messages, { profile = 'text', temperature, maxTokens } = {}) {
+async function chat(messages, { profile = 'text', temperature, maxTokens, thinking } = {}) {
   const cfg = loadConfig().llm;
   const prof = getProfile(profile);
   const label = MODE_LABELS[profile] || profile;
@@ -77,6 +77,8 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
   };
   const caps = getCaps(profile);
   if (maxTokens) body.max_tokens = caps.output ? Math.min(maxTokens, caps.output) : maxTokens;
+  const isDeepSeek = /api\.deepseek\.com/i.test(base);
+  if (isDeepSeek && thinking === 'off') body.thinking = { type: 'disabled' };
 
   let res;
   try {
@@ -104,10 +106,16 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
   // 预算给小了会「只有思考、没有正文」。循环加大预算（×3）直到出正文或到模型上限。
   let bump = 0;
   while (!String(content || '').trim() && message?.reasoning_content && bump < 4) {
-    const curTokens = Number(body.max_tokens) || 1200;
-    const bigger = Math.min(curTokens * 3, caps.output || 8000);
-    if (bigger <= curTokens) break;
-    body.max_tokens = bigger;
+    // DeepSeek：思考没产出正文时，直接关掉思考重试（比加大预算再烧一遍思考省得多）；
+    // 其他服务维持「加大预算重试」。
+    if (isDeepSeek && body.thinking?.type !== 'disabled') {
+      body.thinking = { type: 'disabled' };
+    } else {
+      const curTokens = Number(body.max_tokens) || 1200;
+      const bigger = Math.min(curTokens * 3, caps.output || 8000);
+      if (bigger <= curTokens) break;
+      body.max_tokens = bigger;
+    }
     bump += 1;
     let res2;
     try {
@@ -212,7 +220,7 @@ function wikiLinks(text) {
 }
 
 function stripForSummary(md) {
-  return md
+  return String(md || '')
     .split('\n')
     .filter((line) => {
       const t = line.trim();
@@ -237,8 +245,9 @@ function coverageReport(pages, noteText) {
   for (const p of pages) {
     const n = Number(p.n);
     if (covered.has(n)) { coveredCount += 1; continue; }
-    const text = stripForSummary(p.body).replace(/\s+/g, ' ').trim();
-    const imgs = imageRefs(p.body).length;
+    const src = p.body != null ? p.body : (p.text || '');
+    const text = stripForSummary(src).replace(/\s+/g, ' ').trim();
+    const imgs = imageRefs(src).length;
     if (text.length >= 40) gaps.push({ n, text: text.slice(0, 80), imgs });
     else if (imgs >= 1) picOnly.push({ n, text: text.slice(0, 40), imgs });
     else noText.push(n);
@@ -613,6 +622,13 @@ async function runFixMath(job) {
  * 特点：按页分块（不按字符瞎切）→ 每块产出带页码引用的小节，
  * 引用格式沿用 [[xxx.pdf#page=N|N]]，复习页点击即可跳到对应 PPT 页。
  */
+/**
+ * 生成「有思考的深度笔记」：<课次>.note.md
+ * 三遍加工：
+ *  ① 逐块把 OCR 原文消化成「知识整理稿」（中间产物 <课次>.note.work.md）
+ *  ② 基于整理稿成稿：按知识逻辑重组小节，带页码角标 + 💭 讲解 + 易混提示 + 习题解答（折叠）
+ *  ③ 从成稿提炼「本课脉络 + 课末必记」放到笔记最前面。
+ */
 async function runNote(job) {
   const mdPath = job.mdPath;
   const original = fs.readFileSync(mdPath, 'utf8');
@@ -625,11 +641,12 @@ async function runNote(job) {
   const pages = marks.map((m, i) => {
     const start = m.index + m[0].length;
     const end = i + 1 < marks.length ? marks[i + 1].index : original.length;
-    return { n: Number(m[1]), text: stripForSummary(original.slice(start, end)) };
+    const body = original.slice(start, end);
+    return { n: Number(m[1]), body, text: stripForSummary(body) };
   }).filter((p) => p.text);
   if (!pages.length) throw new Error('没有可用的页面内容（先转 MD）');
 
-  // 按「页数 + 字符预算」分块，保证每块落在页边界上
+  // 按「页数 + 字符预算」分块
   const CHUNK_CHARS = 5200;
   const chunks = [];
   let cur = [];
@@ -646,12 +663,27 @@ async function runNote(job) {
   if (cur.length) chunks.push(cur);
 
   const lessonName = path.basename(mdPath).replace(/\.md$/i, '');
-  job.progress.total = chunks.length + 1;
+  const workPath = mdPath.replace(/\.md$/i, '.note.work.md');
+  // 原文没变且已有整理稿 → 直接复用，跳过最贵的整理阶段
+  let workText = null;
+  try {
+    if (fs.existsSync(workPath) && fs.statSync(workPath).mtimeMs + 500 >= fs.statSync(mdPath).mtimeMs) {
+      workText = fs.readFileSync(workPath, 'utf8').replace(/^# [^\n]*知识整理稿（中间产物）\n+/, '').trim();
+    }
+  } catch { workText = null; }
+  const reusedWork = Boolean(workText && workText.length > 200);
+  if (!reusedWork) workText = null;
+  job.progress.total = (reusedWork ? 0 : chunks.length) + 3;
   emit(job);
 
-  const limit = loadConfig().llm.concurrency || 3;
   let done = 0;
-  const sections = await mapLimit(chunks, limit, async (chunk, i) => {
+  if (reusedWork) {
+    job.log.push('原文没变，复用已有整理稿（跳过整理阶段）');
+    emit(job);
+  } else {
+  // ---------- ① 逐块整理（消化，不照抄） ----------
+  const limit = loadConfig().llm.concurrency || 3;
+  const works = await mapLimit(chunks, limit, async (chunk) => {
     const from = chunk[0].n;
     const to = chunk[chunk.length - 1].n;
     const body = chunk.map((p) => `[第 ${p.n} 页]\n${p.text}`).join('\n\n');
@@ -659,41 +691,123 @@ async function runNote(job) {
       [
         {
           role: 'system',
-          content: `你在帮大学生把《${ctx.course || '本课程'}》的课件原文整理成复习笔记（第 ${from}-${to} 页这一部分）。
-要求：
-1) 按主题分成 1-3 个小节，每节一个三级标题（### 小节名）；
-2) 每节 3-6 条要点，用「- 」开头，一条讲清一个知识点；
-3) **每条要点末尾标注它来自哪一页**，格式固定为 [[${lessonName}.pdf#page=N|N]]（N 是上方「[第 N 页]」里的页码，必须真实存在，不许编）；
-4) 关键公式用 LaTeX（$...$ 或 $...$），保留原文符号；
-5) 只输出笔记正文（从 ### 开始），不要前言、不要解释、不要代码块。`,
+          content: `你是《${ctx.course || '本课程'}》的助教。下面给你课件第 ${from}-${to} 页的 OCR 原文（可能有零星错字）。
+第一遍：把它**消化后整理**成一份「知识整理稿」（后面还要基于它写正式笔记，所以不要照抄原句）：
+1) 先用一句话说清这一部分在讲什么；
+2) 把关键概念 / 公式 / 结论逐条整理清楚，每条末尾标注来源页码，格式 [[${lessonName}.pdf#page=N|N]]（N 必须来自上方「[第 N 页]」）；
+3) 说明知识点之间关系（因果 / 对比 / 流程 / 条件），以及能看出的考点、易错点；
+4) 只整理原文里有的内容：明显 OCR 错字可以改顺，但不要编造。
+直接输出 Markdown 文本（可用小标题和「- 」列表），不要前言、不要代码块。`,
         },
         { role: 'user', content: body },
       ],
-      { profile: 'text', temperature: 0.3, maxTokens: 4000 },
+      { profile: 'text', temperature: 0.3, maxTokens: 3000, thinking: 'off' },
     );
     addUsage(job, usage);
     done += 1;
     job.progress.done = done;
-    job.progress.current = `第 ${from}-${to} 页`;
+    job.progress.current = `整理第 ${from}-${to} 页`;
+    emit(job);
+    return `<!-- 整理：第 ${from}-${to} 页 -->\n${content.trim()}`;
+  });
+  workText = works.join('\n\n');
+  fs.writeFileSync(workPath, `# ${lessonName} · 知识整理稿（中间产物）\n\n${workText}\n`, 'utf8');
+  job.log.push(`整理稿完成（${works.length} 块，中间产物 ${path.basename(workPath)}）`);
+  }
+
+  // ---------- ② 成稿（整理稿太长就分两段，避免单次输出超限） ----------
+  const segments = [];
+  if (workText.length <= 9000) {
+    segments.push(workText);
+  } else {
+    const parts = workText.split('\n\n');
+    const a = [];
+    const b = [];
+    let sizeA = 0;
+    for (const part of parts) {
+      if (sizeA < workText.length / 2) { a.push(part); sizeA += part.length + 2; }
+      else b.push(part);
+    }
+    segments.push(a.join('\n\n'), b.join('\n\n'));
+  }
+  job.progress.total = (reusedWork ? 0 : chunks.length) + segments.length + 1;
+  emit(job);
+
+  const makeSection = async (segment, idx) => {
+    const { content, usage } = await chatRetry(
+      [
+        {
+          role: 'system',
+          content: `你是《${ctx.course || '本课程'}》的学霸助教。下面是课件的「知识整理稿」${segments.length > 1 ? `（第 ${idx + 1}/${segments.length} 部分）` : ''}。请把它写成**有思考的复习笔记**：
+1) 按知识逻辑组织小节，标题用知识主题（### 开头），不要用「第几页」「第几块」这类标题；
+2) 每个小节先用 1-2 句讲清「核心结论 / 这节在讲什么」，再列关键要点（「- 」开头），每条末尾保留来源页码角标 [[${lessonName}.pdf#page=N|N]]（N 必须出现过）；
+3) 对重点内容加讲解：为什么成立、怎么用、容易和什么混淆——写成「- 💭 讲解：…」的行，**不带页码角标**；讲解要短，一条 1-2 句；
+4) 整理稿里有习题 / 例题的，补「参考答案（AI 推断）」和解析，用 <details><summary>先自己想，点开看答案</summary>……</details> 包起来；
+5) 公式用 LaTeX（$…$）；不要代码块、不要前言；不要编造整理稿之外的知识。
+直接输出笔记正文（从 ### 开始），不要写全课总结（后面统一写）。`,
+        },
+        { role: 'user', content: segment },
+      ],
+      { profile: 'text', temperature: 0.35, maxTokens: 6000 },
+    );
+    addUsage(job, usage);
+    done += 1;
+    job.progress.done = done;
+    job.progress.current = segments.length > 1 ? `成稿 ${idx + 1}/${segments.length}` : '成稿';
     emit(job);
     return content.trim();
-  });
+  };
+
+  const sectionTexts = [];
+  for (let i = 0; i < segments.length; i++) sectionTexts.push(await makeSection(segments[i], i));
+  let note = sectionTexts.join('\n\n').trim();
+
+  // ---------- ③ 本课脉络 + 课末必记 ----------
+  const { content: digest, usage: dUsage } = await chatRetry(
+    [
+      {
+        role: 'system',
+        content: `下面是《${ctx.course || '本课程'}》一节课的复习笔记。请提炼两样东西，严格按格式输出：
+## 🧭 本课脉络
+（2-4 句话讲清这节课的整体逻辑：从什么讲到什么、解决什么问题）
+
+## 🎯 课末必记
+（最核心的 6-10 个考点 / 结论，「- 」开头，一条一句话；能标页码就带 [[${lessonName}.pdf#page=N|N]]）
+
+不要重复笔记里的大段内容，不要前言和后记。`,
+      },
+      { role: 'user', content: note.slice(0, 18000) },
+    ],
+    { profile: 'text', temperature: 0.3, maxTokens: 2000, thinking: 'off' },
+  );
+  addUsage(job, dUsage);
+  done += 1;
+  job.progress.done = done;
+  job.progress.current = '必记提炼';
+  emit(job);
 
   // 页码校验：丢掉超出范围的引用编号
   const valid = new Set(pages.map((p) => String(p.n)));
   const fix = (s) => s.replace(/\[\[[^\]]*\.pdf#page=(\d+)\|([^\]]*)\]\]/g, (m, n, label) =>
     valid.has(String(Number(n))) ? m : label);
-  let note = sections.map(fix).join('\n\n').trim();
-  if (!note) throw new Error('笔记生成结果为空');
+  note = fix(note);
 
-  const head = `# ${lessonName} · 复习笔记\n\n> 由课件原文整理，每条要点末尾的角标是对应页码，点击可跳到右侧课件。\n\n`;
+  const head = `# ${lessonName} · 深度复习笔记
+
+> 由 AI 通读课件后整理：带角标的条目来自课件原文（点角标可跳到对应页核对），💭 是讲解与补充（AI 生成，注意甄别），<details> 里是习题参考答案（先自己想再点开）。
+
+${digest.trim()}
+
+`;
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
+  if (fs.existsSync(notePath)) {
+    try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
+  }
   fs.writeFileSync(notePath, head + note + '\n', 'utf8');
   const cov = coverageReport(pages, note);
-  job.log.push(`覆盖自检：${cov.covered}/${cov.total} 页被引用` + ((cov.gaps.length || cov.picOnly.length) ? `；未引用页 ${[...cov.gaps, ...cov.picOnly].map((g) => g.n).join('、')}（点「质量审计」看详情）` : ''));
+  job.log.push(`覆盖自检：${cov.covered}/${cov.total} 页被引用（💭 讲解行不带角标，不参与审计核对）`);
 
   job.noteRel = path.relative(NOTES_DIR, notePath).split(path.sep).join('/');
-
   job.progress.done = job.progress.total;
   job.progress.current = '完成';
   emit(job);
