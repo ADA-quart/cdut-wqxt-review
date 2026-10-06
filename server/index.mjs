@@ -231,7 +231,6 @@ app.post('/api/dedup-scan', asyncRoute(async (req, res) => {
 
 app.post('/api/dedup-decisions', asyncRoute(async (req, res) => {
   const relDir = String(req.body?.dir || '').replace(/^[/\\]+/, '');
-  const restore = Array.isArray(req.body?.restore) ? req.body.restore.map(String) : [];
   if (!relDir) return res.status(400).json({ error: '缺少 dir' });
   const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, relDir));
   const jsonPath = path.join(path.dirname(absDir), `${path.basename(absDir)}.dedup.json`);
@@ -240,50 +239,97 @@ app.post('/api/dedup-decisions', asyncRoute(async (req, res) => {
   const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
   const lessonDir = absDir;
   const trashDir = path.join(path.dirname(absDir), '_回收站', path.basename(absDir));
-  ensureDir(trashDir);
 
-  const valid = new Set(data.frames.filter((f) => !f.keep).map((f) => f.name));
-  const nextRestore = restore.filter((n) => valid.has(n));
-  const prev = new Set(data.restore || []);
-  const next = new Set(nextRestore);
-
-  // 勾选恢复 → 从回收站搬回课次目录；取消勾选 → 再丢回回收站
-  const restored = [];
-  const reTrashed = [];
-  for (const name of next) {
-    if (prev.has(name)) continue;
-    const from = path.join(trashDir, name);
-    const to = path.join(lessonDir, name);
-    if (fs.existsSync(from) && !fs.existsSync(to)) { fs.renameSync(from, to); restored.push(name); }
+  // 新复核页提交「要清理」的完整名单；旧版页面提交 restore（勾选恢复）时自动换算一次
+  const legacyRestoreCount = Array.isArray(req.body?.restore) ? req.body.restore.length : 0;
+  let remove = Array.isArray(req.body?.remove) ? req.body.remove.map(String) : null;
+  if (!remove && Array.isArray(req.body?.restore)) {
+    const restoreSet = new Set(req.body.restore.map(String));
+    remove = data.frames.filter((f) => !f.keep).map((f) => f.name).filter((n) => !restoreSet.has(n));
   }
-  for (const name of prev) {
-    if (next.has(name)) continue;
-    const from = path.join(lessonDir, name);
-    const to = path.join(trashDir, name);
-    if (fs.existsSync(from) && !fs.existsSync(to)) { fs.renameSync(from, to); reTrashed.push(name); }
-  }
+  if (!remove) return res.status(400).json({ error: '缺少 remove（要清理的帧名单）' });
 
-  data.restore = nextRestore;
-  const trashedSet = new Set(data.frames.filter((f) => !f.keep && !next.has(f.name)).map((f) => f.name));
+  const all = new Set(data.frames.map((f) => f.name));
+  const removeSet = new Set(remove.filter((n) => all.has(n)));
+  const movedToTrash = [];
+  const movedBack = [];
   for (const f of data.frames) {
-    f.restored = Boolean(!f.keep && next.has(f.name));
-    f.trashed = trashedSet.has(f.name);
+    const inTrash = fs.existsSync(path.join(trashDir, f.name));
+    const shouldTrash = removeSet.has(f.name);
+    if (shouldTrash && !inTrash) {
+      const from = path.join(lessonDir, f.name);
+      if (fs.existsSync(from)) {
+        ensureDir(trashDir);
+        fs.renameSync(from, path.join(trashDir, f.name));
+        movedToTrash.push(f.name);
+      }
+    } else if (!shouldTrash && inTrash) {
+      const to = path.join(lessonDir, f.name);
+      if (!fs.existsSync(to)) {
+        fs.renameSync(path.join(trashDir, f.name), to);
+        movedBack.push(f.name);
+      }
+    }
+    f.trashed = shouldTrash;
   }
-  const keptCount = data.frames.filter((f) => f.keep || f.restored).length;
-  data.keptCount = keptCount;
-  data.removedCount = data.total - keptCount;
-  data.trash = { dir: trashDir, moved: trashedSet.size, names: [...trashedSet] };
+  data.userRemove = [...removeSet].sort();
+  data.userDecided = true;
+  data.keptCount = data.frames.filter((f) => !removeSet.has(f.name)).length;
+  data.removedCount = data.frames.length - data.keptCount;
+  data.trash = { dir: trashDir, moved: data.removedCount, names: data.userRemove };
+  delete data.restore;
   fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), 'utf8');
   res.json({
     ok: true,
-    restoreCount: nextRestore.length,
-    movedBack: restored.length,
-    movedToTrash: reTrashed.length,
-    kept: keptCount,
     removed: data.removedCount,
+    kept: data.keptCount,
+    restoreCount: legacyRestoreCount,
+    movedToTrash: movedToTrash.length,
+    movedBack: movedBack.length,
     trashDir,
   });
 }));
+
+// 复核页数据（页面每次打开 / 保存后重新读取，始终显示最新状态）
+app.get('/api/dedup-state', asyncRoute(async (req, res) => {
+  const rel = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  if (!rel) return res.status(400).json({ error: '缺少 dir' });
+  const absDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, rel));
+  const jsonPath = path.join(path.dirname(absDir), `${path.basename(absDir)}.dedup.json`);
+  if (!fs.existsSync(jsonPath)) return res.status(404).json({ error: '还没有清洗数据' });
+  const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  res.json({
+    lesson: data.lesson,
+    total: data.total,
+    generatedAt: data.generatedAt,
+    userDecided: Boolean(data.userDecided),
+    kept: data.keptCount ?? 0,
+    removed: data.removedCount ?? 0,
+    userRemove: data.userRemove || [],
+    frames: (data.frames || []).map((f) => ({
+      name: f.name, reason: f.reason || '', keep: Boolean(f.keep), trashed: Boolean(f.trashed),
+    })),
+  });
+}));
+
+// 复核页图片：课次目录与回收站里自动查找（图片被移动后页面依然能显示）
+app.get('/api/dedup-image', asyncRoute(async (req, res) => {
+  const rel = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  const name = String(req.query.name || '');
+  if (!rel || !name || /[\\/]/.test(name) || name.includes('..')) return res.status(400).end();
+  const lessonDir = ensureInside(DOWNLOAD_DIR, path.join(DOWNLOAD_DIR, rel));
+  const candidates = [
+    path.join(lessonDir, name),
+    path.join(path.dirname(lessonDir), '_回收站', path.basename(lessonDir), name),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return res.sendFile(p);
+    } catch { /* 继续找 */ }
+  }
+  res.status(404).end();
+}));
+
 
 // ---------- LLM 配置与文档操作（纠错 / 总结） ----------
 
@@ -415,7 +461,7 @@ function readTree(dir, depth) {
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
   const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json)$/i;
   return entries
-    .filter((e) => !e.name.startsWith('.') && !HIDDEN.test(e.name))
+    .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_') && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
     .map((e) => {
       const full = path.join(dir, e.name);

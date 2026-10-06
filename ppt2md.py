@@ -200,14 +200,17 @@ def main():
         import dedup as dedup_mod
 
         state = dedup_mod.prepare(images, src)
-        kept_names = {fr["name"] for fr in state["frames"] if fr["keep"] or fr.get("restored")}
+        remove_set = set(state.get("userRemove") or [])
+        kept_names = {fr["name"] for fr in state["frames"] if fr["name"] not in remove_set}
+        auto_removed = {fr["name"] for fr in state["frames"] if not fr["keep"]}
+        restored = len(auto_removed - remove_set)
         removed = state["total"] - len(kept_names)
         images = [p for p in images if p.name in kept_names]
         report_path = dedup_mod.state_paths(src)[1]
         emit(
             {"type": "dedup", "total": state["total"], "kept": len(images), "removed": removed,
-             "restored": len(state.get("restore", [])), "report": str(report_path)},
-            f"[i] 清洗：保留 {len(images)}/{state['total']} 帧（移除 {removed}，已恢复 {len(state.get('restore', []))}），复核页面已生成",
+             "restored": restored, "report": str(report_path)},
+            f"[i] 清洗：保留 {len(images)}/{state['total']} 帧（移除 {removed}，已恢复 {restored}），复核页面已生成",
         )
     if args.limit:
         images = images[: args.limit]

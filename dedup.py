@@ -4,8 +4,8 @@
 设计要点：
 - 原始图片一律不删除，清洗只影响「转 MD」使用哪些帧。
 - 生成 <课次>.dedup.json（决策数据）与 <课次>.dedup.html（人工复核页面：
-  每张被移除的帧都会展示「前一帧 / 被移除帧 / 后一帧」三联图，可勾选恢复）。
-- 恢复记录写在 json 的 restore 列表，转 MD 时自动带上。
+  全部帧按网格排列，勾选 = 清理、取消勾选 = 保留；自动识别的重复/空白/二维码帧默认勾选）。
+- 人工改动记录在 json 的 userRemove 列表，转 MD 时自动带上；被清理的帧进 _回收站，随时可恢复。
 
 用法:
     python dedup.py "downloads/课程/课次目录"          # 分析并生成复核页面
@@ -103,7 +103,7 @@ def pair_metric(a, b):
 
 
 def analyze(images):
-    """返回清洗决策结构（尚未应用 restore）。"""
+    """返回清洗决策结构（自动判定，尚未应用用户决策）。"""
     n = len(images)
     mats = [load_gray(p) for p in images]
     inks = [slide_ink(p) for p in images]
@@ -174,7 +174,6 @@ def analyze(images):
         'generatedAt': datetime.now().isoformat(timespec='seconds'),
         'params': {'blankInk': BLANK_INK, 'dupMae': DUP_MAE, 'dupPct': DUP_PCT},
         'frames': frames,
-        'restore': [],
     }
 
 
@@ -186,25 +185,39 @@ def state_paths(lesson_dir: Path):
     )
 
 
-def load_restore(lesson_dir: Path):
-    """读取人工恢复清单（不存在则为空）。"""
+def load_prev_state(lesson_dir: Path):
+    """读取上次的决策 JSON（不存在则空）。"""
     json_path, _ = state_paths(lesson_dir)
     try:
-        data = json.loads(json_path.read_text(encoding='utf-8'))
-        return [str(x) for x in data.get('restore', [])]
+        return json.loads(json_path.read_text(encoding='utf-8'))
     except Exception:
-        return []
+        return {}
 
 
-def apply_restore(state, restore):
-    names = set(restore or [])
+def initial_remove_set(prev):
+    """本次分析的初始「移除名单」：
+    - 用户保存过决策 → 沿用（userRemove 优先）
+    - 旧版有非空 restore 记录 → 迁移为「自动移除 - 人工恢复」
+    - 否则 → None（跟随本次自动判定）
+    """
+    if prev.get('userDecided') and isinstance(prev.get('userRemove'), list):
+        return {str(x) for x in prev['userRemove']}
+    restore = prev.get('restore')
+    if isinstance(restore, list) and restore:
+        auto_removed = {str(f.get('name')) for f in (prev.get('frames') or []) if not f.get('keep')}
+        return auto_removed - {str(x) for x in restore}
+    return None
+
+
+def apply_user_remove(state, remove_set):
+    """应用最终移除名单：标 trashed、统计保留/移除数量。"""
+    names = {str(x) for x in (remove_set or [])}
+    valid = {fr['name'] for fr in state['frames']}
     for fr in state['frames']:
-        fr['restored'] = bool((not fr['keep']) and fr['name'] in names)
-    valid = {fr['name'] for fr in state['frames'] if not fr['keep']}
-    state['restore'] = sorted(n for n in names if n in valid)
-    kept = sum(1 for fr in state['frames'] if fr['keep'] or fr['restored'])
-    state['keptCount'] = kept
-    state['removedCount'] = state['total'] - kept
+        fr['trashed'] = fr['name'] in names
+    state['userRemove'] = sorted(names & valid)
+    state['keptCount'] = sum(1 for fr in state['frames'] if not fr.get('trashed'))
+    state['removedCount'] = state['total'] - state['keptCount']
     return state
 
 
@@ -216,146 +229,148 @@ def save_state(lesson_dir: Path, state):
 
 def build_report_html(lesson_dir: Path, state):
     lesson = state['lesson']
-    removed = [f for f in state['frames'] if not f['keep']]
-    kept_count = state.get('keptCount', state['total'] - len(removed))
-    removed_count = state.get('removedCount', len(removed))
-
-    trashed = {f['name']: bool(f.get('trashed')) for f in state['frames']}
-
-    def img_src(name):
-        # 已丢进回收站的帧，从 _回收站/<课次>/ 取图
-        if trashed.get(name):
-            return f'_回收站/{lesson}/{name}'
-        return f'{lesson}/{name}'
-
-    def img_tag(name, cls=''):
-        if not name:
-            return f'<div class="ph {cls}">（无）</div>'
-        src = html.escape(img_src(name))
-        return (f'<figure class="{cls}">'
-                f'<a href="{src}" target="_blank" rel="noreferrer"><img loading="lazy" src="{src}"></a>'
-                f'<figcaption>{html.escape(name)}</figcaption></figure>')
-
-    cards = []
-    for f in removed:
-        if f['reason'] == 'qr':
-            why = '等待页 / 动态二维码（整段移除，可勾选恢复）'
-        elif f['reason'] == 'dup':
-            why = f"渐进重复：{f.get('run', ['?', '?'])[0]} → {f.get('run', ['?', '?'])[1]} 共 {f.get('runSize', '?')} 帧，已保留 {f.get('keepName', '?')}"
-        else:
-            why = f"空白/过渡帧（内容密度 {f.get('ink', '?')}%）"
-        checked = 'checked' if f.get('restored') else ''
-        cards.append(f"""
-    <div class="card" data-name="{html.escape(f['name'])}">
-      <div class="strip">
-        {img_tag(f['prev'])}
-        {img_tag(f['name'], 'removed')}
-        {img_tag(f['next'])}
-      </div>
-      <div class="meta">
-        <div class="why">{html.escape(why)}</div>
-        <label class="restore"><input type="checkbox" {checked}> 恢复保留此帧</label>
-      </div>
-    </div>""")
-
-    def section(title, items, hint=''):
-        if not items:
-            return ''
-        # 两组并排：每张卡片内部是「前 / 删 / 后」三张缩略图
-        return (f'<h2 class="sec">{html.escape(title)}（{len(items)}）'
-                f'<span class="sec-hint">{html.escape(hint)}</span></h2>\n'
-                f'<div class="cards">' + '\n'.join(items) + '</div>')
-
-    qr_cards = [c for f, c in zip(removed, cards) if f['reason'] == 'qr']
-    other_cards = [c for f, c in zip(removed, cards) if f['reason'] != 'qr']
-    body = (section('疑似等待页 / 二维码', qr_cards, '整段等待画面，默认全部移除；确认有用就勾选恢复')
-            + section('重复帧 / 空白帧', other_cards, '渐进动画的重复帧、空白过渡帧'))
-    if not cards:
-        body = '<p class="empty">没有需要清洗的帧：全部保留。</p>'
-    generated = html.escape(state.get('generatedAt', ''))
-
-    return f"""<!DOCTYPE html>
+    rel_dir = f'{Path(lesson_dir).parent.name}/{Path(lesson_dir).name}'
+    tpl = r'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>清洗复核 · {html.escape(lesson)}</title>
+<title>清洗复核 · @@LESSON@@</title>
 <style>
-  body {{ font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background:#f5f6f8; color:#1f2329; margin:0; padding:20px; }}
-  h1 {{ font-size:18px; margin:0 0 6px; }}
-  .summary {{ color:#646a73; font-size:13px; margin-bottom:14px; }}
-  .toolbar {{ position:sticky; top:0; background:#f5f6f8; padding:10px 0; z-index:5; display:flex; gap:10px; align-items:center; }}
-  button {{ border:1px solid #1a54c8; background:#1a54c8; color:#fff; border-radius:6px; padding:8px 14px; font-size:13px; cursor:pointer; }}
-  button.ghost {{ background:#fff; color:#1f2329; border-color:#e5e6eb; }}
-  #status {{ font-size:13px; color:#0f9d58; }}
-  .cards {{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin-bottom:14px; }}
-  .card {{ background:#fff; border:1px solid #e5e6eb; border-radius:10px; padding:10px; }}
-  .strip {{ display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; align-items:start; }}
-  figure img {{ max-height:150px; object-fit:contain; background:#f0f2f5; cursor:zoom-in; }}
-  figure a {{ display:block; }}
-  @media (max-width: 900px) {{ .cards {{ grid-template-columns:1fr; }} }}
-  h2.sec {{ font-size:14px; margin:18px 0 8px; }}
-  .sec-hint {{ font-size:12px; color:#8f959e; font-weight:400; margin-left:8px; }}
-  figure {{ margin:0; flex:1; background:#fafbfc; border:1px solid #e5e6eb; border-radius:8px; overflow:hidden; }}
-  figure img {{ width:100%; display:block; }}
-  figure.removed {{ border:2px solid #d64541; }}
-  figure figcaption {{ font-size:11px; color:#646a73; text-align:center; padding:3px 0; }}
-  figure.removed figcaption {{ color:#d64541; font-weight:600; }}
-  .ph {{ flex:1; height:110px; display:grid; place-items:center; color:#8f959e; background:#fafbfc; border:1px dashed #e5e6eb; border-radius:8px; font-size:12px; }}
-  .meta {{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }}
-  .why {{ font-size:11.5px; color:#646a73; }}
-  figure figcaption {{ font-size:10.5px; }}
-  .restore {{ font-size:13px; user-select:none; cursor:pointer; }}
-  .empty {{ color:#8f959e; }}
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background:#f5f6f8; color:#1f2329; margin:0; padding:18px; }
+  h1 { font-size:18px; margin:0 0 6px; }
+  .summary { color:#646a73; font-size:13px; margin-bottom:12px; line-height:1.8; }
+  .summary b { color:#1f2329; }
+  code { background:#eef0f3; padding:1px 5px; border-radius:4px; }
+  .toolbar { position:sticky; top:0; background:#f5f6f8; padding:10px 0; z-index:5; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button { border:1px solid #1a54c8; background:#1a54c8; color:#fff; border-radius:6px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  button.ghost { background:#fff; color:#1f2329; border-color:#e5e6eb; }
+  #count { font-size:13px; color:#646a73; }
+  #status { font-size:13px; color:#0f9d58; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
+  .cell { background:#fff; border:2px solid #e5e6eb; border-radius:10px; padding:6px; }
+  .cell.on { border-color:#d64541; background:#fff6f6; }
+  .cell img { width:100%; display:block; border-radius:6px; background:#f0f2f5; cursor:zoom-in; }
+  .cell .row { display:flex; justify-content:space-between; align-items:center; gap:6px; margin-top:6px; }
+  .cell .pick { font-size:12.5px; cursor:pointer; user-select:none; display:flex; align-items:center; gap:4px; }
+  .cell .pick input { width:16px; height:16px; accent-color:#d64541; }
+  .cell .why { font-size:11px; color:#fff; background:#d64541; border-radius:8px; padding:1px 7px; }
+  .cell .cap { font-size:10.5px; color:#8f959e; text-align:center; margin-top:4px; word-break:break-all; }
+  .empty { color:#8f959e; }
 </style>
 </head>
 <body>
-<h1>清洗复核 · {html.escape(lesson)}</h1>
-<div class="summary">共 {state['total']} 帧：保留 {kept_count}，移除 {removed_count}。生成于 {generated}。
-被移除的帧已移入 <code>_回收站/{html.escape(lesson)}/</code>（原图不丢失）。勾选「恢复保留此帧」再保存，文件会搬回课次目录；重新「转 MD」即生效。</div>
+<h1>清洗复核 · @@LESSON@@</h1>
+<div class="summary">共 <b id="total">…</b> 帧：将清理 <b id="sumRemove">…</b>，保留 <b id="sumKeep">…</b>。
+<b>勾选 = 清理</b>（移入 <code>_回收站/@@LESSON@@/</code>，随时可以撤销）；取消勾选 = 保留。
+自动识别的重复 / 空白 / 二维码帧已默认勾选，红框即「将清理」的帧。改完点「保存选择」，再回下载器重新「转 MD」生效。</div>
 <div class="toolbar">
-  <button id="save">保存恢复选择</button>
-  <button class="ghost" id="all">全部恢复</button>
-  <button class="ghost" id="none">全部不恢复</button>
+  <button id="save">保存选择</button>
+  <button class="ghost" id="all">全部清理</button>
+  <button class="ghost" id="none">全部保留</button>
+  <span id="count"></span>
   <span id="status"></span>
 </div>
-{body}
+<div class="grid" id="grid"><p class="empty">加载中…</p></div>
 <script>
-const save = document.getElementById('save');
-const status = document.getElementById('status');
-function currentRestore() {{
-  return [...document.querySelectorAll('.restore input:checked')]
-    .map((el) => el.closest('.card').dataset.name);
-}}
-document.getElementById('all').onclick = () => {{
-  document.querySelectorAll('.restore input').forEach((el) => el.checked = true);
-}};
-document.getElementById('none').onclick = () => {{
-  document.querySelectorAll('.restore input').forEach((el) => el.checked = false);
-}};
-save.onclick = async () => {{
-  const m = decodeURIComponent(location.pathname).match(/^\\/files\\/(.+)\\.dedup\\.html$/);
-  if (!m) {{ status.textContent = '请通过下载器打开本页面（保存功能不可用）'; status.style.color = '#d64541'; return; }}
-  status.textContent = '保存中…'; status.style.color = '#646a73';
-  try {{
-    const r = await fetch('/api/dedup-decisions', {{
+const DIR = @@DIR@@;
+const REASON = { dup: '重复', blank: '空白', qr: '二维码' };
+const $ = (id) => document.getElementById(id);
+function imgUrl(name) {
+  return '/api/dedup-image?dir=' + encodeURIComponent(DIR) + '&name=' + encodeURIComponent(name);
+}
+function checkedNames() {
+  return [...document.querySelectorAll('.cell input:checked')].map((cb) => cb.closest('.cell').dataset.name);
+}
+function refreshCounts() {
+  const total = document.querySelectorAll('.cell').length;
+  const n = checkedNames().length;
+  $('total').textContent = total;
+  $('sumRemove').textContent = n;
+  $('sumKeep').textContent = total - n;
+  $('count').textContent = '将清理 ' + n + ' 帧 · 保留 ' + (total - n) + ' 帧';
+}
+function render(data) {
+  const grid = $('grid');
+  grid.innerHTML = '';
+  for (const f of data.frames) {
+    const checked = data.userRemove.includes(f.name);
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (checked ? ' on' : '');
+    cell.dataset.name = f.name;
+    const a = document.createElement('a');
+    a.href = imgUrl(f.name);
+    a.target = '_blank';
+    a.rel = 'noreferrer';
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = imgUrl(f.name);
+    img.alt = f.name;
+    a.appendChild(img);
+    const row = document.createElement('div');
+    row.className = 'row';
+    const label = document.createElement('label');
+    label.className = 'pick';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = checked;
+    cb.addEventListener('change', () => { cell.classList.toggle('on', cb.checked); refreshCounts(); });
+    label.append(cb, document.createTextNode(' 清理'));
+    row.appendChild(label);
+    if (REASON[f.reason]) {
+      const why = document.createElement('span');
+      why.className = 'why';
+      why.textContent = REASON[f.reason];
+      row.appendChild(why);
+    }
+    const cap = document.createElement('div');
+    cap.className = 'cap';
+    cap.textContent = f.name;
+    cell.append(a, row, cap);
+    grid.appendChild(cell);
+  }
+  refreshCounts();
+}
+async function load() {
+  const r = await fetch('/api/dedup-state?dir=' + encodeURIComponent(DIR));
+  if (!r.ok) { $('grid').innerHTML = '<p class="empty">读取清洗数据失败（HTTP ' + r.status + '）</p>'; return; }
+  render(await r.json());
+}
+$('all').onclick = () => {
+  document.querySelectorAll('.cell input').forEach((cb) => { cb.checked = true; cb.closest('.cell').classList.add('on'); });
+  refreshCounts();
+};
+$('none').onclick = () => {
+  document.querySelectorAll('.cell input').forEach((cb) => { cb.checked = false; cb.closest('.cell').classList.remove('on'); });
+  refreshCounts();
+};
+$('save').onclick = async () => {
+  $('status').textContent = '保存中…';
+  $('status').style.color = '#646a73';
+  try {
+    const r = await fetch('/api/dedup-decisions', {
       method: 'POST',
-      headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{ dir: m[1], restore: currentRestore() }}),
-    }});
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: DIR, remove: checkedNames() }),
+    });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
-    status.textContent = '已保存：恢复 ' + (d.restoreCount || 0) + ' 帧。回到下载器重新「转 MD」生效。';
-    status.style.color = '#0f9d58';
-  }} catch (e) {{
-    status.textContent = '保存失败：' + e.message;
-    status.style.color = '#d64541';
-  }}
-}};
+    $('status').textContent = '已保存：将清理 ' + d.removed + ' 帧、保留 ' + d.kept + ' 帧（清理的帧在回收站里，随时可改）。回下载器重新「转 MD」生效。';
+    $('status').style.color = '#0f9d58';
+    await load();
+  } catch (e) {
+    $('status').textContent = '保存失败：' + e.message;
+    $('status').style.color = '#d64541';
+  }
+};
+load();
 </script>
 </body>
 </html>
-"""
+'''
+    return (tpl
+            .replace('@@LESSON@@', html.escape(lesson))
+            .replace('@@DIR@@', json.dumps(rel_dir, ensure_ascii=False)))
 
 
 def write_report(lesson_dir: Path, state):
@@ -365,7 +380,7 @@ def write_report(lesson_dir: Path, state):
 
 
 def prepare(images, lesson_dir: Path):
-    """一次完成：回收站归位 → 分析 → 应用恢复 → 已移除的丢回收站 → 写 json/html。"""
+    """一次完成：回收站归位 → 分析 → 应用用户决策（如已保存）→ 移除帧丢回收站 → 写 json/html。"""
     lesson_dir = Path(lesson_dir)
     restore_from_trash(lesson_dir)          # 每次从完整集合重新判断
     images = sorted([p for p in lesson_dir.iterdir()
@@ -373,16 +388,18 @@ def prepare(images, lesson_dir: Path):
     if not images:
         raise RuntimeError(f'目录中没有图片：{lesson_dir}')
 
+    prev = load_prev_state(lesson_dir)
     state = analyze(images)
-    apply_restore(state, load_restore(lesson_dir))
+    remove_set = initial_remove_set(prev)
+    state['userDecided'] = remove_set is not None
+    if remove_set is None:
+        # 用户还没做过决策：跟随本次自动判定
+        remove_set = {f['name'] for f in state['frames'] if not f['keep']}
+    apply_user_remove(state, remove_set)
 
-    # 未被保留、也没被人工恢复的帧 → 丢回收站
-    to_trash = [f['name'] for f in state['frames']
-                if not f['keep'] and not f.get('restored')]
+    to_trash = [f['name'] for f in state['frames'] if f.get('trashed')]
     moved = move_to_trash(lesson_dir, to_trash)
-    moved_set = set(to_trash)
     for f in state['frames']:
-        f['trashed'] = f['name'] in moved_set
         f['trashDir'] = '_回收站/' + lesson_dir.name
     state['trash'] = {'dir': str(trash_dir_of(lesson_dir)), 'moved': moved, 'names': to_trash}
 
@@ -411,12 +428,14 @@ def main():
         sys.exit(1)
 
     state = prepare(images, lesson_dir)
+    auto_removed = {f['name'] for f in state['frames'] if not f['keep']}
+    restored = len(auto_removed - set(state.get('userRemove') or []))
     summary = {
         'lesson': state['lesson'],
         'total': state['total'],
         'kept': state.get('keptCount', 0),
         'removed': state.get('removedCount', 0),
-        'restored': len(state.get('restore', [])),
+        'restored': restored,
         'report': str(state_paths(lesson_dir)[1]),
     }
     if args.json:
