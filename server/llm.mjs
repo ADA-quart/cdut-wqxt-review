@@ -101,32 +101,32 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
   let content = message?.content;
 
   // 推理型模型（deepseek-v4-pro / deepseek-flash 等）：思考也吃 max_tokens，
-  // 预算给小了会"只有思考、没有正文"。这里自动翻倍重试，最多放到 8000。
-  if (!String(content || '').trim() && message?.reasoning_content) {
+  // 预算给小了会「只有思考、没有正文」。循环加大预算（×3）直到出正文或到模型上限。
+  let bump = 0;
+  while (!String(content || '').trim() && message?.reasoning_content && bump < 4) {
     const curTokens = Number(body.max_tokens) || 1200;
     const bigger = Math.min(curTokens * 3, caps.output || 8000);
-    if (bigger > curTokens) {
-      body.max_tokens = bigger;
-      let res2;
-      try {
-        res2 = await fetch(`${base}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${prof.apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(180000),
-        });
-      } catch (err) {
-        throw describeFetchError(err, { base, label, timeoutSec: 180 });
-      }
-      if (res2.ok) {
-        data = await res2.json();
-        message = data?.choices?.[0]?.message;
-        content = message?.content;
-      }
+    if (bigger <= curTokens) break;
+    body.max_tokens = bigger;
+    bump += 1;
+    let res2;
+    try {
+      res2 = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${prof.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(180000),
+      });
+    } catch (err) {
+      throw describeFetchError(err, { base, label, timeoutSec: 180 });
     }
+    if (!res2.ok) break;
+    data = await res2.json();
+    message = data?.choices?.[0]?.message;
+    content = message?.content;
   }
 
   if (!content || !String(content).trim()) {
@@ -134,7 +134,7 @@ async function chat(messages, { profile = 'text', temperature, maxTokens } = {})
     const reasoning = message?.reasoning_content;
     throw new Error(
       finish === 'length' || reasoning
-        ? '模型返回为空（推理型模型把 token 用在思考上了；该模型上限：输出 ' + (caps.output || '?') + ' tokens，已按上限重试仍为空，建议换非推理模型或降低思考强度）'
+        ? '模型返回为空（推理型模型把 token 用在思考上；已自动加大到 ' + (body.max_tokens || '?') + ' tokens，模型上限 ' + (caps.output || '?') + '，仍没有正文，建议换非推理模型）'
         : 'LLM 返回为空',
     );
   }
@@ -890,7 +890,7 @@ export async function expandQuery(q) {
       content: '把下面的问题改写成 8~14 个中文检索关键词/同义词（可含英文术语），' +
         '只输出关键词，空格分隔，不要解释、不要标点、不要编号：\n' + String(q).slice(0, 400),
     },
-  ], { profile: 'text', maxTokens: 120, temperature: 0.1 });
+  ], { profile: 'text', maxTokens: 800, temperature: 0.1 });
   return content.split(/[\s,，、;；]+/).filter((t) => t.length >= 2).slice(0, 16);
 }
 

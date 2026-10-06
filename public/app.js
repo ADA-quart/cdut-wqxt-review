@@ -456,9 +456,16 @@ function renderMdJobCard(j) {
   if (j.status === 'done' && j.outMd) {
     const open = document.createElement('a');
     open.className = 'btn';
-    open.href = j.outMdUrl || ('/notes/' + j.outMd.split('/').map(encodeURIComponent).join('/'));
+    // 打开复习台（渲染好的笔记）；原始 markdown 用文件树里的「原文」
+    open.href = '/review.html?dir=' + encodeURIComponent(j.dir || '');
     open.target = '_blank';
-    open.textContent = '打开 md';
+    open.textContent = '打开复习台';
+    const raw = document.createElement('a');
+    raw.className = 'btn';
+    raw.href = j.outMdUrl || ('/notes/' + j.outMd.split('/').map(encodeURIComponent).join('/'));
+    raw.target = '_blank';
+    raw.textContent = '原文';
+    right.append(document.createTextNode(' '), raw);
     right.append(document.createTextNode(' '), open);
   }
   if (j.status === 'done' && j.pdf) {
@@ -543,9 +550,9 @@ function renderLlmJobCard(j) {
   if (j.status === 'done' && j.outMd) {
     const open = document.createElement('a');
     open.className = 'btn';
-    open.href = '/notes/' + j.outMd.split('/').map(encodeURIComponent).join('/');
+    open.href = '/review.html?dir=' + encodeURIComponent(j.dir || '');
     open.target = '_blank';
-    open.textContent = '查看 md';
+    open.textContent = '打开复习台';
     right.append(document.createTextNode(' '), open);
   }
 
