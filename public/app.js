@@ -707,6 +707,85 @@ function estimateTotal(job) {
 
 // ---------- 文件树 ----------
 
+/** 课次目录里的图片张数 */
+function lessonImgCount(node) {
+  return (node.children || []).filter((f) => f.type === 'file' && /\.(jpe?g|png|webp|bmp)$/i.test(f.name)).length;
+}
+
+/** 课程节点下的课次目录 */
+function courseLessons(node) {
+  return (node.children || []).filter((c) =>
+    c.type === 'dir' && !c.name.endsWith('_assets') && !c.name.startsWith('_'));
+}
+
+/** 批量清洗：对该课程所有含图课次依次做去重预检（串行） */
+async function batchCleanCourse(courseNode, btn) {
+  const subs = courseLessons(courseNode).filter((c) => lessonImgCount(c) > 0);
+  if (!subs.length) { toast('这门课没有已下载的课次', 'err'); return; }
+  if (!confirm(`对「${courseNode.name}」的 ${subs.length} 个课次依次做清洗预检？\n每个课次约几十秒，将串行执行。`)) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  let done = 0;
+  try {
+    for (const sub of subs) {
+      btn.textContent = `清洗 ${done + 1}/${subs.length}…`;
+      try {
+        const r = await api('/dedup-scan', { method: 'POST', body: { dir: sub.rel } });
+        done += 1;
+        toast(`${sub.name}：保留 ${r.kept}/${r.total}（移除 ${r.removed}）`, 'ok');
+      } catch (e) {
+        toast(`${sub.name} 清洗失败：${e.message}`, 'err');
+      }
+    }
+    toast(`批量清洗完成：${done}/${subs.length} 个课次`, 'ok');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+    loadFiles();
+  }
+}
+
+/** 批量转 MD：只提交还没转过的课次 */
+async function batchMdCourse(courseNode, btn) {
+  const subs = courseLessons(courseNode).filter((c) => lessonImgCount(c) > 0 && !c.hasMd);
+  if (!subs.length) { toast('这门课的课次都已经转过 MD 了', 'err'); return; }
+  if (!confirm(`把「${courseNode.name}」尚未转 MD 的 ${subs.length} 个课次加入转换队列？\n（已转过的会自动跳过）`)) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  let ok = 0;
+  try {
+    for (const sub of subs) {
+      btn.textContent = `提交 ${ok + 1}/${subs.length}…`;
+      try { await api('/md-jobs', { method: 'POST', body: { dir: sub.rel } }); ok += 1; } catch { /* 单个失败跳过 */ }
+    }
+    toast(`已提交 ${ok} 个转 MD 任务（队列串行执行，进度见任务卡片）`, 'ok');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+/** 批量生成笔记：对已转 MD 的课次提交 note 任务（队列串行） */
+async function batchNoteCourse(courseNode, btn) {
+  const subs = courseLessons(courseNode).filter((c) => c.hasMd);
+  if (!subs.length) { toast('先转 MD，再生成笔记', 'err'); return; }
+  if (!confirm(`对「${courseNode.name}」的 ${subs.length} 个课次生成深度笔记？\n（调用 AI；已有笔记的会复用整理稿缓存，较快）`)) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  let ok = 0;
+  try {
+    const mode = state.llmConfig?.defaultMode || 'text';
+    for (const sub of subs) {
+      btn.textContent = `提交 ${ok + 1}/${subs.length}…`;
+      try { await api('/llm-jobs', { method: 'POST', body: { op: 'note', dir: sub.rel, mode } }); ok += 1; } catch { /* 跳过 */ }
+    }
+    toast(`已提交 ${ok} 个生成笔记任务（队列串行执行，进度见任务卡片）`, 'ok');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
 async function loadFiles() {
   const box = $('fileTree');
   try {
@@ -716,7 +795,8 @@ async function loadFiles() {
     for (const course of tree) {
       if (course.type !== 'dir') continue;
       for (const child of course.children || []) {
-        if (child.type === 'dir' && Array.isArray(child.children) && child.children.some((f) => f.type === 'file' && /\.(jpe?g|png)$/i.test(f.name))) {
+        if (child.type === 'dir' && !child.name.endsWith('_assets') && !child.name.startsWith('_')
+          && Array.isArray(child.children) && child.children.some((f) => f.type === 'file' && /\.(jpe?g|png)$/i.test(f.name))) {
           lessons.push(child);
         }
       }
@@ -752,6 +832,20 @@ function renderTreeLevel(nodes, level) {
       label.className = 'tree-name';
       label.textContent = (level === 1 ? '📚 ' : '🗂 ') + node.name;
       summary.appendChild(label);
+      // 课程层：批量操作（清洗 / 转 MD / 生成笔记）
+      if (level === 1 && (node.children || []).some((c) => c.type === 'dir')) {
+        const mk = (text, title, fn) => {
+          const b = document.createElement('button');
+          b.className = 'btn tiny';
+          b.textContent = text;
+          b.title = title;
+          b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); fn(node, b); };
+          summary.appendChild(b);
+        };
+        mk('批量清洗', '对这门课所有已下载课次依次做去重预检（串行，每节约几十秒）', batchCleanCourse);
+        mk('批量转 MD', '把这门课里还没转过的课次批量加入转换队列（已转的自动跳过）', batchMdCourse);
+        mk('批量生成笔记', '对所有已转 MD 的课次生成深度笔记（队列串行；已有笔记走整理稿缓存）', batchNoteCourse);
+      }
       // 目录内直接含图片（= 一个课次）→ 提供「转 Markdown」
       const kids = node.children || [];
       const hasImages = kids.some((c) => c.type === 'file' && /\.(jpe?g|png|webp|bmp)$/i.test(c.name));
@@ -1114,6 +1208,7 @@ $('btnExport').onclick = () => {
   const qp = new URLSearchParams();
   if ($('expImages').checked) qp.set('images', '1');
   if (!$('expChats').checked) qp.set('chats', '0');
+  if ($('expNotesOnly') && $('expNotesOnly').checked) qp.set('onlyNotes', '1');
   const q = qp.toString() ? '?' + qp.toString() : '';
   $('exportHint').textContent = $('expImages').checked ? '正在打包（含图片，可能较慢）…' : '正在打包…';
   $('exportHint').className = 'test-result';

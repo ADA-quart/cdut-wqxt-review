@@ -974,6 +974,7 @@ app.get('/api/export', asyncRoute(async (req, res) => {
   const includeCards = req.query.cards !== '0';
   const includeChats = req.query.chats !== '0';
   const includeNotePdf = req.query.notePdf !== '0';
+  const onlyNotes = req.query.onlyNotes === '1';
 
   const zip = new AdmZip();
   const courses = [];
@@ -991,7 +992,12 @@ app.get('/api/export', asyncRoute(async (req, res) => {
     for (const lesson of lessons) {
       const rel = `${course}/${lesson}`;
       const mdAbs = mdPathOf(course, lesson);
-      if (!addFileToZip(zip, mdAbs, `notes/${rel}.md`)) continue;
+      if (onlyNotes) {
+        // 只导出笔记：课件原文不打包，但要求该课次确实有笔记
+        if (!fs.existsSync(path.join(NOTES_DIR, `${rel}.note.md`))) continue;
+      } else if (!addFileToZip(zip, mdAbs, `notes/${rel}.md`)) {
+        continue;
+      }
       counts.notes++;
       const md = fs.readFileSync(mdAbs, 'utf8');
       const info = {
@@ -1002,11 +1008,11 @@ app.get('/api/export', asyncRoute(async (req, res) => {
         cards: 0,
         chats: 0,
       };
-      if (includePdf && addFileToZip(zip, path.join(NOTES_DIR, `${rel}.pdf`), `notes/${rel}.pdf`)) {
+      if (!onlyNotes && includePdf && addFileToZip(zip, path.join(NOTES_DIR, `${rel}.pdf`), `notes/${rel}.pdf`)) {
         info.pdf = true;
         counts.pdfs++;
       }
-      if (includeAssets) counts.assets += addDirToZip(zip, path.join(NOTES_DIR, `${rel}_assets`), `notes/${rel}_assets/`);
+      if (!onlyNotes && includeAssets) counts.assets += addDirToZip(zip, path.join(NOTES_DIR, `${rel}_assets`), `notes/${rel}_assets/`);
       if (includeCards) {
         const cardsAbs = path.join(DATA_DIR, '.review', `${rel}.json`);
         if (addFileToZip(zip, cardsAbs, `cards/${rel}.json`)) {
@@ -1034,7 +1040,7 @@ app.get('/api/export', asyncRoute(async (req, res) => {
           }
         } catch { /* PDF 生成失败：跳过，不阻塞导出 */ }
       }
-      if (includeImages) {
+      if (!onlyNotes && includeImages) {
         const imgDir = path.join(DATA_DIR, course, lesson);
         let imgs = [];
         try {
@@ -1057,7 +1063,7 @@ app.get('/api/export', asyncRoute(async (req, res) => {
     format: 1,
     version: PKG.version || '0.0.0',
     exportedAt: new Date().toISOString(),
-    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards, chats: includeChats, notePdf: includeNotePdf },
+    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards, chats: includeChats, notePdf: includeNotePdf, onlyNotes },
     paths: getPaths(),
     counts,
     courses,
@@ -1067,8 +1073,8 @@ app.get('/api/export', asyncRoute(async (req, res) => {
       course: c.name,
       lesson: l.name,
       pages: l.pages,
-      pdf: l.pdf ? `notes/${c.name}/${l.name}.pdf` : null,
-      md: `notes/${c.name}/${l.name}.md`,
+      pdf: !onlyNotes && l.pdf ? `notes/${c.name}/${l.name}.pdf` : null,
+      md: onlyNotes ? null : `notes/${c.name}/${l.name}.md`,
     }))),
   };
   zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
