@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>清渠 · 安卓端排版原型</title>
+<style>
+  :root {
+    --brand: #1a54c8;
+    --blue: #1677ff;
+    --ink: #1f2430;
+    --sub: #6b7280;
+    --line: #e5e7eb;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #eef0f4; color: var(--ink);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .page { max-width: 1580px; margin: 0 auto; padding: 28px 24px 60px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .lead { color: var(--sub); margin: 0 0 26px; max-width: 900px; }
+  .lead b { color: var(--ink); }
+  .row { display: flex; gap: 34px; align-items: flex-start; flex-wrap: wrap; }
+  .stage { }
+  .stage h2 { font-size: 15px; margin: 0 0 4px; }
+  .stage p.tip { color: var(--sub); font-size: 12px; margin: 0 0 12px; max-width: 420px; }
+
+  /* ---------- device frames ---------- */
+  .phone {
+    width: 390px; height: 780px; border-radius: 42px; padding: 12px;
+    background: #1c2028; box-shadow: 0 24px 60px rgba(20, 30, 60, .28);
+  }
+  .phone .screen {
+    width: 100%; height: 100%; border-radius: 32px; overflow: hidden;
+    background: var(--bg); display: flex; flex-direction: column; position: relative;
+  }
+  .phone-land {
+    width: 780px; height: 390px; border-radius: 34px; padding: 11px;
+    background: #1c2028; box-shadow: 0 24px 60px rgba(20, 30, 60, .28);
+  }
+  .phone-land .screen { width: 100%; height: 100%; border-radius: 26px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; }
+  .tablet {
+    width: 900px; height: 640px; border-radius: 30px; padding: 12px;
+    background: #1c2028; box-shadow: 0 24px 60px rgba(20, 30, 60, .28);
+  }
+  .tablet .screen { width: 100%; height: 100%; border-radius: 22px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; }
+
+  /* ---------- shared app chrome ---------- */
+  .appbar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    background: var(--card); border-bottom: 1px solid var(--line); flex: none;
+  }
+  .appbar .ico { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--sub); font-size: 15px; background: #f1f3f7; }
+  .appbar .titles { flex: 1; min-width: 0; }
+  .appbar .t1 { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .appbar .t2 { font-size: 11px; color: var(--sub); margin-top: -1px; }
+  .chip {
+    font-size: 11px; color: var(--blue); background: #eaf2ff; border-radius: 999px;
+    padding: 2px 9px; white-space: nowrap;
+  }
+
+  /* ---------- phone views ---------- */
+  .views { flex: 1; position: relative; overflow: hidden; }
+  .view { position: absolute; inset: 0; display: none; overflow: auto; }
+  .view.active { display: block; }
+
+  /* note view */
+  .note-body { padding: 14px 16px 90px; }
+  .progress-line { height: 3px; background: #e3e8f2; position: sticky; top: 0; z-index: 5; }
+  .progress-line i { display: block; height: 100%; width: 46%; background: var(--blue); border-radius: 0 3px 3px 0; }
+  .note-body h3 { font-size: 15px; margin: 20px 0 6px; }
+  .note-body h3:first-of-type { margin-top: 6px; }
+  .note-body ul { margin: 4px 0 10px; padding-left: 20px; }
+  .note-body li { margin: 5px 0; }
+  .note-body .warn { color: #b45309; background: #fff7ed; border: 1px solid #fde7c3; border-radius: 8px; padding: 7px 10px; font-size: 13px; }
+  sup.ref {
+    display: inline-block; min-width: 16px; height: 16px; line-height: 16px; text-align: center;
+    background: var(--blue); color: #fff; border-radius: 5px; font-size: 10px;
+    padding: 0 3px; margin-left: 2px; cursor: pointer; vertical-align: 2px;
+  }
+  sup.ref:hover { background: var(--brand); }
+  .kb-card { border: 1px dashed #c9d6f2; background: #f4f8ff; border-radius: 10px; padding: 10px 12px; margin: 14px 0; font-size: 13px; }
+  .kb-card b { color: var(--brand); }
+
+  /* ppt view */
+  .ppt-wrap { display: flex; flex-direction: column; height: 100%; }
+  .ppt-tool { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--card); border-bottom: 1px solid var(--line); flex: none; }
+  .ppt-tool .btn-s { font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 3px 9px; background: #fff; color: var(--ink); }
+  .ppt-tool .btn-s.on { color: var(--blue); border-color: #bcd3ff; background: #eaf2ff; }
+  .slide-area { flex: 1; display: grid; place-items: center; padding: 14px; position: relative; }
+  .slide {
+    width: 100%; max-width: 340px; aspect-ratio: 16 / 10; border-radius: 12px; position: relative;
+    background: linear-gradient(135deg, #123a8f, #1a54c8 55%, #2f7bff);
+    color: #fff; display: grid; place-items: center; text-align: center;
+    box-shadow: 0 14px 34px rgba(26, 84, 200, .35);
+  }
+  .pnum { position: absolute; right: 10px; bottom: 8px; font-size: 12px; opacity: .85; }
+  .slide .ttl { font-size: 17px; font-weight: 600; }
+  .slide .ttl small { display: block; font-weight: 400; opacity: .8; margin-top: 4px; font-size: 12px; }
+  .marks { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 8px; }
+  .marks button { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: #fff; font-size: 16px; box-shadow: 0 4px 12px rgba(15, 25, 50, .12); }
+  .pager { flex: none; display: flex; align-items: center; justify-content: center; gap: 14px; padding: 10px 0 14px; background: var(--card); border-top: 1px solid var(--line); font-size: 13px; }
+  .pager button { width: 36px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+  .thumbs { display: flex; gap: 6px; padding: 0 12px 10px; background: var(--card); overflow-x: auto; flex: none; }
+  .thumbs i { flex: none; width: 44px; height: 28px; border-radius: 5px; background: #dbe4f5; }
+  .thumbs i.cur { outline: 2px solid var(--blue); background: #b9cdff; }
+
+  /* chat view */
+  .chat-wrap { display: flex; flex-direction: column; height: 100%; }
+  .chat-msgs { flex: 1; overflow: auto; padding: 12px 14px 8px; }
+  .quote-card { border-left: 3px solid var(--blue); background: #f3f7ff; color: #33415c; font-size: 12px; border-radius: 0 8px 8px 0; padding: 6px 10px; margin: 4px 0 6px; }
+  .bubble { max-width: 82%; border-radius: 12px; padding: 8px 11px; font-size: 13px; margin: 4px 0 10px; }
+  .bubble.user { margin-left: auto; background: var(--blue); color: #fff; border-bottom-right-radius: 4px; }
+  .bubble.ai { background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .chat-input { flex: none; border-top: 1px solid var(--line); background: var(--card); padding: 8px 10px 10px; }
+  .chat-input .box { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px; color: var(--sub); font-size: 13px; }
+  .chat-input .box span { flex: 1; }
+  .chat-input .send { width: 34px; height: 34px; border-radius: 10px; border: 0; background: var(--blue); color: #fff; font-size: 15px; }
+  .selbar { position: absolute; left: 50%; transform: translateX(-50%); bottom: 86px; background: #222936; color: #fff; border-radius: 10px; display: none; gap: 2px; padding: 4px; z-index: 20; box-shadow: 0 10px 26px rgba(0,0,0,.3); }
+  .selbar.show { display: flex; }
+  .selbar button { border: 0; background: transparent; color: #fff; font-size: 12px; padding: 6px 10px; border-radius: 7px; }
+  .selbar button:hover { background: rgba(255,255,255,.14); }
+  .tabbar { flex: none; display: flex; background: var(--card); border-top: 1px solid var(--line); padding: 6px 8px 10px; }
+  .tabbar button { flex: 1; border: 0; background: none; color: var(--sub); font-size: 11px; display: flex; flex-direction: column; gap: 2px; align-items: center; padding: 3px 0; border-radius: 10px; }
+  .tabbar button .g { font-size: 19px; line-height: 1; }
+  .tabbar button.on { color: var(--blue); font-weight: 600; }
+  .tabbar button.on .g { filter: drop-shadow(0 0 6px rgba(22,119,255,.35)); }
+
+  /* ---------- landscape / tablet static frames ---------- */
+  .lsplit { flex: 1; display: flex; min-height: 0; }
+  .lcol { min-width: 0; display: flex; flex-direction: column; }
+  .lcol.left { width: 38%; border-right: 1px solid var(--line); background: #fff; }
+  .lcol.right { flex: 1; }
+  .ptitle { font-size: 12px; color: var(--sub); padding: 8px 12px 0; }
+  .lscroll { padding: 8px 12px; overflow: auto; font-size: 12.5px; }
+  .lscroll h4 { margin: 10px 0 4px; font-size: 13px; }
+  .lscroll ul { margin: 2px 0 8px; padding-left: 18px; }
+  .mini-slide { margin: 14px; flex: 1; border-radius: 10px; background: linear-gradient(135deg, #123a8f, #1a54c8 55%, #2f7bff); color: #fff; display: grid; place-items: center; position: relative; }
+  .mini-chat { border-top: 1px solid var(--line); height: 38%; background: #fff; padding: 8px 12px; font-size: 12.5px; }
+
+  /* ---------- notes cards ---------- */
+  .cards { margin-top: 46px; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .card h3 { margin: 0 0 10px; font-size: 15px; }
+  .card ul { margin: 6px 0; padding-left: 18px; }
+  .card li { margin: 4px 0; }
+  .card .yes { color: #0a7a3d; }
+  .card .no { color: #b42318; }
+  .legend { display: flex; gap: 18px; color: var(--sub); font-size: 12.5px; margin-bottom: 16px; flex-wrap: wrap; }
+  .legend b { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>清渠 · 安卓端排版原型</h1>
+  <p class="lead">
+    手机端的核心矛盾：桌面端「<b>笔记｜课件｜对话</b>」三栏在 6 寸竖屏放不下。
+    方案是——<b>竖屏收成三个整页（底部 Tab 切换）</b>，用「引用角标」把三页连起来；
+    <b>横屏和平板则直接展开成双栏/三栏</b>，和桌面端同一套界面按宽度自适应。
+    下面左屏可以真的点：点笔记里的蓝色角标试跳课件，点底栏切页。
+  </p>
+
+  <div class="legend">
+    <span><b>竖屏手机</b>：笔记 / 课件 / 问答 三整页 + 角标串联</span>
+    <span><b>横屏手机</b>：左笔记右课件</span>
+    <span><b>平板</b>：= 桌面三栏（右上课件、右下对话）</span>
+  </div>
+
+  <div class="row">
+    <!-- ============ 竖屏 ============ -->
+    <div class="stage">
+      <h2>① 手机竖屏（可交互）</h2>
+      <p class="tip">笔记页是默认页：阅读、勾选、点角标。课件页全屏看图（缩放/翻页/标记）。问答页管对话。</p>
+      <div class="phone"><div class="screen">
+        <div class="appbar">
+          <span class="ico">☰</span>
+          <div class="titles">
+            <div class="t1">高等数学（上）· 第 3 讲</div>
+            <div class="t2">极限与洛必达法则</div>
+          </div>
+          <span class="chip">46 页</span>
+          <span class="ico" id="pickBtn">▾</span>
+        </div>
+
+        <div class="views">
+          <!-- 笔记 -->
+          <div class="view active" id="v-note">
+            <div class="progress-line"><i></i></div>
+            <div class="note-body">
+              <div class="kb-card">🔗 <b>知识链</b> · 本讲 ⇄ 2.4 数列极限 ｜ → 4.1 导数 · <u>展开查看</u></div>
+              <h3>3.1 极限的 ε–δ 定义</h3>
+              <ul>
+                <li>数列极限：∀ε&gt;0，∃N，当 n&gt;N 时 |aₙ−a|&lt;ε<sup class="ref" data-p="1">1</sup></li>
+                <li>函数极限：0&lt;|x−x₀|&lt;δ ⇒ |f(x)−A|&lt;ε<sup class="ref" data-p="6">6</sup></li>
+              </ul>
+              <h3>3.2 洛必达法则</h3>
+              <ul>
+                <li>仅适用于 0/0 与 ∞/∞ 未定式<sup class="ref" data-p="12">12</sup></li>
+                <li>条件：在去心邻域内可导，且 g′(x) ≠ 0<sup class="ref" data-p="12">12</sup></li>
+              </ul>
+              <div class="warn">⚠️ 常见错误：不检验未定式条件就直接套用<sup class="ref" data-p="13">13</sup></div>
+              <div class="kb-card" style="border-style:solid">✋ <b>试试选中</b>· 点这句话模拟「长按选中文字」<span id="selTrigger" style="cursor:pointer">（点这里）</span></div>
+              <p style="color:var(--sub);font-size:12px">— 3.3 泰勒展开 …（继续滚动）—</p>
+            </div>
+          </div>
+
+          <!-- 课件 -->
+          <div class="view" id="v-ppt">
+            <div class="ppt-wrap">
+              <div class="ppt-tool">
+                <button class="btn-s">📍 跳回笔记</button>
+                <button class="btn-s on">跟随滚动</button>
+                <span style="flex:1"></span>
+                <button class="btn-s">缩放</button>
+              </div>
+              <div class="slide-area">
+                <div class="slide"><div class="ttl" id="slideTitle">洛必达法则<small>L'Hôpital's Rule</small></div><span class="pnum" id="slideNum">12 / 46</span></div>
+                <div class="marks"><button title="重点">⭐</button><button title="错题">❓</button><button title="掌握">✓</button></div>
+              </div>
+              <div class="thumbs"><i></i><i></i><i class="cur"></i><i></i><i></i><i></i><i></i></div>
+              <div class="pager"><button id="pgPrev">◀</button><span id="pgLabel">12 / 46</span><button id="pgNext">▶</button></div>
+            </div>
+          </div>
+
+          <!-- 问答 -->
+          <div class="view" id="v-chat">
+            <div class="chat-wrap">
+              <div class="chat-msgs" id="chatMsgs">
+                <div class="quote-card">「仅适用于 0/0 与 ∞/∞ 未定式」<br><span style="opacity:.65">— 笔记 · 3.2 洛必达法则 · 第 12 页</span></div>
+                <div class="bubble user">洛必达法则使用前要检查什么？</div>
+                <div class="bubble ai">要同时满足三点：<br>① 是 0/0 或 ∞/∞ 未定式；<br>② f、g 在去心邻域内可导；<br>③ g′(x) ≠ 0。<br>缺一条就不能直接用，可改用泰勒或等价无穷小。</div>
+              </div>
+              <div class="chat-input"><div class="box"><span>继续问…</span><button class="send">↑</button></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="selbar" id="selbar">
+          <button id="quoteBtn">💬 引用提问</button><button>🧠 解释这段</button><button>📋 复制</button>
+        </div>
+
+        <nav class="tabbar" id="tabbar">
+          <button data-v="v-note" class="on"><span class="g">📒</span>笔记</button>
+          <button data-v="v-ppt"><span class="g">🖼</span>课件</button>
+          <button data-v="v-chat"><span class="g">💬</span>问答</button>
+        </nav>
+      </div></div>
+    </div>
+
+    <!-- ============ 横屏 ============ -->
+    <div class="stage">
+      <h2>② 手机横屏（自动双栏）</h2>
+      <p class="tip">宽度 ≥ 600dp 时自动切双栏：左笔记右课件，对话改为右侧抽屉。不用另做一套 UI。</p>
+      <div class="phone-land"><div class="screen">
+        <div class="appbar">
+          <span class="ico">☰</span>
+          <div class="titles"><div class="t1">高等数学（上）· 第 3 讲 · 极限与洛必达法则</div></div>
+          <span class="chip">46 页</span>
+          <span class="ico">💬</span>
+        </div>
+        <div class="lsplit">
+          <div class="lcol left">
+            <div class="ptitle">📒 笔记</div>
+            <div class="lscroll">
+              <h4>3.2 洛必达法则</h4>
+              <ul>
+                <li>仅适用于 0/0 与 ∞/∞<sup class="ref">12</sup></li>
+                <li>去心邻域可导，g′≠0<sup class="ref">12</sup></li>
+              </ul>
+              <h4>3.3 泰勒展开</h4>
+              <ul><li>用多项式逼近<sup class="ref">18</sup></li></ul>
+            </div>
+          </div>
+          <div class="lcol right">
+            <div class="ptitle">🖼 课件 · 跟随笔记</div>
+            <div class="mini-slide"><div class="ttl">洛必达法则<span class="pnum">12 / 46</span></div></div>
+          </div>
+        </div>
+      </div></div>
+
+      <!-- ============ 平板 ============ -->
+      <h2 style="margin-top:26px">③ 平板（= 桌面三栏）</h2>
+      <p class="tip">横屏平板直接复用桌面布局：左笔记、右上课件、右下对话；竖屏平板折成「左笔记右上下」双栏。</p>
+      <div class="tablet"><div class="screen">
+        <div class="appbar">
+          <span class="ico">←</span>
+          <div class="titles"><div class="t1">高等数学（上）· 第 3 讲 · 极限与洛必达法则</div></div>
+          <span class="chip">生成笔记</span><span class="chip">知识链</span><span class="chip">复习 3</span><span class="ico">⋯</span>
+        </div>
+        <div class="lsplit">
+          <div class="lcol left" style="width:42%">
+            <div class="ptitle">📒 笔记 ｜ 原文 md</div>
+            <div class="lscroll">
+              <h4>3.1 极限的 ε–δ 定义</h4>
+              <ul><li>数列极限定义<sup class="ref">1</sup></li><li>函数极限定义<sup class="ref">6</sup></li></ul>
+              <h4>3.2 洛必达法则</h4>
+              <ul><li>0/0 与 ∞/∞ 未定式<sup class="ref">12</sup></li><li>常见错误：不检验条件<sup class="ref">13</sup></li></ul>
+            </div>
+          </div>
+          <div class="lcol right">
+            <div class="mini-slide" style="margin:14px 14px 0"><div class="ttl">洛必达法则<span class="pnum">12 / 46</span></div></div>
+            <div class="mini-chat">
+              <div class="bubble ai" style="max-width:100%">要同时满足三点：①未定式 ②可导 ③ g′(x)≠0 …</div>
+              <div class="box" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;color:var(--sub)">继续问…</div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <h3>手机 / 平板保留什么</h3>
+      <ul>
+        <li class="yes">✅ 笔记阅读（公式、角标、知识链、进度）</li>
+        <li class="yes">✅ 课件看图：缩放、翻页、角标跳页、⭐/❓/✓ 标记</li>
+        <li class="yes">✅ 引用提问 + LLM 对话（直连 API，含历史）</li>
+        <li class="yes">✅ 复习队列（今日到期）、课次切换、全库搜索</li>
+        <li class="no">✂️ 不做：下载、OCR 转 MD、清洗去重、生成笔记、PDF/图谱</li>
+      </ul>
+      <p style="color:var(--sub);font-size:12.5px">重活留在电脑端，手机只带「轻量数据包」进来（md + 图片 + 角标索引，就是现有「轻量导出」）。</p>
+    </div>
+    <div class="card">
+      <h3>三个页怎么互相串</h3>
+      <ul>
+        <li>笔记里 <sup class="ref">12</sup> 角标 → 课件页直达第 12 页；课件页「📍跳回笔记」回到原段</li>
+        <li>选中文字 → 浮条：引用提问 / 解释这段 / 复制；引用后自动跳问答页</li>
+        <li>课件上的 ⭐❓✓ 与复习队列同源，和电脑端进度一致</li>
+        <li>顶栏 ▾ 弹课次选择器；底栏三个 Tab 常驻，读到哪里都一键互跳</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>技术路线（复用桌面代码）</h3>
+      <ul>
+        <li>同一套前端加响应式断点：&lt;600dp 三 Tab、≥600dp 双栏、平板三栏——不另写一套 UI</li>
+        <li>Capacitor 套壳出 APK（和 ITDC 同一打法）</li>
+        <li>数据层抽一个适配器：电脑走本地服务，手机读导入包（Filesystem/IndexedDB）</li>
+        <li>LLM 对话直连用户自己的 API（Key 存 Android Keystore），不经服务器</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+  const views = [...document.querySelectorAll('.view')];
+  const tabs = [...document.querySelectorAll('#tabbar button')];
+  function show(v) {
+    views.forEach(x => x.classList.toggle('active', x.id === v));
+    tabs.forEach(t => t.classList.toggle('on', t.dataset.v === v));
+    document.getElementById('selbar').classList.remove('show');
+  }
+  tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.v)));
+
+  // 角标 → 跳课件
+  const titles = { 1: '数列极限的定义', 6: '函数极限：ε–δ', 12: '洛必达法则', 13: '洛必达法则 · 常见错误', 18: '泰勒展开' };
+  document.querySelectorAll('sup.ref[data-p]').forEach(s => s.addEventListener('click', () => {
+    const p = s.dataset.p;
+    document.getElementById('slideNum').textContent = p + ' / 46';
+    document.getElementById('pgLabel').textContent = p + ' / 46';
+    document.getElementById('slideTitle').innerHTML = (titles[p] || '课件') + '<small>L\'Hôpital / Limits</small>';
+    show('v-ppt');
+  }));
+
+  // 翻页
+  let page = 12;
+  function render() {
+    document.getElementById('slideNum').textContent = page + ' / 46';
+    document.getElementById('pgLabel').textContent = page + ' / 46';
+    document.getElementById('slideTitle').innerHTML = (titles[page] || '第 ' + page + ' 页') + '<small>课件</small>';
+  }
+  document.getElementById('pgPrev').onclick = () => { page = Math.max(1, page - 1); render(); };
+  document.getElementById('pgNext').onclick = () => { page = Math.min(46, page + 1); render(); };
+
+  // 模拟选中文字
+  document.getElementById('selTrigger').addEventListener('click', () => {
+    document.getElementById('selbar').classList.add('show');
+  });
+  document.getElementById('quoteBtn').addEventListener('click', () => {
+    const msgs = document.getElementById('chatMsgs');
+    const card = document.createElement('div');
+    card.className = 'quote-card';
+    card.innerHTML = '「不检验未定式条件就直接套用」<br><span style="opacity:.65">— 笔记 · 3.2 洛必达法则 · 第 13 页</span>';
+    msgs.prepend(card);
+    show('v-chat');
+  });
+</script>
+</body>
+</html>
