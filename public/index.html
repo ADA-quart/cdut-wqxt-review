@@ -22,7 +22,7 @@
     <button class="btn ghost" id="btnLogin" hidden>登录</button>
     <button class="btn ghost" id="btnLogout" hidden>退出</button>
     <button class="btn ghost" id="btnBrowser" title="Edge 窗口平时躲在屏幕外；需要输验证码或手动操作时唤出">显示浏览器</button>
-    <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（纠错 / 整理重点 / AI 知识链 / 复习页对话）">LLM 设置</button>
+    <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（校订 / AI 知识链 / 复习页对话）">LLM 设置</button>
     <button class="btn ghost" id="btnSettings" title="目录位置 / 导入导出 / 升级 / 退出">设置</button>
     <button class="btn ghost" id="btnHelp" title="第一次用？看这里">❓ 使用说明</button>
   </div>
@@ -125,11 +125,11 @@
 <div class="modal-mask" id="llmModal" hidden>
   <div class="modal wide">
     <h3>LLM 设置</h3>
-    <p class="hint">纠错支持三档模式，各自独立配置（均为 OpenAI 兼容接口）。纯文本档还负责「整理重点」「AI 知识链」和复习页对话。密钥只保存在本机 config.json。</p>
+    <p class="hint">校订支持三档模式，各自独立配置（均为 OpenAI 兼容接口）。纯文本档还负责「AI 知识链」和复习页对话。密钥只保存在本机 config.json。</p>
     <div class="modal-body-scroll">
       <section class="profile-section">
         <h4>① 纯文本 <span class="tag">最省 token</span></h4>
-        <p class="hint">只发送 OCR 文字做纠错/总结。推荐 DeepSeek 等文本模型。</p>
+        <p class="hint">只发送 OCR 文字做校订/知识链。推荐 DeepSeek 等文本模型。</p>
         <label class="field"><span>接口地址</span><input type="text" id="pTextBaseUrl" placeholder="https://api.deepseek.com/v1"></label>
         <label class="field"><span>模型</span><input type="text" id="pTextModel" list="pTextModelList" placeholder="deepseek-chat"></label>
         <datalist id="pTextModelList"></datalist>
@@ -208,7 +208,7 @@
         <table class="help-table">
           <tr><th>位置</th><th>按钮</th><th>作用</th></tr>
           <tr><td rowspan="4">顶栏</td><td>显示浏览器</td><td>后台浏览器窗口平时躲在屏幕外，需要手动操作 / 输验证码时叫出来</td></tr>
-          <tr><td>LLM 设置</td><td>配置 AI（纠错、整理重点、知识链、对话都用它）；三档：纯文本 / 图片上云 / 图片本地</td></tr>
+          <tr><td>LLM 设置</td><td>配置 AI（校订、知识链、对话都用它）；三档：纯文本 / 图片上云 / 图片本地</td></tr>
           <tr><td>设置</td><td>目录位置、导入导出、升级、退出程序</td></tr>
           <tr><td>使用说明</td><td>就这个窗口</td></tr>
           <tr><td rowspan="2">课程区</td><td>勾选 + 下载所选</td><td>勾选想下的课程，点「下载所选」批量下载；也可「全选」一键选完</td></tr>
@@ -216,7 +216,7 @@
           <tr><td rowspan="3">已下载文件</td><td>清洗</td><td>去重预检：录播抓帧会有重复（渐进动画），生成「前/删/后」对照页让你人工确认</td></tr>
           <tr><td>转 MD</td><td>图片 → Markdown（公式变 LaTeX）+ PDF</td></tr>
           <tr><td>复习</td><td>打开复习台</td></tr>
-          <tr><td rowspan="3">复习台</td><td>整理重点</td><td>AI 读整节课，生成「重点总结」写回笔记顶部</td></tr>
+          <tr><td rowspan="3">复习台</td><td>生成笔记</td><td>AI 通读原文 → 整理稿 → 深度笔记（讲解 / 习题答案 / 必记）；重点在笔记最前，并自动同步到原文顶部</td></tr>
           <tr><td>🧠 出题 / ⭐❓✓</td><td>把当前页变成问答卡或标记，进复习队列（间隔重复）</td></tr>
           <tr><td>知识链 / 图谱 / 标签</td><td>AI 给课次和课程之间建立关联、可视化、按 #标签 汇总</td></tr>
         </table>

@@ -908,7 +908,7 @@ async function generateIndex() {
   }
 }
 
-// ---------- AI：整理重点 / 织知识链 ----------
+// ---------- AI：织知识链 ----------
 
 function toast(msg, ok = true) {
   let el = document.getElementById('rvToast');
@@ -965,24 +965,6 @@ async function reloadMd() {
   renderThumbs();
   if (state.pages.length) showPage(Math.min(keepPage, state.pages.length - 1));
   renderOutLinks();
-}
-
-async function handleSummarize() {
-  const btn = $('btnSummarize');
-  btn.disabled = true;
-  const old = btn.textContent;
-  btn.textContent = '整理中…';
-  try {
-    await runLlmJob({ op: 'summarize', dir }, { label: '「快速摘要」' });
-    await reloadMd();
-    $('mdScroll').scrollTo({ top: 0, behavior: 'smooth' });
-    toast('快速摘要已写入原文顶部（切「原文」可看；生成深度笔记时会自动同步同一份重点）');
-  } catch (e) {
-    toast('整理失败：' + String(e.message || e), false);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = old;
-  }
 }
 
 async function handlePolish() {
@@ -1398,7 +1380,6 @@ function setupEvents() {
     }
   };
   $('btnIndex').onclick = generateIndex;
-  $('btnSummarize').onclick = handleSummarize;
   $('btnMakeNote').onclick = handleMakeNote;
   $('tabNote').onclick = () => {
     state.view = 'note';

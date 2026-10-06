@@ -1484,7 +1484,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
   }
 
   const cfg = loadConfig().llm;
-  const useMode = op === 'proofread'
+  const useMode = (op === 'proofread' || op === 'polish')
     ? (PROFILE_KEYS.includes(mode) ? mode : cfg.defaultMode || 'text')
     : 'text';
 

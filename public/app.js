@@ -516,7 +516,7 @@ function renderLlmJobCard(j) {
   const title = document.createElement('p');
   title.className = 'job-title';
   const modeLabel = LLM_FIELDS[j.mode]?.label || '';
-  const opLabel = { proofread: '纠错', summarize: '总结', weave: '知识链', fixmath: '修公式' }[j.op] || j.op;
+  const opLabel = { proofread: '纠错', polish: '校订', summarize: '总结', weave: '知识链', fixmath: '修公式' }[j.op] || j.op;
   title.textContent = `#${j.id} ${opLabel} · ${j.title}${j.op === 'proofread' && modeLabel ? `（${modeLabel}）` : ''}`;
   const stats = document.createElement('div');
   stats.className = 'job-stats';
@@ -789,12 +789,6 @@ function renderTreeLevel(nodes, level) {
         proof.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startLlmJob(node, 'polish', proof); };
         summary.appendChild(proof);
 
-        const sum = document.createElement('button');
-        sum.className = 'btn tiny';
-        sum.textContent = '总结';
-        sum.title = '用 LLM 生成重点总结（插到 md 顶部）';
-        sum.onclick = (e) => { e.preventDefault(); e.stopPropagation(); startLlmJob(node, 'summarize', sum); };
-        summary.appendChild(sum);
       }
       // 有复核页时给个入口（辅助文件本身不上树）
       if (node.hasDedup) {
