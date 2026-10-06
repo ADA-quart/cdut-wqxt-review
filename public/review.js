@@ -1381,6 +1381,24 @@ function setupEvents() {
   };
   $('btnIndex').onclick = generateIndex;
   $('btnMakeNote').onclick = handleMakeNote;
+  $('btnNotePdf').onclick = async () => {
+    const btn = $('btnNotePdf');
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = '生成中…';
+    try {
+      const r = await fetch('/api/note-pdf?dir=' + encodeURIComponent(dir));
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      window.open(d.url, '_blank');
+      toast(d.cached ? '笔记 PDF 已打开（缓存）' : '笔记 PDF 已生成（保存在课次旁）');
+    } catch (e) {
+      toast('笔记 PDF 失败：' + String(e.message || e), false);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  };
   $('tabNote').onclick = () => {
     state.view = 'note';
     renderLeftPane();

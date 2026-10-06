@@ -36,6 +36,7 @@ import { publicConfig, saveConfig, loadConfig } from './config.mjs';
 import { streamChat } from './chat.mjs';
 import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
 import { autoParallel } from './gpu.mjs';
+import { renderNotePdf } from './notepdf.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
@@ -920,6 +921,21 @@ app.post('/api/pick-folder', asyncRoute(async (req, res) => {
   res.json(p ? { path: p } : { canceled: true });
 }));
 
+// 笔记 PDF：首次生成（无头 Edge 渲染 print.html），之后按 mtime 缓存
+app.get('/api/note-pdf', asyncRoute(async (req, res) => {
+  const dir = String(req.query.dir || '').replace(/^[/\\]+/, '');
+  if (!dir) return res.status(400).json({ error: '缺少 dir' });
+  let result;
+  try {
+    result = await renderNotePdf(dir, { port: PORT });
+  } catch (e) {
+    return res.status(500).json({ error: 'PDF 生成失败：' + String(e?.message || e).slice(0, 120) });
+  }
+  if (!result.ok) return res.status(404).json({ error: result.reason === 'no-note' ? '还没有笔记——先点「生成笔记」' : '生成失败' });
+  if (req.query.download === '1') return res.download(result.path);
+  res.json({ ok: true, url: '/notes/' + result.rel.split('/').map(encodeURIComponent).join('/'), cached: result.cached });
+}));
+
 // ---------- 一键导出 / 导入（含未来手机端所需的结构）----------
 
 const PKG = (() => {
@@ -957,10 +973,11 @@ app.get('/api/export', asyncRoute(async (req, res) => {
   const includeAssets = req.query.assets !== '0';
   const includeCards = req.query.cards !== '0';
   const includeChats = req.query.chats !== '0';
+  const includeNotePdf = req.query.notePdf !== '0';
 
   const zip = new AdmZip();
   const courses = [];
-  const counts = { courses: 0, lessons: 0, notes: 0, pdfs: 0, assets: 0, cards: 0, chats: 0, images: 0 };
+  const counts = { courses: 0, lessons: 0, notes: 0, pdfs: 0, assets: 0, cards: 0, chats: 0, notePdfs: 0, images: 0 };
 
   for (const course of listCourses()) {
     const lessons = listLessons(course);
@@ -1004,6 +1021,19 @@ app.get('/api/export', asyncRoute(async (req, res) => {
           counts.chats += info.chats;
         }
       }
+      // 生成笔记：md 直接打包；PDF 现场懒生成（之后按 mtime 缓存复用）
+      if (addFileToZip(zip, path.join(NOTES_DIR, `${rel}.note.md`), `notes/${rel}.note.md`)) {
+        info.note = true;
+      }
+      if (includeNotePdf && fs.existsSync(path.join(NOTES_DIR, `${rel}.note.md`))) {
+        try {
+          const pdf = await renderNotePdf(rel, { port: PORT });
+          if (pdf.ok && addFileToZip(zip, pdf.path, `notes/${rel}.note.pdf`)) {
+            info.notePdf = true;
+            counts.notePdfs += 1;
+          }
+        } catch { /* PDF 生成失败：跳过，不阻塞导出 */ }
+      }
       if (includeImages) {
         const imgDir = path.join(DATA_DIR, course, lesson);
         let imgs = [];
@@ -1027,7 +1057,7 @@ app.get('/api/export', asyncRoute(async (req, res) => {
     format: 1,
     version: PKG.version || '0.0.0',
     exportedAt: new Date().toISOString(),
-    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards, chats: includeChats },
+    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards, chats: includeChats, notePdf: includeNotePdf },
     paths: getPaths(),
     counts,
     courses,
