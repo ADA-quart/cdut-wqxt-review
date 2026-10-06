@@ -891,23 +891,6 @@ async function loadBacklinks() {
   }
 }
 
-async function generateIndex() {
-  if (!courseDir) return;
-  try {
-    const r = await fetch('/api/index-note', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir: courseDir }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    alert(`课程索引已生成/更新：${data.rel}\n（共 ${data.lessons} 个课次；在 Obsidian 里就是课程主页）`);
-    loadBacklinks();
-  } catch (e) {
-    alert('生成失败：' + e.message);
-  }
-}
-
 // ---------- AI：织知识链 ----------
 
 function toast(msg, ok = true) {
@@ -1379,7 +1362,6 @@ function setupEvents() {
       alert('复制失败，请改用「下载 md」');
     }
   };
-  $('btnIndex').onclick = generateIndex;
   $('btnMakeNote').onclick = handleMakeNote;
   $('btnNotePdf').onclick = async () => {
     const btn = $('btnNotePdf');
@@ -1423,6 +1405,14 @@ function setupEvents() {
   $('btnCloseChain').onclick = () => { $('chainDrawer').hidden = true; };
   $('btnGraph').onclick = openGraph;
   $('btnGuide').onclick = () => { $('guideModal').hidden = false; };
+  $('btnMore').onclick = (e) => {
+    e.stopPropagation();
+    $('moreMenu').hidden = !$('moreMenu').hidden;
+  };
+  $('moreMenu').addEventListener('click', () => { $('moreMenu').hidden = true; });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.more-wrap')) $('moreMenu').hidden = true;
+  });
   $('btnCloseGuide').onclick = () => { $('guideModal').hidden = true; };
   $('btnMoreHelp').onclick = () => { $('guideModal').hidden = false; };
   $('btnCloseHint').onclick = () => {
@@ -2013,7 +2003,6 @@ async function markCardBadges() {
 
   state.mdUrl = noteUrl(`${dir}.md`);
   $('linkDownloadMd').href = state.mdUrl;
-  $('linkOpenMd').href = state.mdUrl;
 
   setupSplitters();
   setupEvents();

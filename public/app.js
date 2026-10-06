@@ -1292,11 +1292,6 @@ $('btnShutdown').onclick = async () => {
     hint.className = 'test-result err';
   }
 };
-$('btnRefreshJobs').onclick = async () => {
-  const { jobs } = await api('/jobs');
-  for (const j of jobs) state.jobs.set(j.id, j);
-  renderJobs();
-};
 $('btnRefreshFiles').onclick = loadFiles;
 
 /** 勾选了几门课 → 按钮上显示数量 */

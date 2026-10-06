@@ -21,7 +21,6 @@
     <span id="statusText">检查中…</span>
     <button class="btn ghost" id="btnLogin" hidden>登录</button>
     <button class="btn ghost" id="btnLogout" hidden>退出</button>
-    <button class="btn ghost" id="btnBrowser" title="Edge 窗口平时躲在屏幕外；需要输验证码或手动操作时唤出">显示浏览器</button>
     <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（校订 / AI 知识链 / 复习页对话）">LLM 设置</button>
     <button class="btn ghost" id="btnSettings" title="目录位置 / 导入导出 / 升级 / 退出">设置</button>
     <button class="btn ghost" id="btnHelp" title="第一次用？看这里">❓ 使用说明</button>
@@ -66,9 +65,6 @@
   <section class="panel">
     <div class="panel-head">
       <h2>下载任务</h2>
-      <div class="toolbar">
-        <button class="btn" id="btnRefreshJobs">刷新</button>
-      </div>
     </div>
     <div class="panel-body" id="jobList">
       <p class="empty">暂无任务</p>
@@ -309,6 +305,10 @@
       <section class="profile-section">
         <h4>④ 升级 / 退出</h4>
         <p class="hint">升级走 git（需要是 git clone 安装的）；退出会关闭服务与后台浏览器进程。</p>
+        <div class="test-row">
+          <button class="btn tiny" id="btnBrowser">显示浏览器</button>
+          <span class="hint">登录验证码 / 需要手动操作时，唤出后台 Edge 窗口（平时藏在屏幕外）</span>
+        </div>
         <div class="test-row">
           <button class="btn tiny" id="btnUpdateCheck">检查更新</button>
           <button class="btn tiny" id="btnUpdate">一键升级</button>
