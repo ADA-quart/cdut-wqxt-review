@@ -1,3 +1,8 @@
+/**
+ * 路径与目录管理：项目根 / 静态目录 / 数据目录（downloads）/ 笔记目录（可指向 Obsidian 库）。
+ * 目录配置存 config.json 的 paths，改完经 /api/paths 热更新（applyPathSettings）。
+ * 工具：sanitizeName（安全文件名）、ensureInside（防目录穿越）、ensureDir。
+ */
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';

@@ -1,6 +1,7 @@
 /**
  * 复习卡（间隔重复）：按课次存 downloads/.review/<课程>/<课次>.json
- * 卡片结构：{id, dir, page, kind: star|wrong|ok, text, created, due, interval, ease, reps, lapses}
+ * 卡片：{id, dir, page, kind: star|wrong|ok|qa, text, front, back, created, due, interval, ease, reps, lapses}
+ * 判重：同课次同类型同内容（qa 卡看题干）不会重复入队；AI 出题走 addCards。
  */
 import fs from 'node:fs';
 import path from 'node:path';

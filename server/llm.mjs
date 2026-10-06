@@ -1,12 +1,15 @@
 /**
- * LLM 文档操作：OCR 纠错（proofread）与重点总结（summarize）。
+ * LLM 文档操作（统一任务队列，任务串行、任务内按页/块并发）：
+ *   proofread  纠错（OCR 错字）/ fixmath 修公式 / polish 校订（两者合并）
+ *   note       深度笔记：整理稿 → 成稿（💭 讲解 / 习题折叠答案）→ 课末必记；整理稿按 mtime 缓存
+ *   audit      质量审计：页覆盖 + 忠实度核对 + 知识点清单，与原文不符处自动修正
+ *   summarize  快速摘要（写原文顶部 llm-summary 块；无独立入口，保留 API）
+ *   weave      知识链（课程内 / 课程间）
+ * 另有：expandQuery / generateQaCards / feynmanReview / listModels（复习台用）。
  *
- * 纠错三档模式（对应 config 里的三个 profile，均为 OpenAI 兼容接口）：
- *   text        纯文本   —— 只发 OCR 文字，最省 token（默认）
- *   visionCloud 图片上云 —— 页面图 + 文字发给云端视觉模型，精度最高
- *   visionLocal 图片本地 —— 发给本机推理服务（Ollama / vLLM），零 API 费用
- *
- * 任务串行排队；任务内部按页/按块并发（并发数可配）。
+ * 纠错/校订三档模式（config 的 profile，均为 OpenAI 兼容接口）：
+ *   text 纯文本 / visionCloud 图片上云 / visionLocal 图片本地
+ * DeepSeek 推理模型自动管理思考预算；批量环节可 thinking:'off' 关思考省 token。
  * 每个任务统计 token 用量（接口返回 usage 时）。
  */
 import fs from 'node:fs';

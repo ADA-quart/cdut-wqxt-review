@@ -847,7 +847,7 @@ function renderOutLinks() {
   const links = collectOutgoing();
   box.innerHTML = '';
   if (links.length === 0) {
-    box.innerHTML = '<p class="empty">这篇笔记还没有链接其他笔记。可以点上方「生成课程索引」，把课次串成链。</p>';
+  box.innerHTML = '<p class="empty">这篇笔记还没有链接其他笔记。可以点上方「知识链 → 本课程知识链」，把课次串成链。</p>';
     return;
   }
   for (const target of links) {

@@ -1,20 +1,8 @@
 /**
- * 问渠学堂 PPT 下载器 — 本地服务
+ * 问渠学堂 PPT 整理系统 — 本地服务（Express）。
  *
- * 端点：
- *   GET  /api/status           浏览器/登录状态
- *   POST /api/login            触发登录（在真实 Edge 窗口里完成）
- *   GET  /api/courses          我的课程列表
- *   GET  /api/courses/:id/subs 课程课次列表
- *   GET  /api/subs/:courseId/:subId/ppt  课次 PPT 图片清单
- *   POST /api/jobs             创建下载任务 {mode:'course'|'all', courseId}
- *   GET  /api/jobs             任务列表
- *   GET  /api/jobs/:id         任务详情
- *   POST /api/jobs/:id/cancel  取消任务
- *   GET  /api/events           SSE 进度推送
- *   GET  /api/logout           退出登录（清空页面会话）
- * 静态资源：public/
- * 下载目录：downloads/（可通过 /files/* 浏览与预览）
+ * 路由全集见 README「API 一览」；静态资源 public/；数据目录 downloads/（经 /files、/notes 浏览）。
+ * 三类任务：下载（downloader）/ 转 MD（mdconvert）/ LLM（llm），进度统一走 /api/events（SSE）。
  */
 import express from 'express';
 import fs from 'node:fs';
