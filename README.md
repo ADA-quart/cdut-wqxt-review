@@ -1,34 +1,45 @@
 <div align="center">
 
-<img src="public/icons/icon-192.png" width="104" alt="清渠">
+<img src="public/icons/icon-192.png" width="88" alt="清渠">
 
 <h1>清渠</h1>
 
-<h3>成都理工大学问渠学堂 · 课件整理与复习系统</h3>
-
-<p>登录下载 → 去重清洗 → 转 MD → 校订 → AI 深度笔记 → 复习自测（审计 · 知识链 · 安卓端）</p>
-
-<p>把问渠学堂录播课的 PPT 抓成本地图片，转成带公式的 Markdown，<br>
-用 AI 整理成「有讲解、带习题答案、能自测」的深度笔记；<br>
-在桌面复习台或安卓 App 里对着课件复习，笔记可导出 PDF、打包同步到手机 / 平板，<br>
-或直接丢进 Obsidian / ima。</p>
+<p>把问渠学堂的录播课件，整理成能随手复习的笔记与课件库。</p>
 
 <p>
   <a href="https://github.com/ADA-quart/cdut-wqxt-review/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/ADA-quart/cdut-wqxt-review"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange.svg"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Web%20%7C%20Android-informational">
-  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-18%2B-339933">
 </p>
 
 <p>
-  <a href="https://github.com/ADA-quart/cdut-wqxt-review/releases/latest"><b>📱 下载安卓 App（平板优先 · 横竖屏自适应）</b></a>
+  <a href="https://github.com/ADA-quart/cdut-wqxt-review/releases/latest"><b>📱 下载安卓 App</b></a>
+  &nbsp;·&nbsp;
+  <a href="#快速开始"><b>🖥 桌面端快速开始</b></a>
 </p>
 
 </div>
 
+## 为什么有清渠
+
+问渠学堂的录播课件是复习的主要资料，但用起来别扭：一节课摊开是上百张 PPT 截图，想找某个公式要来回拖进度条，临近期末更是翻不动。
+
+清渠把这件事理成一条流水线：下载课件全页原图 → 去除重复帧 → OCR 成带公式的 Markdown → AI 整理成带页码引用的复习笔记 → 在复习台里对着课件读、划词提问、间隔重复自测。整理好的内容可以打包到平板 / 手机，离线继续看。
+
+「清渠」取自「问渠那得清如许」——把杂乱的课件，理成一渠清水。
+
+## 它能帮你做什么
+
+- **补落下的课**：课件原图与公式笔记并排看，不用再拖录屏进度条；
+- **期末复习**：笔记要点带页码角标，点一下跳到对应课件页；⭐ / ❓ / ✓ 标记和间隔重复队列盯着薄弱点；
+- **读不懂就问**：划选笔记里任何一句，引用给 AI 解释或追问，回答附带课件来源；
+- **带着走**：导出「内容包」放进平板 / 手机 App，离线可读；笔记也能出 PDF 或放进 Obsidian / ima。
+
 > 重复点「下载」不会重复拉图（已存在且正常的图片自动跳过）；同一课次的「转 MD」「生成笔记」「质量审计」也是幂等的——已有进行中的任务会直接复用，不会重复烧 GPU / token。审计在原文没变时会复用上次的知识点清单，生成笔记会复用整理稿缓存。
 
 ## 快速开始
+
+> 前置条件：Node.js 18+；Windows 需安装 Microsoft Edge（登录用）。「转 MD」功能另需一次性安装转换环境（见下）。
 
 四种打开方式，任选其一：
 
@@ -110,6 +121,8 @@ bash setup-p2t.sh
 - 多次导入同一门课 = 增量合并（按课次版本比对，新增 / 更新 / 跳过）。
 
 ## 功能地图
+
+以下按流水线环节列出每个功能的细节，供使用时查阅。
 
 ### 下载器（管理端）
 
@@ -222,85 +235,13 @@ downloads/                          ← 数据目录（可在设置里改）
 | `<课次>.chat.json` | 对话历史 |
 | `_回收站/`、`_assets/` | 被清理的帧 / 公式素材图（都不上文件树） |
 
-## API 一览
+## 更多文档
 
-本地服务（默认 `http://127.0.0.1:3901`）：
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET/POST | `/api/status` `/api/login` `/api/logout` | 登录状态 / 统一认证登录 / 退出 |
-| GET | `/api/terms` `/api/courses` `/api/courses/:id/subs` `/api/subs/:courseId/:subId/ppt` | 学期 / 课程 / 课次 / 课次图片清单 |
-| POST/GET | `/api/jobs`（创建/列表）、`/api/jobs/:id`、`/api/jobs/:id/cancel` | 下载任务 |
-| POST/GET | `/api/md-jobs`（创建/列表）、`/api/md-jobs/:id`、`/api/md-jobs/:id/cancel`、`/api/md-tools`、`/api/md-config` | 转 MD 任务与配置 |
-| POST/GET | `/api/dedup-scan`、`/api/dedup-decisions`、`/api/dedup-state`、`/api/dedup-image` | 清洗预检 / 保存勾选 / 复核页数据 / 复核页图片 |
-| POST/GET | `/api/llm-jobs`（note / audit / polish / proofread / fixmath / summarize / weave）及取消 | LLM 任务 |
-| GET/PUT/POST | `/api/llm-config`、`/api/llm-limits`、`/api/llm-test`、`/api/llm-models` | LLM 配置 / 能力探测 / 连通测试 / 模型列表 |
-| GET | `/api/note-pdf?dir=`（`&download=1` 直接下载） | 生成 / 缓存笔记 PDF |
-| GET/POST/DELETE | `/api/chat-history?dir=` | 对话历史读写清空 |
-| POST | `/api/chat` | 流式对话（SSE 文本流） |
-| POST | `/api/note-marks` | 保存四色笔记标记 |
-| GET | `/api/courses-tree` | 复习页课程 / 课次导航树 |
-| POST/GET | `/api/kb/search`、`/api/backlinks`、`/api/graph`、`/api/tags`、`/api/preview` | 检索 / 反链 / 图谱 / 标签 / 悬浮预览 |
-| GET/POST/DELETE | `/api/cards`（列表/新增）、`/api/cards/:id/grade`（评分）、`/api/cards/:id`（DELETE 删除）、`/api/cards/gen-qa`、`/api/cards/feynman`、`/api/cards/export` | 复习卡 |
-| POST | `/api/index-note` | 规则版课程索引（知识链使用） |
-| GET/PUT/POST | `/api/paths`、`/api/pick-folder` | 目录设置 / 系统文件夹选择 |
-| GET/POST | `/api/export`（`?onlyNotes=1` 只导笔记）、`/api/import?overwrite=1` | 导出 / 导入 zip |
-| GET/POST | `/api/system/update-check`、`/api/system/update`、`/api/system/shutdown` | 升级 / 退出 |
-| GET | `/api/events` | SSE：下载 / 转 MD / LLM 任务进度 |
-| POST/GET | `/api/browser/show` `/api/browser/hide` `/api/browser/window` | 后台浏览器窗口 |
-| 静态 | `/files/*`（数据目录）、`/notes/*`（笔记目录）、`/vendor/*`（marked / KaTeX） | 文件访问 |
-
-## 架构与原理
-
-### 为什么必须用真实浏览器
-
-问渠学堂有动态防护（瑞数），纯 HTTP 请求会被拒；本工具用本机已安装的 Edge/Chrome 真实内核完成登录与接口初始化，窗口默认藏在屏幕外。
-
-### 数据流
-
-```
-登录 ─→ 课程/课次 ─→ 下载图片 ─→ 清洗(去重) ─→ 转 MD(OCR) ─→ 校订(纠错+公式)
-                                                              │
-                                      ┌───────────────────────┘
-                                      ▼
-                          生成深度笔记(note.md + note.pdf)
-                                      │
-                    ┌─────────────────┼──────────────────┐
-                    ▼                 ▼                  ▼
-                复习台(标记/卡片/AI)  审计(质量核对)   导出 zip(手机/Obsidian)
-```
-
-### 模块一览（server/）
-
-| 模块 | 职责 |
-| --- | --- |
-| `index.mjs` | Express 路由与静态服务（全部 API） |
-| `wqxt.mjs` / `browser.mjs` | 问渠学堂业务 / 真实浏览器会话 |
-| `downloader.mjs` | 图片下载任务（跳过已存在、组内并发） |
-| `mdconvert.mjs` | 转 MD 调度（Python 子进程、页级并行） |
-| `llm.mjs` | 全部 LLM 任务（笔记 / 审计 / 校订 / 知识链…） |
-| `chat.mjs` | 流式对话代理 |
-| `notepdf.mjs` | 笔记 PDF（无头 Edge 打印，mtime 缓存） |
-| `kb.mjs` / `cards.mjs` | BM25 知识库检索 / 复习卡（间隔重复） |
-| `config.mjs` / `paths.mjs` / `net.mjs` / `gpu.mjs` | 配置 / 目录 / 网络错误翻译 / 显存探测 |
-
-前端：下载器 `public/index.html + app.js`；复习台 `review.html + review.js`；打印页 `print.html`；桌面壳 `electron/main.cjs`。
-Python：`ppt2md.py`（Pix2Text 转换）、`dedup.py`（帧去重）、`tools/`（显卡检测、图标生成）。
-
-### 任务模型与省 token 设计
-
-- 三类任务统一走 SSE 推送：下载 / 转 MD / LLM；**同目标同操作幂等**（重复提交直接复用进行中的任务）。
-- 生成笔记三遍加工 + 整理稿缓存：原文没变重跑只花「成稿 + 必记」的钱。
-- DeepSeek 推理模型自动管理思考预算；批量环节（整理 / 必记 / 判定）关闭思考，实测 40 页课次输出 tokens 从 5 万降到 1.4 万、耗时 300s → 90s、页覆盖 15/40 → 40/40。
-
-## 已验证结果（节选）
-
-- **下载**：单课次 120 张图 / 整课 4 课次 197 张图，0 失败；图片 1280×720 JPEG。
-- **转 MD**：77 页课次全量转换 9.6 分钟（V100），48 块公式 + 53 行内公式，公式识别准确率高（正文零星 OCR 笔误，交给「校订」修）。
-- **清洗**：317 帧样本中连续冗余 24%；空白过渡帧与等待页二维码自动识别。
-- **深度笔记**（40 页测井课）：22 小节 + 22 条讲解 + 2 道习题折叠答案 + 112 个页码角标；**40/40 页全部被引用**；输出 ~1.6 万 tokens / 95 秒。
-- **审计**：61 个知识点提取，52 覆盖 / 8 不完整 / 1 缺失；忠实度 48 通过 / 3 部分（真实抓到过 OCR 传导错误，如 K₄ → K_d、R_xo/R_t → R_xo/R_m，已自动修正）。
-- **安卓端**：内容包（44 文件）导入 → 笔记 1.1 万字符 / 39 张课件图离线显示 / 对话与公式全渲染，零报错；平板模拟器（2880×1800）横竖屏实机验收；CI 自动构建 + 固定签名发布。
+- [技术笔记](docs/technical-notes.md) — API 一览、架构与原理、实测数据
+- [移动端规划与数据同步设计](docs/android-plan.md)
+- [护眼与阅读排版调研](docs/eye-care-survey.md)
+- [移动端骨架选型调研](docs/mobile-stack-survey.md)
+- [更新日志](CHANGELOG.md)
 
 ## 常见问题
 
