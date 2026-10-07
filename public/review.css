@@ -94,7 +94,7 @@ body {
   min-width: 0;
 }
 
-.splitter { background: transparent; position: relative; z-index: 3; }
+.splitter { background: transparent; position: relative; z-index: 3; touch-action: none; }
 .splitter.v { cursor: col-resize; }
 .splitter.h { cursor: row-resize; }
 .splitter::after {
@@ -108,6 +108,13 @@ body {
 .splitter.v::after { width: 2px; }
 .splitter.h::after { height: 2px; }
 .splitter:hover::after { background: var(--brand); }
+/* 触屏：伪元素把命中区加宽到 ~24px，提示线加粗，手指才好拖 */
+@media (pointer: coarse) {
+  .splitter.v::before { content: ''; position: absolute; top: 0; bottom: 0; left: -9px; right: -9px; }
+  .splitter.h::before { content: ''; position: absolute; left: 0; right: 0; top: -9px; bottom: -9px; }
+  .splitter.v::after { width: 4px; }
+  .splitter.h::after { height: 4px; }
+}
 body.dragging { user-select: none; cursor: col-resize; }
 
 .pane {
@@ -262,6 +269,9 @@ body.dragging { user-select: none; cursor: col-resize; }
   cursor: pointer;
 }
 .sel-menu button:hover { background: rgba(255,255,255,.16); }
+@media (pointer: coarse) {
+  .sel-menu button { padding: 9px 14px; font-size: 13.5px; }
+}
 
 /* ---------- 知识链抽屉 ---------- */
 .drawer {

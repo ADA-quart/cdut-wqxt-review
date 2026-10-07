@@ -2,7 +2,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [未发布]
+## [0.1.4] - 2026-10-08
 
 ### 新增
 
@@ -11,6 +11,10 @@
 
 ### 修复
 
+- 平板 / 触屏：复习页划词菜单（引用到提问 / 解释这段）此前只监听鼠标事件，长按选词不出现；
+  现在改为监听选区变化，触屏长按即可弹出（显示在选区下方，避开系统文字菜单）
+- 平板 / 触屏：笔记与课件、课件与对话之间的分隔条改用 Pointer Events，
+  手指可直接拖动调整各栏大小（命中区加宽到约 24px，分隔线加粗）
 - `setup-p2t.ps1` / `setup-p2t.sh`：CUDA 版 PyTorch 改用 `--default-index` 指定索引——
   uv 的 `--index-url` 只是追加索引、默认索引（PyPI）仍优先，会把 torch 装成 CPU 版，
   连带 ONNX Runtime 回落 CPU（[#1](https://github.com/ADA-quart/cdut-wqxt-review/issues/1)）；
@@ -68,6 +72,8 @@
   传到平板 / 手机 → App 内点「＋ 导入内容包」
 - 学习记录（进度、标记、对话）保存在本机
 
+[0.1.4]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.4
+[0.1.3]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.3
 [0.1.2]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.0

@@ -842,28 +842,53 @@ function quoteToInput(text) {
 function setupSelection() {
   const menu = $('selMenu');
   let lastText = '';
+  let selTimer = null;
+
+  const coarse = () => { try { return matchMedia('(pointer: coarse)').matches; } catch { return false; } };
 
   const inPane = (node) =>
     node && (($('mdPane').contains(node)) || ($('chatPane').contains(node)));
 
+  const showForSelection = (preferBelow) => {
+    const sel = window.getSelection();
+    const text = sel && !sel.isCollapsed ? String(sel).toString().trim() : '';
+    if (!text || !sel.rangeCount || !inPane(sel.anchorNode)) {
+      menu.hidden = true;
+      return;
+    }
+    lastText = text;
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    menu.hidden = false;
+    const mw = menu.offsetWidth || 210;
+    const mh = menu.offsetHeight || 44;
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, rect.left + rect.width / 2 - mw / 2)) + 'px';
+    const above = rect.top - mh - 8;
+    const below = rect.bottom + 8;
+    let top;
+    if (preferBelow && below + mh <= window.innerHeight - 8) top = below;   // 触屏：系统菜单在上方，放选区下方
+    else if (above >= 8) top = above;
+    else top = Math.min(below, Math.max(8, window.innerHeight - mh - 8));
+    menu.style.top = top + 'px';
+  };
+
+  // 桌面：鼠标松开即显示
   document.addEventListener('mouseup', (e) => {
     if (menu.contains(e.target)) return;
-    setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel && !sel.isCollapsed ? String(sel).toString().trim() : '';
-      if (!text || !sel.rangeCount || !inPane(sel.anchorNode)) {
-        menu.hidden = true;
-        return;
-      }
-      lastText = text;
-      const rect = sel.getRangeAt(0).getBoundingClientRect();
-      menu.hidden = false;
-      menu.style.left = Math.max(8, Math.min(window.innerWidth - 210, rect.left + rect.width / 2 - 90)) + 'px';
-      menu.style.top = Math.max(8, rect.top - 44) + 'px';
-    }, 0);
+    setTimeout(() => showForSelection(false), 0);
   });
 
+  // 触屏：长按选词 / 拖动手柄只触发 selectionchange（没有 mouseup）→ 防抖后显示
+  document.addEventListener('selectionchange', () => {
+    clearTimeout(selTimer);
+    selTimer = setTimeout(() => showForSelection(coarse()), 380);
+  });
+  // 点空白处收起（点菜单本身除外）
+  document.addEventListener('touchstart', (e) => {
+    if (!menu.contains(e.target)) menu.hidden = true;
+  }, { passive: true });
+
   menu.addEventListener('mousedown', (e) => e.preventDefault());
+  menu.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
   menu.querySelector('[data-act="quote"]').onclick = () => { quoteToInput(lastText); menu.hidden = true; };
   menu.querySelector('[data-act="explain"]').onclick = () => {
     menu.hidden = true;
@@ -1279,25 +1304,30 @@ function setupSplitters() {
   const drag = (handle, axis, apply) => {
     let last = 0;
     let active = false;
-    handle.addEventListener('mousedown', (e) => {
+    // Pointer Events：鼠标 / 触屏 / 触控笔通用（平板必须能用手指拖）
+    handle.addEventListener('pointerdown', (e) => {
       active = true;
       last = axis === 'x' ? e.clientX : e.clientY;
       document.body.classList.add('dragging');
+      try { handle.setPointerCapture(e.pointerId); } catch { /* 忽略 */ }
       e.preventDefault();
     });
-    window.addEventListener('mousemove', (e) => {
+    window.addEventListener('pointermove', (e) => {
       if (!active) return;
       const cur = axis === 'x' ? e.clientX : e.clientY;
       const delta = cur - last;
       last = cur;
       apply(delta);
-    });
-    window.addEventListener('mouseup', () => {
+      if (e.cancelable) e.preventDefault();
+    }, { passive: false });
+    const stop = () => {
       if (!active) return;
       active = false;
       document.body.classList.remove('dragging');
       saveLayout();
-    });
+    };
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
   };
 
   drag($('splitV'), 'x', (dx) => {
