@@ -211,6 +211,13 @@ body.dragging { user-select: none; cursor: col-resize; }
 .msg.assistant { align-self: flex-start; background: var(--code-bg); }
 .msg.assistant.error { background: var(--err-bg); color: var(--err); }
 .msg.assistant .katex { font-size: 1em; }
+
+/* KaTeX 内的中文字形（\text{中文}、\rm 中文 等）：KaTeX 官方 .cjk_fallback 钩子。
+   默认会落到 Times/serif 栈（Windows 上即宋体），与正文雅黑风格冲突；
+   这里指定与正文一致的无衬线中文字体栈。 */
+.katex .cjk_fallback {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "HarmonyOS Sans SC", "Noto Sans SC", sans-serif;
+}
 .msg .quote-block { border-left: 3px solid rgba(255,255,255,.5); padding-left: 8px; margin: 4px 0; opacity: .95; }
 .msg.assistant .quote-block { border-left-color: var(--brand); }
 
