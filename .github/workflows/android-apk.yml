@@ -83,6 +83,10 @@ jobs:
           echo "ANDROID_KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
           echo "已还原固定签名密钥"
 
+      # Windows 提交的仓库可能丢失 gradlew 的可执行位，这里兜底
+      - name: Ensure gradlew executable
+        run: chmod +x android/gradlew
+
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
