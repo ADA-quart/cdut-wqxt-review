@@ -297,10 +297,28 @@
 
       <section class="profile-section">
         <h4>③ 导出 / 导入</h4>
-        <p class="hint">导出一个 zip 包（笔记 + 复习卡 + 对话历史 + 清单），可以拷到别的电脑或手机 / 平板客户端使用；导入会把包里的内容合并进当前目录。</p>
-        <label class="chk"><input type="checkbox" id="expChats" checked> 导出时包含对话历史（默认包含）</label>
-        <label class="chk"><input type="checkbox" id="expNotesOnly"> 只导出笔记（含笔记 md/PDF、卡片、对话；跳过课件原文/PDF/素材，体积小）</label>
-        <label class="chk"><input type="checkbox" id="expImages"> 导出时包含 PPT 原始图片（体积大，手机端通常不需要）</label>
+        <p class="hint">导出给手机 / 备份：<b>内容包</b> = 笔记 + 课件图（给手机看）；<b>学习记录包</b> = 进度 + 标记 + 对话（体积小，可两端来回合并）；<b>全量备份</b> = 全部内容 + 记录。学习记录导入时永远按时间合并，不受下方「覆盖」开关影响。</p>
+        <div class="test-row">
+          <label class="field compact"><span>包类型</span>
+            <select id="expType">
+              <option value="content">内容包（给手机：笔记 + 课件图）</option>
+              <option value="state">学习记录包（进度 + 标记 + 对话）</option>
+              <option value="full">全量备份（全部内容）</option>
+            </select>
+          </label>
+          <label class="chk"><input type="checkbox" id="expImages" checked> 内容包含课件图片</label>
+        </div>
+        <div class="test-row">
+          <label class="field compact"><span>范围</span>
+            <select id="expScope">
+              <option value="all">全部课次</option>
+              <option value="course">指定课程</option>
+              <option value="lesson">指定单课</option>
+            </select>
+          </label>
+          <label class="field compact" id="expCourseWrap" hidden><span>课程</span><select id="expCourse"></select></label>
+          <label class="field compact" id="expLessonWrap" hidden><span>课次</span><select id="expLesson"></select></label>
+        </div>
         <div class="test-row">
           <button class="btn" id="btnExport">一键导出 zip</button>
           <span class="test-result" id="exportHint"></span>

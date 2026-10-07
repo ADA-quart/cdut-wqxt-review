@@ -97,3 +97,10 @@ notes/  images/  cards/  chats/  progress/
 - 手机不产生内容，只产生学习状态——回流包永远很小
 - 视频 / 录播不参与同步
 - 无服务器依赖：所有同步都是端到端（手动包或局域网）
+
+## 七、本机测试环境（已确认）
+
+- **模拟器 AVD：`itdc_k70u`**（Android 36 / google_apis x86_64 / 1220×2712 @440dpi / 4GB RAM，K70 Ultra 尺寸）
+- 启动：`C:\Android\Sdk\emulator\emulator.exe -avd itdc_k70u`
+- 安装 APK：`C:\Android\Sdk\platform-tools\adb.exe install <apk>`
+- P1 起直接在模拟器里验收

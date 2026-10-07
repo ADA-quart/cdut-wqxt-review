@@ -1528,17 +1528,84 @@ $('btnSavePaths').onclick = async () => {
   }
 };
 
+// ---------- 导出范围选择（全部 / 课程 / 单课） ----------
+
+let exportCoursesCache = null;
+
+async function fillExportCourses() {
+  const scope = $('expScope').value;
+  $('expCourseWrap').hidden = scope === 'all';
+  $('expLessonWrap').hidden = scope !== 'lesson';
+  if (scope === 'all') return;
+  try {
+    const { tree } = await api('/files');
+    exportCoursesCache = tree.filter((x) => x.type === 'dir');
+  } catch (e) {
+    $('exportHint').textContent = '拉取课程列表失败：' + e.message;
+    $('exportHint').className = 'test-result err';
+    return;
+  }
+  const sel = $('expCourse');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const c of exportCoursesCache) {
+    const opt = document.createElement('option');
+    opt.value = c.name;
+    opt.textContent = c.name;
+    sel.appendChild(opt);
+  }
+  if (prev && exportCoursesCache.some((c) => c.name === prev)) sel.value = prev;
+  fillExportLessons();
+}
+
+function fillExportLessons() {
+  const node = (exportCoursesCache || []).find((c) => c.name === $('expCourse').value);
+  const sel = $('expLesson');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const lessons = (node?.children || []).filter((x) => x.type === 'dir' && !x.name.startsWith('_'));
+  for (const l of lessons) {
+    const opt = document.createElement('option');
+    opt.value = l.name;
+    opt.textContent = l.name;
+    sel.appendChild(opt);
+  }
+  if (prev && lessons.some((l) => l.name === prev)) sel.value = prev;
+}
+
+$('expScope').onchange = fillExportCourses;
+$('expCourse').onchange = fillExportLessons;
+
 $('btnExport').onclick = () => {
-  const qp = new URLSearchParams();
-  if ($('expImages').checked) qp.set('images', '1');
-  if (!$('expChats').checked) qp.set('chats', '0');
-  if ($('expNotesOnly') && $('expNotesOnly').checked) qp.set('onlyNotes', '1');
-  const q = qp.toString() ? '?' + qp.toString() : '';
-  $('exportHint').textContent = $('expImages').checked ? '正在打包（含图片，可能较慢）…' : '正在打包…';
+  const type = $('expType').value;
+  const scope = $('expScope').value;
+  const qp = new URLSearchParams({ type });
+  if (type === 'content' && !$('expImages').checked) qp.set('images', '0');
+  if (type === 'full' && $('expImages').checked) qp.set('images', '1');
+  if (scope !== 'all') {
+    const course = $('expCourse').value;
+    if (!course) {
+      $('exportHint').textContent = '先选要导出的课程';
+      $('exportHint').className = 'test-result err';
+      return;
+    }
+    qp.set('course', course);
+    if (scope === 'lesson') {
+      const lesson = $('expLesson').value;
+      if (!lesson) {
+        $('exportHint').textContent = '先选要导出的课次';
+        $('exportHint').className = 'test-result err';
+        return;
+      }
+      qp.set('lesson', lesson);
+    }
+  }
+  const withImages = $('expImages').checked && (type === 'content' || type === 'full');
+  $('exportHint').textContent = withImages ? '正在打包（含图片，可能较慢）…' : '正在打包…';
   $('exportHint').className = 'test-result';
   // 用隐藏 iframe 触发下载，避免整页跳转
   const a = document.createElement('a');
-  a.href = '/api/export' + q;
+  a.href = '/api/export?' + qp.toString();
   a.download = '';
   document.body.appendChild(a);
   a.click();
@@ -1560,7 +1627,12 @@ $('btnImport').onclick = async () => {
     const r = await fetch('/api/import' + q, { method: 'POST', body: file });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    hint.textContent = `✓ 写入 ${data.written} 个文件，跳过 ${data.skipped} 个${data.errors?.length ? '，失败 ' + data.errors.length : ''}`;
+    const m = data.merged || {};
+    const bits = [];
+    if (m.progress) bits.push(`进度 ${m.progress} 节`);
+    if (m.cardsAdded || m.cardsUpdated) bits.push(`卡片 +${m.cardsAdded}/~${m.cardsUpdated}`);
+    if (m.chatsAdded) bits.push(`对话 +${m.chatsAdded} 条`);
+    hint.textContent = `✓ 写入 ${data.written} 个文件，跳过 ${data.skipped} 个${bits.length ? '；合并 ' + bits.join('、') : ''}${data.errors?.length ? '，失败 ' + data.errors.length : ''}`;
     hint.className = 'test-result ok';
     toast('导入完成，正在刷新…', 'ok');
     setTimeout(() => location.reload(), 1200);

@@ -91,6 +91,7 @@ export function addCard({ dir, page = null, kind = 'star', text = '', front = ''
     front: String(front || '').slice(0, 500),
     back: String(back || '').slice(0, 1200),
     created: now,
+    updated: now,
     due: now,
     interval: 0,
     ease: 2.5,
@@ -145,10 +146,39 @@ export function gradeCard(id, grade) {
     }
     card.reps = (card.reps || 0) + 1;
     card.lastGrade = grade;
+    card.updated = now;
     writeCards(dir, cards);
     return card;
   }
   return null;
+}
+
+/**
+ * 合并外部导入的卡片（同步用）：按 id 合并，updated 较新者胜。
+ * 老数据没有 updated 时用 created 兜底。返回 { added, updated, skipped }。
+ */
+export function mergeCards(dir, incoming) {
+  const rel = safeRel(dir);
+  const cards = readCards(rel);
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  const stamp = (c) => Number(c.updated || c.created || 0);
+  let added = 0, updated = 0, skipped = 0;
+  for (const inc of incoming || []) {
+    if (!inc || !inc.id) { skipped++; continue; }
+    const id = String(inc.id).slice(0, 64);
+    const cur = byId.get(id);
+    if (!cur) {
+      byId.set(id, { ...inc, id, dir: rel });
+      added++;
+    } else if (stamp(inc) > stamp(cur)) {
+      byId.set(id, { ...inc, id, dir: rel });
+      updated++;
+    } else {
+      skipped++;
+    }
+  }
+  if (added || updated) writeCards(rel, [...byId.values()]);
+  return { added, updated, skipped };
 }
 
 export function deleteCard(id) {

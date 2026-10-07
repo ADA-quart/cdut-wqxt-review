@@ -23,8 +23,49 @@ const state = {
 };
 
 const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
-// 阅读进度按课次保存在浏览器本地（对话历史走服务端 <课次>.chat.json）
+// 阅读进度：以服务端 <课次>.progress.json 为准（跨设备同步用），
+// localStorage 作为本机缓存与旧数据的一次性迁移来源。
 const pageStoreKey = () => 'wqppt_page:' + dir;
+const progSync = { timer: null };
+
+/** 读取进度：服务端优先；服务端为空且本地有旧值 → 上报迁移。 */
+async function loadProgressPage() {
+  let srvPage = 0;
+  try {
+    const r = await fetch('/api/progress?dir=' + encodeURIComponent(dir));
+    if (r.ok) {
+      const d = await r.json();
+      srvPage = Number(d.page) || 0;
+    }
+  } catch { /* 服务不可用：退回本地 */ }
+  let localPage = 0;
+  try { localPage = Number(localStorage.getItem(pageStoreKey())) || 0; } catch { /* 忽略 */ }
+  if (srvPage > 0) {
+    try { localStorage.setItem(pageStoreKey(), String(srvPage)); } catch { /* 忽略 */ }
+    return srvPage;
+  }
+  if (localPage > 0) {
+    saveProgress(localPage, true);
+    return localPage;
+  }
+  return 0;
+}
+
+/** 保存进度：本地缓存立即写 + 服务端节流上报（翻页频繁时合并请求）。 */
+function saveProgress(page, immediate = false) {
+  try { localStorage.setItem(pageStoreKey(), String(page)); } catch { /* 忽略 */ }
+  if (!page) return;
+  const send = () => {
+    fetch('/api/progress', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir, page }),
+    }).catch(() => { /* 忽略：本地已缓存 */ });
+  };
+  clearTimeout(progSync.timer);
+  if (immediate) send();
+  else progSync.timer = setTimeout(send, 900);
+}
 const fileUrl = (p) => '/files/' + enc(p);
 const noteUrl = (p) => '/notes/' + enc(p);
 const imgUrl = (name) => fileUrl(`${dir}/${name}`);
@@ -394,7 +435,7 @@ function showPage(i) {
   const idx = Math.max(0, Math.min(i, state.pages.length - 1));
   state.pageIndex = idx;
   const p = state.pages[idx];
-  try { localStorage.setItem(pageStoreKey(), String(p.n)); } catch { /* 忽略 */ }
+  saveProgress(p.n);
 
   const stage = $('imgStage');
   stage.innerHTML = '';
@@ -2031,7 +2072,7 @@ $('mdContent').innerHTML = `<p class="empty">读取 Markdown 失败（${e.messag
   const pageParam = Number(params.get('page')) || 0;
   let savedPage = 0;
   if (!pageParam) {
-    try { savedPage = Number(localStorage.getItem(pageStoreKey())) || 0; } catch { /* 忽略 */ }
+    savedPage = await loadProgressPage();
   }
   const initialPage = pageParam > 0 ? pageParam : savedPage;
   if (state.pages.length) {

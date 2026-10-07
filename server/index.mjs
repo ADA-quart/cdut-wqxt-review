@@ -25,7 +25,7 @@ import { streamChat } from './chat.mjs';
 import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
 import { autoParallel } from './gpu.mjs';
 import { renderNotePdf } from './notepdf.mjs';
-import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards } from './cards.mjs';
+import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards, mergeCards } from './cards.mjs';
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
   testProfile, expandQuery, generateQaCards, feynmanReview, listModels, getCaps,
@@ -448,7 +448,7 @@ function readTree(dir, depth) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
-  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|note\.work\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json)$/i;
+  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|note\.work\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json|progress\.json)$/i;
   return entries
     .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_') && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
@@ -574,6 +574,46 @@ app.delete('/api/chat-history', asyncRoute(async (req, res) => {
   const file = chatHistoryFile(rel);
   try { fs.unlinkSync(file); } catch { /* 没有就算了 */ }
   res.json({ ok: true });
+}));
+
+// ---------- 阅读进度（跨设备同步：<课次>.progress.json） ----------
+
+function progressFileOf(rel) {
+  const clean = String(rel || '').replace(/^[/\\]+|[/\\]+$/g, '');
+  if (!clean) throw new Error('缺少 dir');
+  return ensureInside(NOTES_DIR, path.join(NOTES_DIR, `${clean}.progress.json`));
+}
+
+function readProgress(rel) {
+  try {
+    const d = JSON.parse(fs.readFileSync(progressFileOf(rel), 'utf8'));
+    return { page: Number(d.page) || 0, updatedAt: Number(d.updatedAt) || 0 };
+  } catch {
+    return { page: 0, updatedAt: 0 };
+  }
+}
+
+function writeProgress(rel, page, updatedAt) {
+  const file = progressFileOf(rel);
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, JSON.stringify({
+    v: 1, page: Number(page) || 0, updatedAt: Number(updatedAt) || Date.now(),
+  }, null, 2), 'utf8');
+}
+
+app.get('/api/progress', asyncRoute(async (req, res) => {
+  const rel = String(req.query.dir || '');
+  if (!rel) return res.status(400).json({ error: '缺少 dir' });
+  res.json(readProgress(rel));
+}));
+
+app.put('/api/progress', asyncRoute(async (req, res) => {
+  const rel = String(req.body?.dir || '');
+  const page = Number(req.body?.page) || 0;
+  if (!rel) return res.status(400).json({ error: '缺少 dir' });
+  const now = Date.now();
+  writeProgress(rel, page, now);
+  res.json({ ok: true, page, updatedAt: now });
 }));
 
 app.post('/api/chat', asyncRoute(async (req, res) => {
@@ -955,52 +995,110 @@ function addDirToZip(zip, absDir, zipPrefix) {
   return n;
 }
 
+// 课次内容指纹（增量同步用）：笔记 mtime + 字符数 + 图片张数
+function lessonContentVersion(course, lesson) {
+  const rel = `${course}/${lesson}`;
+  let t = 0, size = 0;
+  for (const f of [`${rel}.note.md`, `${rel}.md`]) {
+    try {
+      const st = fs.statSync(path.join(NOTES_DIR, f));
+      if (st.mtimeMs > t) t = st.mtimeMs;
+      size += st.size;
+    } catch { /* 忽略 */ }
+  }
+  return `${Math.floor(t)}-${size}-${countLessonImages(path.join(DATA_DIR, course, lesson))}`;
+}
+
 app.get('/api/export', asyncRoute(async (req, res) => {
-  const includeImages = req.query.images === '1';
-  const includePdf = req.query.pdf !== '0';
-  const includeAssets = req.query.assets !== '0';
-  const includeCards = req.query.cards !== '0';
-  const includeChats = req.query.chats !== '0';
-  const includeNotePdf = req.query.notePdf !== '0';
-  const onlyNotes = req.query.onlyNotes === '1';
+  const type = ['content', 'state', 'full'].includes(String(req.query.type))
+    ? String(req.query.type)
+    : (req.query.onlyNotes === '1' ? 'content' : 'full');
+  const contentMode = type === 'content';
+  const stateMode = type === 'state';
+  const courseFilter = String(req.query.course || '').trim();
+  const lessonFilter = String(req.query.lesson || '').trim();
+  const includeImages = contentMode ? req.query.images !== '0' : (!stateMode && req.query.images === '1');
+  const includePdf = !contentMode && !stateMode && req.query.pdf !== '0';
+  const includeAssets = !contentMode && !stateMode && req.query.assets !== '0';
+  const includeCards = !contentMode && req.query.cards !== '0';
+  const includeChats = !contentMode && req.query.chats !== '0';
+  const includeProgress = !contentMode;
+  const includeNotePdf = !contentMode && !stateMode && req.query.notePdf !== '0';
 
   const zip = new AdmZip();
   const courses = [];
-  const counts = { courses: 0, lessons: 0, notes: 0, pdfs: 0, assets: 0, cards: 0, chats: 0, notePdfs: 0, images: 0 };
+  const counts = { courses: 0, lessons: 0, notes: 0, pdfs: 0, assets: 0, cards: 0, chats: 0, notePdfs: 0, images: 0, progress: 0 };
 
   for (const course of listCourses()) {
+    if (courseFilter && course !== courseFilter) continue;
     const lessons = listLessons(course);
     const courseInfo = { name: course, lessons: [] };
     let any = false;
 
-    // 课程索引
-    if (addFileToZip(zip, path.join(NOTES_DIR, course, `${course}.md`), `notes/${course}/${course}.md`)) any = true;
-    if (addFileToZip(zip, path.join(NOTES_DIR, '知识链.md'), 'notes/知识链.md')) any = true;
+    // 课程索引 / 知识链（仅内容与全量包）
+    if (!stateMode && addFileToZip(zip, path.join(NOTES_DIR, course, `${course}.md`), `notes/${course}/${course}.md`)) any = true;
+    if (!stateMode && addFileToZip(zip, path.join(NOTES_DIR, '知识链.md'), 'notes/知识链.md')) any = true;
 
     for (const lesson of lessons) {
+      if (lessonFilter && lesson !== lessonFilter) continue;
       const rel = `${course}/${lesson}`;
       const mdAbs = mdPathOf(course, lesson);
-      if (onlyNotes) {
-        // 只导出笔记：课件原文不打包，但要求该课次确实有笔记
-        if (!fs.existsSync(path.join(NOTES_DIR, `${rel}.note.md`))) continue;
-      } else if (!addFileToZip(zip, mdAbs, `notes/${rel}.md`)) {
+      const noteAbs = path.join(NOTES_DIR, `${rel}.note.md`);
+      const hasMd = fs.existsSync(mdAbs);
+      const hasNote = fs.existsSync(noteAbs);
+
+      if (stateMode) {
+        // 学习记录包：只收进度 / 复习卡 / 对话
+        const info = { name: lesson, pages: 0, chars: 0, pdf: false, cards: 0, chats: 0, note: hasNote };
+        let anyState = false;
+        if (includeProgress) {
+          const p = readProgress(rel);
+          if (p.page > 0 && addFileToZip(zip, progressFileOf(rel), `progress/${rel}.json`)) {
+            info.progress = p.page;
+            info.stateUpdatedAt = p.updatedAt;
+            counts.progress++;
+            anyState = true;
+          }
+        }
+        if (includeCards) {
+          const cardsAbs = path.join(DATA_DIR, '.review', `${rel}.json`);
+          if (addFileToZip(zip, cardsAbs, `cards/${rel}.json`)) {
+            try { info.cards = (JSON.parse(fs.readFileSync(cardsAbs, 'utf8')) || []).length; } catch { /* 忽略 */ }
+            counts.cards += info.cards;
+            anyState = true;
+          }
+        }
+        if (includeChats) {
+          const chatAbs = path.join(NOTES_DIR, `${rel}.chat.json`);
+          if (addFileToZip(zip, chatAbs, `chats/${rel}.json`)) {
+            try { info.chats = (JSON.parse(fs.readFileSync(chatAbs, 'utf8')).messages || []).length; } catch { /* 忽略 */ }
+            counts.chats += info.chats;
+            anyState = true;
+          }
+        }
+        if (anyState) { courseInfo.lessons.push(info); counts.lessons++; any = true; }
         continue;
       }
-      counts.notes++;
-      const md = fs.readFileSync(mdAbs, 'utf8');
+
+      // 内容 / 全量包：原文与笔记至少有一个才收
+      if (!hasMd && !hasNote) continue;
+      if (hasMd && addFileToZip(zip, mdAbs, `notes/${rel}.md`)) counts.notes++;
+      let mdText = '';
+      try { mdText = hasMd ? fs.readFileSync(mdAbs, 'utf8') : ''; } catch { /* 忽略 */ }
       const info = {
         name: lesson,
-        pages: (md.match(/<!-- page \d+:/g) || []).length,
-        chars: md.length,
+        pages: (mdText.match(/<!-- page \d+:/g) || []).length,
+        chars: mdText.length,
         pdf: false,
         cards: 0,
         chats: 0,
+        contentVersion: lessonContentVersion(course, lesson),
       };
-      if (!onlyNotes && includePdf && addFileToZip(zip, path.join(NOTES_DIR, `${rel}.pdf`), `notes/${rel}.pdf`)) {
+      if (includePdf && addFileToZip(zip, path.join(NOTES_DIR, `${rel}.pdf`), `notes/${rel}.pdf`)) {
         info.pdf = true;
         counts.pdfs++;
       }
-      if (!onlyNotes && includeAssets) counts.assets += addDirToZip(zip, path.join(NOTES_DIR, `${rel}_assets`), `notes/${rel}_assets/`);
+      if (includeAssets) counts.assets += addDirToZip(zip, path.join(NOTES_DIR, `${rel}_assets`), `notes/${rel}_assets/`);
       if (includeCards) {
         const cardsAbs = path.join(DATA_DIR, '.review', `${rel}.json`);
         if (addFileToZip(zip, cardsAbs, `cards/${rel}.json`)) {
@@ -1013,6 +1111,14 @@ app.get('/api/export', asyncRoute(async (req, res) => {
         if (addFileToZip(zip, chatAbs, `chats/${rel}.json`)) {
           try { info.chats = (JSON.parse(fs.readFileSync(chatAbs, 'utf8')).messages || []).length; } catch { /* 忽略 */ }
           counts.chats += info.chats;
+        }
+      }
+      if (includeProgress) {
+        const p = readProgress(rel);
+        if (p.page > 0 && addFileToZip(zip, progressFileOf(rel), `progress/${rel}.json`)) {
+          info.progress = p.page;
+          info.stateUpdatedAt = p.updatedAt;
+          counts.progress++;
         }
       }
       // 生成笔记：md 直接打包；PDF 现场懒生成（之后按 mtime 缓存复用）
@@ -1028,7 +1134,7 @@ app.get('/api/export', asyncRoute(async (req, res) => {
           }
         } catch { /* PDF 生成失败：跳过，不阻塞导出 */ }
       }
-      if (!onlyNotes && includeImages) {
+      if (includeImages) {
         const imgDir = path.join(DATA_DIR, course, lesson);
         let imgs = [];
         try {
@@ -1048,10 +1154,13 @@ app.get('/api/export', asyncRoute(async (req, res) => {
 
   const manifest = {
     app: 'wqppt',
-    format: 1,
+    format: 2,
+    type,
     version: PKG.version || '0.0.0',
     exportedAt: new Date().toISOString(),
-    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards, chats: includeChats, notePdf: includeNotePdf, onlyNotes },
+    device: 'desktop',
+    scope: { course: courseFilter || null, lesson: lessonFilter || null },
+    includes: { images: includeImages, pdf: includePdf, assets: includeAssets, cards: includeCards, chats: includeChats, progress: includeProgress, notePdf: includeNotePdf },
     paths: getPaths(),
     counts,
     courses,
@@ -1061,16 +1170,18 @@ app.get('/api/export', asyncRoute(async (req, res) => {
       course: c.name,
       lesson: l.name,
       pages: l.pages,
-      pdf: !onlyNotes && l.pdf ? `notes/${c.name}/${l.name}.pdf` : null,
-      md: onlyNotes ? null : `notes/${c.name}/${l.name}.md`,
+      pdf: l.pdf ? `notes/${c.name}/${l.name}.pdf` : null,
+      md: `notes/${c.name}/${l.name}.md`,
+      contentVersion: l.contentVersion || null,
     }))),
   };
   zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
 
   const buf = zip.toBuffer();
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const scopeTag = lessonFilter ? 'lesson' : (courseFilter ? 'course' : 'all');
   res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="wqppt-export-${stamp}.zip"`);
+  res.setHeader('Content-Disposition', `attachment; filename="wqppt-${type}-${scopeTag}-${stamp}.zip"`);
   res.setHeader('X-Export-Summary', encodeURIComponent(JSON.stringify(counts)));
   res.send(buf);
 }));
@@ -1095,23 +1206,87 @@ app.post('/api/import', express.raw({ type: () => true, limit: '2048mb' }), asyn
   let written = 0;
   let skipped = 0;
   const errors = [];
+  const merged = { progress: 0, cardsAdded: 0, cardsUpdated: 0, chatsAdded: 0 };
   for (const e of entries) {
     if (e.isDirectory) continue;
     const name = e.entryName.replace(/\\/g, '/');
-    let target = null;
-    if (name.startsWith('notes/')) {
-      target = ensureInside(NOTES_DIR, path.join(NOTES_DIR, name.slice(6)));
-    } else if (name.startsWith('images/')) {
-      target = ensureInside(DATA_DIR, path.join(DATA_DIR, name.slice(7)));
-    } else if (name.startsWith('cards/')) {
-      target = ensureInside(DATA_DIR, path.join(DATA_DIR, '.review', name.slice(6)));
-    } else if (name.startsWith('chats/')) {
-      const rel = name.slice(6).replace(/\.json$/i, '');
-      target = ensureInside(NOTES_DIR, path.join(NOTES_DIR, `${rel}.chat.json`));
-    } else {
-      continue; // manifest.json 等元数据不入库
-    }
     try {
+      // ---- 学习状态：永远合并（不受「跳过 / 覆盖」开关影响）----
+      if (name.startsWith('progress/')) {
+        const rel = name.slice(9).replace(/\.json$/i, '');
+        if (!rel) continue;
+        const inc = JSON.parse(e.getData().toString('utf8'));
+        const incPage = Number(inc.page) || 0;
+        if (incPage <= 0) continue;
+        const cur = readProgress(rel);
+        const incAt = Number(inc.updatedAt) || 0;
+        if (incAt > cur.updatedAt || (cur.page === 0 && incPage > 0)) {
+          writeProgress(rel, incPage, incAt || Date.now());
+          merged.progress++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+      if (name.startsWith('cards/')) {
+        const rel = name.slice(6).replace(/\.json$/i, '');
+        const inc = JSON.parse(e.getData().toString('utf8'));
+        if (!rel || !Array.isArray(inc)) continue;
+        const r = mergeCards(rel, inc);
+        merged.cardsAdded += r.added;
+        merged.cardsUpdated += r.updated;
+        continue;
+      }
+      if (name.startsWith('chats/')) {
+        const rel = name.slice(6).replace(/\.json$/i, '');
+        const inc = JSON.parse(e.getData().toString('utf8'));
+        const incMsgs = Array.isArray(inc?.messages) ? inc.messages : [];
+        if (!rel || !incMsgs.length) continue;
+        const file = chatHistoryFile(rel);
+        let stored = [];
+        try {
+          const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (Array.isArray(d.messages)) stored = d.messages;
+        } catch { /* 忽略 */ }
+        const seen = new Set(stored.map((m) => m && m.id).filter(Boolean));
+        const add = [];
+        for (const m of incMsgs) {
+          if (!m || !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string') continue;
+          const id = m.id ? String(m.id).slice(0, 64) : '';
+          if (id && seen.has(id)) continue;
+          if (id) seen.add(id);
+          add.push({
+            ...(id ? { id } : {}),
+            role: m.role,
+            content: m.content.slice(0, 20000),
+            ...(typeof m.display === 'string' ? { display: m.display.slice(0, 20000) } : {}),
+            ...(Array.isArray(m.sources) ? {
+              sources: m.sources.slice(0, 8).map((s) => ({
+                course: String(s?.course || ''), lesson: String(s?.lesson || ''),
+                page: Number(s?.page) || null, rel: String(s?.rel || ''),
+                snippet: String(s?.snippet || '').slice(0, 200),
+              })),
+            } : {}),
+            at: Number(m.at) || Date.now(),
+          });
+        }
+        if (add.length) {
+          const next = [...stored, ...add].slice(-2000);
+          ensureDir(path.dirname(file));
+          fs.writeFileSync(file, JSON.stringify({ v: 1, updatedAt: Date.now(), messages: next }, null, 2), 'utf8');
+          merged.chatsAdded += add.length;
+        }
+        continue;
+      }
+      // ---- 内容文件：沿用「跳过 / 覆盖」 ----
+      let target = null;
+      if (name.startsWith('notes/')) {
+        target = ensureInside(NOTES_DIR, path.join(NOTES_DIR, name.slice(6)));
+      } else if (name.startsWith('images/')) {
+        target = ensureInside(DATA_DIR, path.join(DATA_DIR, name.slice(7)));
+      } else {
+        continue; // manifest.json 等元数据不入库
+      }
       if (fs.existsSync(target) && !overwrite) { skipped++; continue; }
       ensureDir(path.dirname(target));
       fs.writeFileSync(target, e.getData());
@@ -1120,7 +1295,7 @@ app.post('/api/import', express.raw({ type: () => true, limit: '2048mb' }), asyn
       if (errors.length < 5) errors.push(`${name}: ${err.message}`);
     }
   }
-  res.json({ ok: true, written, skipped, errors, paths: getPaths() });
+  res.json({ ok: true, written, skipped, errors, merged, paths: getPaths() });
 }));
 
 // ---------- 删除已下载（移入回收站，可恢复） ----------
