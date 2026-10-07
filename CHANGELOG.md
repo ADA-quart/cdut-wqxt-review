@@ -11,6 +11,13 @@
   连带 ONNX Runtime 回落 CPU（[#1](https://github.com/ADA-quart/cdut-wqxt-review/issues/1)）；
   新增 `PYTORCH_INDEX` 环境变量，可切换南京大学 / 上海交大镜像
 
+## [0.1.3] - 2026-10-07
+
+### 修复
+
+- 返回手势 / 返回键失灵：`@capacitor/app` 的返回回调在无历史可退时吞掉返回事件，
+  根页面退不回桌面——现在能退历史就退（复习页回图书馆），退不了就退出 App
+
 ## [0.1.2] - 2026-10-07
 
 ### 修复

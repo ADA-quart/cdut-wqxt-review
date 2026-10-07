@@ -17,6 +17,39 @@
 
   document.documentElement.classList.add('local-app');
 
+  // ---------- 安卓返回手势 / 返回键 ----------
+  // @capacitor/app 注册的返回回调在「无 JS 监听者且 WebView 无历史可退」时什么都不做，
+  // 会把返回事件吞掉（根页面返回手势退不回桌面，v0.1.1 起引入）。
+  // 这里接管：能退历史就退，退不了就退出 App（回到桌面）。
+  if (NATIVE) {
+    var backTries = 0;
+    (function hookBackButton() {
+      var AppPlugin = null;
+      try { AppPlugin = window.Capacitor.Plugins.App; } catch (e) { /* 忽略 */ }
+      if (AppPlugin && AppPlugin.addListener) {
+        try {
+          var p = AppPlugin.addListener('backButton', function (ev) {
+            // 快速路径：事件的 canGoBack 可用时直接后退。
+            if (ev && ev.canGoBack) { history.back(); return; }
+            // 兜底：部分 WebView 在本 App 的本地服务器场景下 canGoBack 恒为 false（实测 133），
+            // 改为「尝试后退 + pagehide 检测」——页面没有开始离开说明已在根页面，则退出到桌面。
+            var leaving = false;
+            var onHide = function () { leaving = true; };
+            window.addEventListener('pagehide', onHide, { once: true });
+            try { history.back(); } catch (e) { /* 忽略 */ }
+            setTimeout(function () {
+              window.removeEventListener('pagehide', onHide);
+              if (!leaving && AppPlugin.exitApp) AppPlugin.exitApp();
+            }, 350);
+          });
+          if (p && p.catch) p.catch(function () { /* 忽略 */ });
+        } catch (e) { /* 忽略 */ }
+        return;
+      }
+      if (++backTries < 25) setTimeout(hookBackButton, 120);
+    })();
+  }
+
   // ---------- IndexedDB ----------
   var DB_NAME = 'qingqu-library';
   var dbPromise = null;
