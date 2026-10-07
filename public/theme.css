@@ -2,6 +2,12 @@
    在 style.css / review.css 之后加载，用 CSS 变量统一覆盖。
    深浅色遵循"避开纯黑纯白"原则（降低极端对比），护眼为暖纸色。 */
 
+/* ---------- 正文字号档位（作用于笔记与对话正文） ---------- */
+:root { --reading-font: 14.5px; }
+:root[data-fontsize="s"] { --reading-font: 13px; }
+:root[data-fontsize="l"] { --reading-font: 16.5px; }
+:root[data-fontsize="xl"] { --reading-font: 18.5px; }
+
 :root,
 :root[data-theme="light"] {
   --bg: #f5f6f8;

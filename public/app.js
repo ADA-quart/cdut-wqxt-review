@@ -1180,6 +1180,7 @@ function syncComfortSettings() {
   document.querySelectorAll('input[name="themePick"]').forEach((r) => {
     r.checked = r.value === Comfort.theme();
   });
+  $('fontSizeSel').value = Comfort.fontSize();
   $('eyeRemindChk').checked = Comfort.reminderOn();
 }
 
@@ -1187,12 +1188,15 @@ document.querySelectorAll('input[name="themePick"]').forEach((r) => {
   r.onchange = () => { if (r.checked) Comfort.setTheme(r.value); };
 });
 
+$('fontSizeSel').onchange = () => { Comfort.setFontSize($('fontSizeSel').value); };
+
 $('eyeRemindChk').onchange = () => {
   Comfort.setReminder($('eyeRemindChk').checked);
   toast($('eyeRemindChk').checked ? '护眼提醒已开启（每 20 分钟一次）' : '护眼提醒已关闭', 'ok');
 };
 
 window.addEventListener('wqppt-theme', () => { syncComfortSettings(); });
+window.addEventListener('wqppt-fontsize', () => { $('fontSizeSel').value = Comfort.fontSize(); });
 window.addEventListener('wqppt-reminder', () => { $('eyeRemindChk').checked = Comfort.reminderOn(); });
 
 // ---------- 删除已下载（回收站） ----------

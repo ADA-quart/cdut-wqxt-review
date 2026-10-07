@@ -54,6 +54,32 @@
   document.documentElement.setAttribute('data-theme', resolveMode(storedMode()));
   document.documentElement.setAttribute('data-theme-mode', storedMode());
 
+  // ---------- 正文字号（作用于笔记与对话正文） ----------
+  var FONT_KEY = 'wqppt_fontsize';
+  var FONT_SIZES = ['s', 'm', 'l', 'xl'];
+
+  function storedFont() {
+    try {
+      var v = localStorage.getItem(FONT_KEY);
+      return FONT_SIZES.indexOf(v) >= 0 ? v : 'm';
+    } catch (e) { return 'm'; }
+  }
+
+  function applyFont() {
+    document.documentElement.setAttribute('data-fontsize', storedFont());
+    try {
+      window.dispatchEvent(new CustomEvent('wqppt-fontsize', { detail: { size: storedFont() } }));
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function setFontSize(size) {
+    if (FONT_SIZES.indexOf(size) < 0) size = 'm';
+    try { localStorage.setItem(FONT_KEY, size); } catch (e) { /* 忽略 */ }
+    applyFont();
+  }
+
+  document.documentElement.setAttribute('data-fontsize', storedFont());
+
   try {
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
       if (storedMode() === 'auto') applyTheme();
@@ -137,6 +163,7 @@
 
   ready(function () {
     applyTheme();
+    applyFont();
     var btn = document.getElementById('btnTheme');
     if (btn) btn.addEventListener('click', cycleTheme);
     if (reminderOn()) scheduleReminder();
@@ -147,6 +174,8 @@
     theme: storedMode,
     setTheme: setTheme,
     cycleTheme: cycleTheme,
+    fontSize: storedFont,
+    setFontSize: setFontSize,
     reminderOn: reminderOn,
     setReminder: setReminder,
     fireNow: fireReminder,     // 调试/测试：立即弹一次提醒
