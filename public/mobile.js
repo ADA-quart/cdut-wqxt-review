@@ -166,12 +166,31 @@
     window.open(url, '_blank');
   }
 
+  // App 内更新：优先走原生 DownloadManager（下载完自动弹安装器，不切到浏览器）；
+  // 原生插件不可用（如网页预览）时才回退到系统浏览器
+  async function startUpdate(url) {
+    var name = 'qingqu-update.apk';
+    try {
+      var base = decodeURIComponent(String(url).split('?')[0].split('/').pop() || '');
+      if (/\.apk$/i.test(base)) name = base;
+    } catch (e) { /* 用默认名 */ }
+    var Native = capPlugin('UpdateInstaller');
+    if (Native && Native.download) {
+      try {
+        await Native.download({ url: url, fileName: name });
+        toast('已开始下载更新，完成后会自动弹出安装', 4000);
+        return;
+      } catch (e) { /* 原生失败 → 回退浏览器 */ }
+    }
+    openExternal(url);
+  }
+
   function showBanner(info) {
     if (!appInfo) return;
     $('updateBannerText').innerHTML = '发现新版本 <b>v' + esc(info.version) + '</b>（当前 v' + esc(appInfo.version) + '）';
     var banner = $('updateBanner');
     banner.hidden = false;
-    $('btnUpdateDownload').onclick = function () { openExternal(info.url); };
+    $('btnUpdateDownload').onclick = function () { startUpdate(info.url); };
     $('btnUpdateSkip').onclick = function () {
       try { localStorage.setItem(SKIP_KEY, info.version); } catch (e) { /* 忽略 */ }
       banner.hidden = true;

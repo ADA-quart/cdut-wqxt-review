@@ -2,6 +2,13 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.5] - 2026-10-08
+
+### 修复
+
+- App 内更新不再跳浏览器：改用系统 DownloadManager 在 App 内下载 APK，完成后自动弹出系统安装器——
+  此前用 Chrome Custom Tab 会把最近任务切成「浏览器」，退出更新后也停在浏览器界面
+
 ## [0.1.4] - 2026-10-08
 
 ### 新增
@@ -72,6 +79,7 @@
   传到平板 / 手机 → App 内点「＋ 导入内容包」
 - 学习记录（进度、标记、对话）保存在本机
 
+[0.1.5]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.5
 [0.1.4]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.4
 [0.1.3]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.3
 [0.1.2]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.2
