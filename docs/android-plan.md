@@ -95,6 +95,7 @@ notes/  images/  cards/  chats/  progress/
 
 ## 五、技术选型
 
+- 骨架调研（2026-10）：**结论 Capacitor 8**，对比与理由详见 [mobile-stack-survey.md](mobile-stack-survey.md)
 - **Capacitor 套壳**（与 ITDC 同一打法），CI 自动出 APK
 - 复用现有零依赖前端（`public/`），加响应式断点与手机 Tab 布局
 - 数据层适配器：桌面走 `/api`（Node 服务），手机走本地包（Capacitor Filesystem 解压到私有目录）
