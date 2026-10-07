@@ -2,6 +2,15 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.2] - 2026-10-07
+
+### 修复
+
+- 状态栏遮挡内容：适配 Android 15+ 沉浸式布局（安全区 insets），首页与复习页顶栏不再顶进状态栏；
+  状态栏 / 手势条图标颜色跟随应用主题
+- 「检查更新」结果改为底部浮层提示，不再在页面顶部显示裸行文本；
+  首页页脚改为「版本号 + 检查更新按钮」底栏，内容不足时贴底显示
+
 ## [0.1.1] - 2026-10-07
 
 ### 新增
@@ -32,5 +41,6 @@
   传到平板 / 手机 → App 内点「＋ 导入内容包」
 - 学习记录（进度、标记、对话）保存在本机
 
+[0.1.2]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.0

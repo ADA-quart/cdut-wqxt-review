@@ -1,6 +1,6 @@
 {
   "name": "wqppt",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "成都理工大学问渠学堂 PPT 整理复习系统：课件下载 → Markdown/LaTeX → 去重清洗 → AI 纠错/重点/知识链 → 复习工作台",
   "main": "electron/main.cjs",
   "scripts": {

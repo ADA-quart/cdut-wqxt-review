@@ -3,6 +3,15 @@
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
   var hint = $('importHint');
+  var toastTimer = null;
+
+  function toast(msg, ms) {
+    var el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove('show'); }, ms || 2800);
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) {
@@ -107,26 +116,45 @@
     return null;
   }
 
-  async function fetchLatest() {
+  function fetchWithTimeout(url) {
     var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) { /* 忽略 */ } }, 12000) : null;
+    return fetch(url, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: ctrl ? ctrl.signal : undefined,
+    }).finally(function () { if (timer) clearTimeout(timer); });
+  }
+
+  async function fetchLatestFromApi() {
+    var res = await fetchWithTimeout('https://api.github.com/repos/' + REPO + '/releases/latest');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    var j = await res.json();
+    var version = String(j.tag_name || '').replace(/^v/i, '');
+    if (!parseVersion(version)) throw new Error('无法解析版本号');
+    var asset = null;
+    (j.assets || []).forEach(function (a) {
+      if (!asset && /\.apk$/i.test(a.name || '')) asset = a;
+    });
+    return { version: version, url: asset ? asset.browser_download_url : j.html_url };
+  }
+
+  // 兜底：GitHub API 未认证限流（60 次/时/IP）或不可用时，读 main 分支 package.json 的版本号
+  async function fetchLatestFromRaw() {
+    var res = await fetchWithTimeout('https://raw.githubusercontent.com/' + REPO + '/main/package.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    var j = await res.json();
+    var version = String(j.version || '').trim();
+    if (!parseVersion(version)) throw new Error('无法解析版本号');
+    var tag = 'v' + version;
+    return { version: version, url: 'https://github.com/' + REPO + '/releases/download/' + tag + '/qingqu-' + tag + '.apk' };
+  }
+
+  async function fetchLatest() {
     try {
-      var res = await fetch('https://api.github.com/repos/' + REPO + '/releases/latest', {
-        headers: { Accept: 'application/vnd.github+json' },
-        cache: 'no-store',
-        signal: ctrl ? ctrl.signal : undefined,
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      var j = await res.json();
-      var version = String(j.tag_name || '').replace(/^v/i, '');
-      if (!parseVersion(version)) throw new Error('无法解析版本号');
-      var asset = null;
-      (j.assets || []).forEach(function (a) {
-        if (!asset && /\.apk$/i.test(a.name || '')) asset = a;
-      });
-      return { version: version, url: asset ? asset.browser_download_url : j.html_url };
-    } finally {
-      if (timer) clearTimeout(timer);
+      return await fetchLatestFromApi();
+    } catch (e) {
+      return await fetchLatestFromRaw();
     }
   }
 
@@ -151,24 +179,31 @@
   }
 
   async function checkUpdate(manual) {
-    if (manual) hint.textContent = '正在检查更新…';
-    var info;
-    try {
-      info = await fetchLatest();
-    } catch (e) {
-      if (manual) hint.textContent = '检查失败：' + ((e && e.message) || e) + '（检查需要能访问 GitHub）';
-      return;
+    var btn = $('btnCheckUpdate');
+    if (manual) {
+      btn.disabled = true;
+      btn.textContent = '检查中…';
     }
-    if (isNewer(info.version, appInfo.version)) {
-      if (manual) {
-        hint.textContent = '发现新版本 v' + info.version;
-        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { /* 忽略 */ }
-      } else {
-        try { if (localStorage.getItem(SKIP_KEY) === info.version) return; } catch (e) { /* 忽略 */ }
+    try {
+      var info = await fetchLatest();
+      if (isNewer(info.version, appInfo.version)) {
+        if (manual) {
+          try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { /* 忽略 */ }
+        } else {
+          try { if (localStorage.getItem(SKIP_KEY) === info.version) return; } catch (e) { /* 忽略 */ }
+        }
+        showBanner(info);
+        if (manual) toast('发现新版本 v' + info.version);
+      } else if (manual) {
+        toast('已是最新版本（v' + appInfo.version + '）');
       }
-      showBanner(info);
-    } else if (manual) {
-      hint.textContent = '已是最新版本（v' + appInfo.version + '）';
+    } catch (e) {
+      if (manual) toast('检查失败：' + ((e && e.message) || e) + '（需能访问 GitHub）', 4000);
+    } finally {
+      if (manual) {
+        btn.disabled = false;
+        btn.textContent = '检查更新';
+      }
     }
   }
 
@@ -184,7 +219,6 @@
       verText.textContent = '清渠（网页预览）';
       btn.disabled = true;
       btn.title = '更新检查仅在安卓 App 内可用';
-      btn.onclick = function () { hint.textContent = '更新检查仅在安卓 App 内可用'; };
     }
   })();
 

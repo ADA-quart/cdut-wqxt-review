@@ -38,6 +38,17 @@
     try {
       window.dispatchEvent(new CustomEvent('wqppt-theme', { detail: { mode: mode, resolved: resolveMode(mode) } }));
     } catch (e) { /* 忽略 */ }
+    syncSystemBars();
+  }
+
+  // 安卓（Capacitor）：状态栏 / 手势条图标颜色跟随应用主题
+  function syncSystemBars() {
+    try {
+      var sb = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SystemBars;
+      if (sb && sb.setStyle) {
+        sb.setStyle({ style: resolveMode(storedMode()) === 'dark' ? 'DARK' : 'LIGHT' });
+      }
+    } catch (e) { /* 非原生环境忽略 */ }
   }
 
   function setTheme(mode) {

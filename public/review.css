@@ -27,11 +27,17 @@ body {
 
 /* ---------- 顶栏 ---------- */
 .topbar {
+  --bar-pad-y: 10px;
+  --bar-pad-x: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 16px;
+  /* 状态栏 / 刘海安全区：安卓沉浸式下由 Capacitor 注入 --safe-area-inset-*，其余环境为 0 */
+  padding: calc(var(--bar-pad-y) + var(--safe-area-inset-top, 0px))
+           calc(var(--bar-pad-x) + var(--safe-area-inset-right, 0px))
+           var(--bar-pad-y)
+           calc(var(--bar-pad-x) + var(--safe-area-inset-left, 0px));
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   flex: none;
