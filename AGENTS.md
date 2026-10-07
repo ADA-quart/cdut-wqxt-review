@@ -65,7 +65,7 @@
 - 所有 JS 改动跑 `npm test`（`tools/check-syntax.mjs` 语法自检）。
 - `public/vendor/` 是构建产物（`npm run sync:vendor` 生成），已被 gitignore，不提交。
 - Windows 下提交 `android/gradlew` 注意可执行位（CI 已有 `chmod +x` 兜底，但尽量用 `git update-index --chmod=+x` 维护）。
-- 发版流程：同步三处版本号（`package.json`、`android/app/build.gradle`、`CHANGELOG.md`）→ 打 tag `vX.Y.Z` → CI 自动构建 APK 并发布 Release。签名密钥见 `C:\Users\Alpha\Documents\qingqu-signing\`（勿提交仓库）。
+- 发版流程：同步三处版本号（`package.json`、`android/app/build.gradle` 的 `versionName`、`CHANGELOG.md`），并递增 `versionCode` → 打 tag `vX.Y.Z` → CI 自动构建 APK 并发布 Release。签名密钥见 `C:\Users\Alpha\Documents\qingqu-signing\`（勿提交仓库）。
 - 用户数据（`downloads/`、`config.json`）一律不进 git；测试数据用 `zz` 前缀并在验证后清理。
 - 文档事实核对：改动功能后，检查 README / docs 中相关描述是否需要同步（按钮名、路径、行为）。
 

@@ -28,9 +28,18 @@
   </div>
 </header>
 <main>
+  <div class="update-banner" id="updateBanner" hidden>
+    <span class="grow" id="updateBannerText"></span>
+    <button class="btn primary small" id="btnUpdateDownload">下载更新</button>
+    <button class="btn ghost small" id="btnUpdateSkip" title="忽略此版本">✕</button>
+  </div>
   <p class="import-hint" id="importHint"></p>
   <div id="catalog"><p class="empty">加载中…</p></div>
 </main>
+<footer class="foot">
+  <span id="verText">清渠</span>
+  <button class="linkbtn" id="btnCheckUpdate">检查更新</button>
+</footer>
 <script src="/mobile.js"></script>
 </body>
 </html>
