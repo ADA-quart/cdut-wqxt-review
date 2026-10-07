@@ -74,6 +74,10 @@ powershell -ExecutionPolicy Bypass -File setup-p2t.ps1
 bash setup-p2t.sh
 ```
 
+> 国内网络连不上 `download.pytorch.org` 时，先用镜像再执行：
+> Windows 设 `$env:PYTORCH_INDEX='https://mirror.nju.edu.cn/pytorch/whl/cu124'`；
+> macOS / Linux 用 `PYTORCH_INDEX=https://mirror.nju.edu.cn/pytorch/whl/cu124 bash setup-p2t.sh`（上海交大镜像同理，把域名换成 `mirror.sjtu.edu.cn/pytorch-wheels/cu124`）。
+
 装好后课次旁才会出现可用的「转 MD」。也可以命令行直接转：
 
 ```bash

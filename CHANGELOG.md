@@ -2,6 +2,15 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [未发布]
+
+### 修复
+
+- `setup-p2t.ps1` / `setup-p2t.sh`：CUDA 版 PyTorch 改用 `--default-index` 指定索引——
+  uv 的 `--index-url` 只是追加索引、默认索引（PyPI）仍优先，会把 torch 装成 CPU 版，
+  连带 ONNX Runtime 回落 CPU（[#1](https://github.com/ADA-quart/cdut-wqxt-review/issues/1)）；
+  新增 `PYTORCH_INDEX` 环境变量，可切换南京大学 / 上海交大镜像
+
 ## [0.1.2] - 2026-10-07
 
 ### 修复

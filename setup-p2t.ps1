@@ -9,6 +9,11 @@
 #   - 不需要单独安装 CUDA Toolkit / cuDNN —— torch 自带的运行库会被自动使用
 #
 # 用法：powershell -ExecutionPolicy Bypass -File setup-p2t.ps1
+#
+# CUDA 版 torch 从 PyTorch 官方索引下载；国内网络连不上 download.pytorch.org 时，
+# 可先用镜像（南京大学 / 上海交大）再执行：
+#   $env:PYTORCH_INDEX = 'https://mirror.nju.edu.cn/pytorch/whl/cu124'
+#   $env:PYTORCH_INDEX = 'https://mirror.sjtu.edu.cn/pytorch-wheels/cu124'
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -22,9 +27,12 @@ $py = Join-Path $root '.venv-p2t\Scripts\python.exe'
 Write-Host '[2/5] 安装 pix2text（版面 / 表格 / 公式识别）...'
 uv pip install --python $py pix2text
 
-Write-Host '[3/5] 安装 CUDA 12.4 版 PyTorch（含 cuDNN 9 运行库）...'
+$torchIndex = if ($env:PYTORCH_INDEX) { $env:PYTORCH_INDEX } else { 'https://download.pytorch.org/whl/cu124' }
+Write-Host "[3/5] 安装 CUDA 12.4 版 PyTorch（含 cuDNN 9 运行库；索引：$torchIndex）..."
+# 注意：uv 的 --index-url 只是「追加」索引，默认索引（PyPI）仍优先，会把 torch 装成 CPU 版；
+#       必须用 --default-index 整体替换默认索引（issue #1）。
 uv pip install --python $py --reinstall-package torch --reinstall-package torchvision `
-  torch torchvision --index-url https://download.pytorch.org/whl/cu124
+  torch torchvision --default-index $torchIndex
 
 # ORT 版本说明（2026-10 实测）：
 #   - 1.30 / 1.29：要求 CUDA 13，CUDA 12 环境会静默回落 CPU
