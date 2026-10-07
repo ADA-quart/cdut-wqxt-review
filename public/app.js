@@ -798,6 +798,28 @@ async function batchNoteCourse(courseNode, btn) {
   }
 }
 
+/** 批量校订：对已转 MD 的课次提交 polish 任务（纠错 + 修公式，队列串行） */
+async function batchPolishCourse(courseNode, btn) {
+  const subs = courseLessons(courseNode).filter((c) => c.hasMd);
+  if (!subs.length) { toast('先转 MD，再校订', 'err'); return; }
+  const mode = state.llmConfig?.defaultMode || 'text';
+  const modeLabel = LLM_FIELDS[mode]?.label || mode;
+  if (!confirm(`对「${courseNode.name}」已转 MD 的 ${subs.length} 个课次做校订？\n步骤：① OCR 错字纠错 ② 公式修复（调用 AI，模式：${modeLabel}，队列串行）\n原文会先备份为 .ocr-backup.md / .math-backup.md，随时可找回。`)) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  let ok = 0;
+  try {
+    for (const sub of subs) {
+      btn.textContent = `提交 ${ok + 1}/${subs.length}…`;
+      try { await api('/llm-jobs', { method: 'POST', body: { op: 'polish', dir: sub.rel, mode } }); ok += 1; } catch { /* 跳过 */ }
+    }
+    toast(`已提交 ${ok} 个校订任务（队列串行执行，进度见任务卡片）`, 'ok');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
 async function loadFiles() {
   const box = $('fileTree');
   try {
@@ -862,6 +884,7 @@ function renderTreeLevel(nodes, level) {
         };
         mk('批量清洗', '对这门课所有已下载课次依次做去重预检（串行，每节约几十秒）', batchCleanCourse);
         mk('批量转 MD', '把这门课里还没转过的课次批量加入转换队列（已转的自动跳过）', batchMdCourse);
+        mk('批量校订', '对已转 MD 的课次依次纠错 + 修公式（队列串行；原文自动备份）', batchPolishCourse);
         mk('批量生成笔记', '对所有已转 MD 的课次生成深度笔记（队列串行；已有笔记走整理稿缓存）', batchNoteCourse);
       }
       // 目录内直接含图片（= 一个课次）→ 提供「转 Markdown」
