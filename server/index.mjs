@@ -145,9 +145,9 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
 app.get('/api/md-tools', (_req, res) => res.json(mdToolStatus()));
 
 app.post('/api/md-jobs', asyncRoute(async (req, res) => {
-  const { dir, device = 'auto' } = req.body || {};
+  const { dir, device = 'auto', dedup } = req.body || {};
   if (!dir) return res.status(400).json({ error: '缺少 dir（downloads 下的相对目录）' });
-  const job = createMdJob({ dir, device });
+  const job = createMdJob({ dir, device, dedup });
   res.status(201).json({ job });
 }));
 

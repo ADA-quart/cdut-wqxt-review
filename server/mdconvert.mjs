@@ -112,6 +112,7 @@ function publicMdJob(j) {
     finishedAt: j.finishedAt,
     progress: j.progress,      // { done, total, current }
     device: j.device,
+    dedup: j.dedup,            // 转 MD 前是否自动去重（可在「已下载文件」面板关闭）
     parallel: j.parallel || null,
     outMd: j.outMd,            // 相对笔记目录的 md 路径
     outMdUrl: j.outMdUrl,      // 可直接打开的 /notes/... 地址
