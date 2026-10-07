@@ -697,6 +697,19 @@ li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230,
 #mdContent li.note-color-green,
 #mdContent li.note-color-blue { border-radius: 6px; padding: 4px 8px 4px 10px; margin-left: -10px; }
 
+/* ---------- App 本地图书馆模式（mobile-shim 注入 .local-app）：隐藏电脑端专属操作 ---------- */
+.local-app .topbar #btnPolish,
+.local-app .topbar #btnMakeNote,
+.local-app .topbar #btnAudit,
+.local-app .topbar #btnChain,
+.local-app .topbar #btnGuide,
+.local-app .topbar .search-wrap { display: none; }
+.local-app .more-menu #btnNotePdf,
+.local-app .more-menu #btnGraph,
+.local-app .more-menu #btnTags { display: none; }
+/* 桌面工作流指引条在 App 内不适用 */
+.local-app #hintBar { display: none; }
+
 /* ---------- 窄屏（手机 / 平板竖屏）：更松的阅读节奏（依据手机中文阅读研究） ---------- */
 @media (max-width: 700px) {
   .markdown { line-height: 1.8; }
@@ -724,4 +737,27 @@ li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230,
     vertical-align: baseline;
   }
   .chat-msgs { padding: 10px; }
+
+  /* ---- 手机竖屏：单列堆叠（笔记 → 课件 → 对话），布局区整体可滚 ---- */
+  .layout {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto;
+    overflow-y: auto;
+    align-content: start;
+    padding: 8px;
+  }
+  .splitter.v, .splitter.h { display: none; }
+  .right-col {
+    grid-template-rows: auto auto !important;
+    margin-top: 10px;
+  }
+  .md-pane { height: 64vh; }
+  .img-pane { height: 54vh; }
+  .chat-pane { height: 48vh; margin-top: 10px; }
+  .topbar { flex-wrap: wrap; row-gap: 6px; }
+}
+
+/* 平板竖屏 / 手机横屏：顶栏可能放不下，允许换行 */
+@media (max-width: 1100px) {
+  .topbar { flex-wrap: wrap; row-gap: 6px; }
 }

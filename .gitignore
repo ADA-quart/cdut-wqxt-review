@@ -10,3 +10,4 @@ run/
 *.zip
 downloads-backup-*/
 tmp/
+public/vendor/

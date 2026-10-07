@@ -1,0 +1,489 @@
+/* 清渠 · 移动端数据层（本地图书馆模式）
+ *
+ * 职责：
+ *  1) 把电脑端导出的 zip 包解压进 IndexedDB 私有图书馆（manifest / notes / images / cards / chats / progress）
+ *  2) 本地模式下拦截 fetch('/api/*')、fetch('/notes/*')，用图书馆数据响应（复习页零改动复用）
+ *  3) 预载课次图片为 blob URL，通过 window.QingquFiles 钩子供 <img src> 同步取用
+ *
+ * 启用条件：Capacitor 原生环境，或浏览器调试时 localStorage.setItem('qingqu_local_mode','1')。
+ */
+(function () {
+  'use strict';
+
+  var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  var LOCAL = false;
+  try { LOCAL = NATIVE || localStorage.getItem('qingqu_local_mode') === '1'; } catch (e) { /* 忽略 */ }
+  if (!LOCAL) return;
+
+  document.documentElement.classList.add('local-app');
+
+  // ---------- IndexedDB ----------
+  var DB_NAME = 'qingqu-library';
+  var dbPromise = null;
+
+  function openDB() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise(function (resolve, reject) {
+      var req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function () {
+        var db = req.result;
+        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'path' });
+        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+    return dbPromise;
+  }
+
+  function done(tx) {
+    return new Promise(function (resolve, reject) {
+      tx.oncomplete = resolve;
+      tx.onerror = function () { reject(tx.error); };
+      tx.onabort = function () { reject(tx.error || new Error('事务中止')); };
+    });
+  }
+
+  function reqP(req) {
+    return new Promise(function (resolve, reject) {
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+
+  async function store(mode) {
+    var db = await openDB();
+    return db.transaction('files', mode).objectStore('files');
+  }
+
+  async function getFileRecord(path) {
+    var st = await store('readonly');
+    return reqP(st.get(path));
+  }
+
+  async function putFileRecord(rec) {
+    var st = await store('readwrite');
+    var tx = st.transaction;
+    st.put(rec);
+    await done(tx);
+  }
+
+  async function listFiles(prefix) {
+    var st = await store('readonly');
+    var range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+    return reqP(st.getAll(range));
+  }
+
+  async function getMeta(key) {
+    var db = await openDB();
+    var tx = db.transaction('meta', 'readonly');
+    var row = await reqP(tx.objectStore('meta').get(key));
+    return row ? row.value : null;
+  }
+
+  async function putMeta(key, value) {
+    var db = await openDB();
+    var tx = db.transaction('meta', 'readwrite');
+    tx.objectStore('meta').put({ key: key, value: value });
+    await done(tx);
+  }
+
+  // ---------- 导入 zip ----------
+  var BIN_RE = /\.(jpe?g|png|webp|gif|bmp|pdf|woff2?|ttf|otf|ico)$/i;
+
+  async function importZip(arrayBuffer, pkgName) {
+    var zip = await JSZip.loadAsync(arrayBuffer);
+    var entries = Object.keys(zip.files).map(function (k) { return zip.files[k]; }).filter(function (e) { return !e.dir; });
+    var manifest = null;
+    var count = 0;
+    var bytes = 0;
+    if (zip.file('manifest.json')) {
+      try { manifest = JSON.parse(await zip.file('manifest.json').async('string')); } catch (e) { /* 忽略 */ }
+    }
+    // 先全部解码到内存（JSZip 异步），其间不持有 IndexedDB 事务——
+    // 事务内 await 非 IDB 异步操作会让事务提前提交失效（经典坑）。
+    var decoded = await Promise.all(entries.map(function (e) {
+      if (BIN_RE.test(e.name)) {
+        return e.async('blob').then(function (blob) { bytes += blob.size; return { path: e.name, blob: blob }; });
+      }
+      return e.async('string').then(function (text) { bytes += text.length; return { path: e.name, text: text }; });
+    }));
+    count = decoded.length;
+    var db = await openDB();
+    var BATCH = 16;
+    for (var i = 0; i < decoded.length; i += BATCH) {
+      var slice = decoded.slice(i, i + BATCH);
+      var tx = db.transaction('files', 'readwrite');
+      var st = tx.objectStore('files');
+      slice.forEach(function (rec) {
+        if (rec.blob) st.put({ path: rec.path, blob: rec.blob, size: rec.blob.size, updatedAt: Date.now() });
+        else st.put({ path: rec.path, text: rec.text, size: rec.text.length, updatedAt: Date.now() });
+      });
+      await done(tx);
+    }
+    // 合并目录（从 manifest.courses 构列表）
+    if (manifest && Array.isArray(manifest.courses)) {
+      var catalog = (await getMeta('catalog')) || { courses: [], importedAt: 0, packages: 0 };
+      for (var ci = 0; ci < manifest.courses.length; ci++) {
+        var c = manifest.courses[ci];
+        var pc = catalog.courses.find(function (x) { return x.name === c.name; });
+        if (!pc) { pc = { name: c.name, lessons: [] }; catalog.courses.push(pc); }
+        (c.lessons || []).forEach(function (l) {
+          var ex = pc.lessons.find(function (x) { return x.name === l.name; });
+          if (!ex) {
+            ex = { name: l.name, pages: 0, note: false, images: 0 };
+            pc.lessons.push(ex);
+          }
+          // 只接受有意义的字段——记录包（state）的空字段不覆盖内容包信息
+          if (l.pages) ex.pages = l.pages;
+          if (l.note) ex.note = true;
+          if (l.images) ex.images = l.images;
+        });
+      }
+      catalog.importedAt = Date.now();
+      catalog.packages = (catalog.packages || 0) + 1;
+      catalog.lastPackage = pkgName || '';
+      await putMeta('catalog', catalog);
+      await putMeta('manifest-last', manifest);
+    }
+    await putMeta('library-updated', Date.now());
+    return { count: count, bytes: bytes, manifest: manifest };
+  }
+
+  // ---------- 图片预载（blob URL 缓存） ----------
+  var blobCache = new Map();   // 'files:课程/课次/1.jpg' / 'notes:课程/assets/x.png' → blobURL
+  var preloaded = new Set();
+
+  function joinKey(kind, p) {
+    return kind + ':' + String(p || '').split('/').map(decodeURIComponent).join('/');
+  }
+
+  async function preloadLesson(dir) {
+    if (!dir || preloaded.has(dir)) return;
+    preloaded.add(dir);
+    try {
+      // 课次课件图：images/{课程}/{课次}/xxx
+      var imgs = await listFiles('images/' + dir + '/');
+      imgs.forEach(function (rec) {
+        var name = rec.path.slice(('images/' + dir + '/').length);
+        blobCache.set(joinKey('files', dir + '/' + name), URL.createObjectURL(rec.blob));
+      });
+      // 笔记目录内的资源（笔记 md 里的图片）：notes/{课程}/...（跨课次安全，量小）
+      var courseDir = dir.split('/').slice(0, -1).join('/');
+      if (courseDir) {
+        var notes = await listFiles('notes/' + courseDir + '/');
+        notes.forEach(function (rec) {
+          if (rec.blob) {
+            var rel = rec.path.slice('notes/'.length);
+            blobCache.set(joinKey('notes', rel), URL.createObjectURL(rec.blob));
+          }
+        });
+      }
+    } catch (e) { /* 预载失败不阻塞 */ }
+  }
+
+  window.QingquFiles = {
+    fileUrl: function (p) {
+      var hit = blobCache.get(joinKey('files', p));
+      if (hit) return hit;
+      return '/files/' + String(p || '').split('/').map(encodeURIComponent).join('/');
+    },
+    noteUrl: function (p) {
+      var hit = blobCache.get(joinKey('notes', p));
+      if (hit) return hit;
+      return '/notes/' + String(p || '').split('/').map(encodeURIComponent).join('/');
+    },
+  };
+
+  // ---------- 工具 ----------
+  function json(obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  function notFound() {
+    return new Response('Not Found', { status: 404 });
+  }
+
+  function deskmode(feature) {
+    return json({ error: feature + ' 是电脑端功能，App 里暂不提供' }, 501);
+  }
+
+  function guessType(p) {
+    if (/\.json$/i.test(p)) return 'application/json';
+    if (/\.(jpe?g)$/i.test(p)) return 'image/jpeg';
+    if (/\.png$/i.test(p)) return 'image/png';
+    if (/\.webp$/i.test(p)) return 'image/webp';
+    if (/\.css$/i.test(p)) return 'text/css';
+    return 'text/markdown; charset=utf-8';
+  }
+
+  async function readText(path) {
+    var rec = await getFileRecord(path);
+    if (!rec) return null;
+    if (rec.text != null) return rec.text;
+    if (rec.blob) return await rec.blob.text();
+    return null;
+  }
+
+  async function writeText(path, text) {
+    await putFileRecord({ path: path, text: text, size: text.length, updatedAt: Date.now() });
+  }
+
+  async function readJson(path, fallback) {
+    try {
+      var t = await readText(path);
+      return t == null ? fallback : JSON.parse(t);
+    } catch (e) { return fallback; }
+  }
+
+  async function writeJson(path, obj) {
+    await writeText(path, JSON.stringify(obj, null, 2));
+  }
+
+  function lessonDirOfNotePath(rel) {
+    var m = String(rel).match(/^(.+\/[^/]+?)\.(note\.md|md|note\.marks\.json|audit\.json|note\.pdf|pdf|ocr-backup\.md|math-backup\.md)$/);
+    return m ? m[1] : null;
+  }
+
+  // ---------- 本地 API 路由 ----------
+  async function localFetch(u, init) {
+    var p = decodeURIComponent(u.pathname);
+    var q = u.searchParams;
+    var method = (init.method || 'GET').toUpperCase();
+    try {
+      // 进度
+      if (p === '/api/progress') {
+        var dir = q.get('dir') || '';
+        if (method === 'GET') {
+          var prog = await readJson('progress/' + dir + '.json', null);
+          return json(prog || { page: 0, updatedAt: 0 });
+        }
+        if (method === 'PUT') {
+          var body = JSON.parse(init.body || '{}');
+          var payload = { v: 1, page: Number(body.page) || 0, updatedAt: Date.now() };
+          await writeJson('progress/' + dir + '.json', payload);
+          return json(Object.assign({ ok: true }, payload));
+        }
+      }
+
+      // 历史对话
+      if (p === '/api/chat-history') {
+        var cdir = q.get('dir') || '';
+        if (method === 'GET') {
+          var chat = await readJson('chats/' + cdir + '.json', { messages: [] });
+          return json({ messages: chat.messages || [], count: (chat.messages || []).length });
+        }
+        if (method === 'POST') {
+          var cbody = JSON.parse(init.body || '{}');
+          var cur = await readJson('chats/' + cdir + '.json', { v: 1, messages: [] });
+          var seen = new Set((cur.messages || []).map(function (m) { return m && m.id; }).filter(Boolean));
+          (cbody.messages || []).forEach(function (m) {
+            if (!m || (m.id && seen.has(m.id))) return;
+            cur.messages = cur.messages || [];
+            cur.messages.push(m);
+          });
+          cur.messages = cur.messages.slice(-2000);
+          cur.updatedAt = Date.now();
+          await writeJson('chats/' + cdir + '.json', cur);
+          return json({ ok: true, count: cur.messages.length });
+        }
+        if (method === 'DELETE') {
+          await writeJson('chats/' + cdir + '.json', { v: 1, messages: [], updatedAt: Date.now() });
+          return json({ ok: true });
+        }
+      }
+
+      // 复习卡
+      if (p === '/api/cards') {
+        var kdir = q.get('dir') || '';
+        if (method === 'GET') {
+          var all = [];
+          if (kdir) {
+            var arr = await readJson('cards/' + kdir + '.json', []);
+            all = Array.isArray(arr) ? arr.map(function (c) { return Object.assign({ dir: kdir }, c); }) : [];
+          } else {
+            var cardFiles = await listFiles('cards/');
+            for (var fi = 0; fi < cardFiles.length; fi++) {
+              try {
+                var one = JSON.parse(cardFiles[fi].text || '[]');
+                var krel = cardFiles[fi].path.slice('cards/'.length).replace(/\.json$/i, '');
+                (Array.isArray(one) ? one : []).forEach(function (c) { all.push(Object.assign({ dir: krel }, c)); });
+              } catch (e) { /* 忽略 */ }
+            }
+          }
+          if (q.get('due') === '1') {
+            var now = Date.now();
+            all = all.filter(function (c) { return !c.due || c.due <= now; });
+          }
+          var limit = Number(q.get('limit')) || 0;
+          if (limit > 0) all = all.slice(0, limit);
+          return json({ cards: all, dueCount: all.length });
+        }
+        if (method === 'POST') {
+          var nb = JSON.parse(init.body || '{}');
+          var target = nb.dir || '';
+          var cards = await readJson('cards/' + target + '.json', []);
+          if (!Array.isArray(cards)) cards = [];
+          var nid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+          var card = Object.assign({
+            id: nid, dir: target, page: null, kind: 'star', text: '', front: '', back: '',
+            created: Date.now(), updated: Date.now(), due: Date.now(), interval: 0, ease: 2.5, reps: 0, lapses: 0,
+          }, nb, { id: nid, dir: target, created: Date.now(), updated: Date.now() });
+          cards.push(card);
+          await writeJson('cards/' + target + '.json', cards);
+          return json({ ok: true, card: card });
+        }
+      }
+      var gradeMatch = p.match(/^\/api\/cards\/([^/]+)\/grade$/);
+      if (gradeMatch && method === 'POST') {
+        var gid = decodeURIComponent(gradeMatch[1]);
+        var gb = JSON.parse(init.body || '{}');
+        var cardFiles2 = await listFiles('cards/');
+        for (var gi = 0; gi < cardFiles2.length; gi++) {
+          try {
+            var gcards = JSON.parse(cardFiles2[gi].text || '[]');
+            var gcard = (Array.isArray(gcards) ? gcards : []).find(function (c) { return c.id === gid; });
+            if (!gcard) continue;
+            var now2 = Date.now();
+            var DAY = 86400000;
+            if (gb.grade === 'again') { gcard.interval = 0; gcard.ease = Math.max(1.3, (gcard.ease || 2.5) - 0.2); gcard.lapses = (gcard.lapses || 0) + 1; gcard.due = now2 + 10 * 60000; }
+            else if (gb.grade === 'easy') { gcard.interval = Math.max(1, Math.round((gcard.interval || 1) * (gcard.ease || 2.5) * 1.4)); gcard.ease = Math.min(3, (gcard.ease || 2.5) + 0.15); gcard.due = now2 + gcard.interval * DAY; }
+            else { gcard.interval = Math.max(1, Math.round((gcard.interval || 1) * (gcard.ease || 2.5))); gcard.due = now2 + gcard.interval * DAY; }
+            gcard.reps = (gcard.reps || 0) + 1;
+            gcard.lastGrade = gb.grade || 'good';
+            gcard.updated = now2;
+            await writeText(cardFiles2[gi].path, JSON.stringify(gcards, null, 2));
+            return json({ ok: true, card: gcard });
+          } catch (e) { /* 忽略 */ }
+        }
+        return notFound();
+      }
+      var delMatch = p.match(/^\/api\/cards\/([^/]+)$/);
+      if (delMatch && method === 'DELETE') {
+        var did = decodeURIComponent(delMatch[1]);
+        var cardFiles3 = await listFiles('cards/');
+        for (var di = 0; di < cardFiles3.length; di++) {
+          try {
+            var dcards = JSON.parse(cardFiles3[di].text || '[]');
+            var before = dcards.length;
+            dcards = dcards.filter(function (c) { return c.id !== did; });
+            if (dcards.length !== before) {
+              await writeText(cardFiles3[di].path, JSON.stringify(dcards, null, 2));
+              return json({ ok: true });
+            }
+          } catch (e) { /* 忽略 */ }
+        }
+        return notFound();
+      }
+      if (p === '/api/cards/gen-qa' || p === '/api/cards/feynman') return deskmode('AI 出题 / 费曼卡');
+      if (p === '/api/cards/export') return new Response('', { status: 200, headers: { 'Content-Type': 'text/csv' } });
+
+      // 笔记标记
+      if (p === '/api/note-marks') {
+        var mdir = q.get('dir') || '';
+        if (method === 'GET') {
+          var marks = await readJson('notes/' + mdir + '.note.marks.json', { marks: [] });
+          return json(marks);
+        }
+        if (method === 'POST') {
+          await writeText('notes/' + mdir + '.note.marks.json', init.body || '{}');
+          return json({ ok: true });
+        }
+      }
+
+      // 课次树（课次切换下拉）
+      if (p === '/api/courses-tree') {
+        var cat = await getMeta('catalog');
+        var tree = ((cat && cat.courses) || []).map(function (c) {
+          return { name: c.name, lessons: (c.lessons || []).map(function (l) { return l.name; }) };
+        });
+        return json({ courses: tree });
+      }
+
+      // 搜索：本地全文（笔记 + 原文）
+      if (p === '/api/kb/search') {
+        var sb = JSON.parse(init.body || '{}');
+        var query = String(sb.q || '').trim();
+        var results = [];
+        if (query) {
+          var ql = query.toLowerCase();
+          var docs = await Promise.all([
+            listFiles('notes/'),
+          ]);
+          var noteFiles = docs[0] || [];
+          for (var ni = 0; ni < noteFiles.length && results.length < (Number(sb.topK) || 20); ni++) {
+            var rec = noteFiles[ni];
+            if (rec.text == null || !/\.md$/i.test(rec.path)) continue;
+            var idx = rec.text.toLowerCase().indexOf(ql);
+            if (idx < 0) continue;
+            var rel = rec.path.slice('notes/'.length).replace(/\.(note\.)?md$/i, '');
+            var parts = rel.split('/');
+            results.push({
+              course: parts[0] || '', lesson: parts[1] || '', rel: rel,
+              snippet: rec.text.slice(Math.max(0, idx - 60), idx + 120).replace(/\s+/g, ' '),
+              page: null,
+            });
+          }
+        }
+        return json({ results: results, mode: 'local' });
+      }
+
+      // 未实现的电脑端功能
+      if (p === '/api/chat') return deskmode('AI 对话');
+      if (p === '/api/llm-jobs' || /^\/api\/llm-jobs\//.test(p)) return deskmode('AI 作业');
+      if (p === '/api/note-pdf') return deskmode('笔记 PDF');
+      if (p === '/api/preview') return notFound();
+      if (p === '/api/backlinks') return json({ backlinks: [] });
+      if (p === '/api/graph') return json({ nodes: [], links: [] });
+      if (p === '/api/tags') return json({ tags: [] });
+      if (p === '/api/note') return json({ note: null });
+
+      // /notes/*：笔记 / 原文 / 审计 / 资源（fetch 读取）
+      if (p.indexOf('/notes/') === 0) {
+        var nrel = p.slice('/notes/'.length);
+        var lessonDir = lessonDirOfNotePath(nrel);
+        if (lessonDir) await preloadLesson(lessonDir);
+        var nrec = await getFileRecord('notes/' + nrel);
+        if (!nrec) return notFound();
+        if (nrec.blob) return new Response(nrec.blob, { status: 200, headers: { 'Content-Type': nrec.blob.type || guessType(nrel) } });
+        return new Response(nrec.text, { status: 200, headers: { 'Content-Type': guessType(nrel) } });
+      }
+
+      return notFound();
+    } catch (e) {
+      return json({ error: String((e && e.message) || e) }, 500);
+    }
+  }
+
+  // ---------- fetch 拦截 ----------
+  var origFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var pathname = '';
+    try { pathname = new URL(url, location.href).pathname; } catch (e) { return origFetch(input, init); }
+    if (pathname.indexOf('/api/') === 0 || pathname.indexOf('/notes/') === 0) {
+      return localFetch(new URL(url, location.href), init || {});
+    }
+    return origFetch(input, init);
+  };
+
+  // ---------- 对外接口（首页用） ----------
+  window.QingquLocal = {
+    active: true,
+    native: NATIVE,
+    importZip: importZip,
+    getCatalog: function () { return getMeta('catalog'); },
+    getMeta: getMeta,
+    listFiles: listFiles,
+    clearAll: async function () {
+      var db = await openDB();
+      var tx = db.transaction(['files', 'meta'], 'readwrite');
+      tx.objectStore('files').clear();
+      tx.objectStore('meta').clear();
+      await done(tx);
+    },
+  };
+})();

@@ -7,7 +7,10 @@
     "test": "node tools/check-syntax.mjs",
     "start": "node server/index.mjs",
     "dev": "node server/index.mjs",
-    "app": "electron ."
+    "app": "electron .",
+    "sync:vendor": "node tools/sync-mobile.mjs",
+    "mobile:sync": "npm run sync:vendor && npx cap sync android",
+    "mobile:apk": "npm run mobile:sync && cd android && gradlew assembleDebug"
   },
   "keywords": [
     "cdut",
@@ -21,13 +24,18 @@
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "dependencies": {
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/filesystem": "^8.1.4",
     "adm-zip": "^0.6.1",
     "express": "^5.2.1",
+    "jszip": "^3.10.2",
     "katex": "^0.19.0",
     "marked": "^18.0.14",
     "playwright-core": "^1.63.0"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
     "electron": "^44.5.1"
   }
 }

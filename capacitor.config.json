@@ -1,0 +1,8 @@
+{
+  "appId": "io.github.adaquart.qingqu",
+  "appName": "清渠",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -66,8 +66,9 @@ function saveProgress(page, immediate = false) {
   if (immediate) send();
   else progSync.timer = setTimeout(send, 900);
 }
-const fileUrl = (p) => '/files/' + enc(p);
-const noteUrl = (p) => '/notes/' + enc(p);
+// 本地图书馆模式（App）：优先走 window.QingquFiles 的 blob URL 缓存；桌面端保持原路径
+const fileUrl = (p) => (window.QingquFiles ? window.QingquFiles.fileUrl(p) : '/files/' + enc(p));
+const noteUrl = (p) => (window.QingquFiles ? window.QingquFiles.noteUrl(p) : '/notes/' + enc(p));
 const imgUrl = (name) => fileUrl(`${dir}/${name}`);
 // md 文件在 downloads/<课程>/<课次>.md，其中的相对资源（xxx_assets/figures/…）按课程目录解析
 const mdBaseUrl = '/notes/' + (courseDir ? enc(courseDir) + '/' : '');
