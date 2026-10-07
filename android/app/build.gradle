@@ -1,8 +1,26 @@
 apply plugin: 'com.android.application'
 
+// ---- 固定签名配置（CI 用） ----
+// GitHub Actions 的 runner 是临时的，每次构建都会新生成 debug 密钥；
+// 不固定则各版本签名不同、无法覆盖升级。CI 通过 ANDROID_KEYSTORE_PATH 指向
+// 还原出来的密钥库；本地开发不设这些变量，走默认 ~/.android/debug.keystore。
+def customKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+def customKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "android"
+def customKeyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "androiddebugkey"
+
 android {
     namespace = "io.github.adaquart.qingqu"
     compileSdk = rootProject.ext.compileSdkVersion
+    signingConfigs {
+        if (customKeystorePath != null) {
+            fixed {
+                storeFile file(customKeystorePath)
+                storePassword customKeystorePassword
+                keyAlias customKeyAlias
+                keyPassword customKeystorePassword
+            }
+        }
+    }
     defaultConfig {
         applicationId "io.github.adaquart.qingqu"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -17,6 +35,12 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // 有固定密钥时用它，保证 CI 与本地产出的 APK 可互相覆盖升级
+            if (customKeystorePath != null) {
+                signingConfig signingConfigs.fixed
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

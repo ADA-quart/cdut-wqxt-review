@@ -1,0 +1,134 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 清渠（wqppt）安卓端构建：
+#  - push main：构建 APK 并上传为构建产物（artifact，保留 7 天）
+#  - push tag（如 v0.1.0）：额外校验版本一致性，创建 Release 并挂上 APK
+# 签名：配置 ANDROID_KEYSTORE_BASE64 Secret 后使用固定密钥（可覆盖升级）；
+#       未配置则回退临时 debug 签名（每个版本签名不同，只能全新安装）。
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Android SDK (API 36)
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: npm test
+
+      # 打 tag 发版时校验：tag / package.json / build.gradle 三处版本一致，且 CHANGELOG 已有段落
+      - name: Verify version consistency
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          GRADLE_VERSION="$(grep -m1 'versionName' android/app/build.gradle | sed 's/.*"\(.*\)".*/\1/')"
+          echo "tag=v$TAG_VERSION package.json=$PKG_VERSION build.gradle=$GRADLE_VERSION"
+          for v in "$PKG_VERSION" "$GRADLE_VERSION"; do
+            if [ "$v" != "$TAG_VERSION" ]; then
+              echo "::error::版本号不一致：tag 为 v$TAG_VERSION，但文件里是 $v。请先同步 package.json / android/app/build.gradle / CHANGELOG.md"
+              exit 1
+            fi
+          done
+          if ! grep -q "^## \[$TAG_VERSION\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md 缺少 [$TAG_VERSION] 段落"
+            exit 1
+          fi
+
+      # 同步 vendor 静态资源（katex/marked/jszip，被 gitignore）并拷贝 web 资源进 Android 工程
+      - name: Sync mobile assets
+        run: npm run mobile:sync
+
+      # 固定密钥签名（可选）
+      - name: Restore signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，使用临时 debug 签名；本次 APK 与其他版本签名不同，无法覆盖升级。"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/qingqu.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/qingqu.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=android" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
+          echo "已还原固定签名密钥"
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Verify APK signature
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" | head -3
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk "out/qingqu-${GITHUB_REF_NAME//\//-}.apk"
+          ls -lh out
+
+      - name: Upload as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qingqu-android-apk
+          path: out/*.apk
+          retention-days: 7
+
+      # Release 说明直接取 CHANGELOG 里对应版本的那一段，避免两处维护两套说法
+      - name: Extract release notes from changelog
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            echo "> APK 使用调试签名，适用于个人使用与测试，不适合上架应用商店。"
+            echo
+            echo "**安装**：下载下方 Assets 中的 APK（平板优先，手机 / 平板横竖屏均可）。"
+            echo
+            echo "**使用**：电脑端「设置 → 导出」导出「内容包」（可选再导「学习记录包」）→ 传到平板 / 手机 → App 内点「＋ 导入内容包」。"
+            echo
+            echo "## 本版本变更"
+            echo
+            awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {flag=1; next} flag && /^## \[/ {exit} flag {print}' CHANGELOG.md
+            echo
+            echo "完整历史见 [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)。"
+          } > release_notes.md
+          cat release_notes.md
+
+      # 打 tag（如 v0.1.0）时自动创建 Release 并附上 APK
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          body_path: release_notes.md
