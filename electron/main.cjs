@@ -7,7 +7,7 @@
  *  - 关闭窗口 = 退出程序；壳自己启动的服务会优雅关停（手动先开的服务保持不动）
  *  - 快捷键：Ctrl+R 刷新、F12 / Ctrl+Shift+I 开发者工具
  */
-const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, nativeTheme } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 
@@ -78,7 +78,7 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 680,
     title: '清渠',
-    backgroundColor: '#f5f6f8',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121212' : '#f5f6f8',
     show: false,
     autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),

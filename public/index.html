@@ -6,6 +6,8 @@
 <title>清渠 · 课件整理与复习</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/theme.css">
+<script src="/comfort.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -23,6 +25,7 @@
     <button class="btn ghost" id="btnLogout" hidden>退出</button>
     <button class="btn ghost" id="btnLlmConfig" title="配置 LLM（校订 / AI 知识链 / 复习页对话）">LLM 设置</button>
     <button class="btn ghost" id="btnSettings" title="目录位置 / 导入导出 / 升级 / 退出">设置</button>
+    <button class="btn ghost" id="btnTheme" title="切换主题">🌗 跟随系统</button>
     <button class="btn ghost" id="btnHelp" title="第一次用？看这里">❓ 使用说明</button>
   </div>
 </header>
@@ -265,7 +268,19 @@
     <h3>设置</h3>
     <div class="modal-body-scroll">
       <section class="profile-section">
-        <h4>① 目录位置</h4>
+        <h4>① 阅读舒适</h4>
+        <p class="hint">主题四选一；护眼提醒按 20-20-20 法则（每 20 分钟看 6 米外 20 秒，美国眼科学会推荐）。深色适合低光环境；「护眼」是暖纸阅读色。</p>
+        <div class="test-row" id="themePickRow">
+          <label class="chk"><input type="radio" name="themePick" value="auto"> 跟随系统</label>
+          <label class="chk"><input type="radio" name="themePick" value="light"> ☀️ 浅色</label>
+          <label class="chk"><input type="radio" name="themePick" value="dark"> 🌙 深色</label>
+          <label class="chk"><input type="radio" name="themePick" value="eye"> 📜 护眼</label>
+        </div>
+        <label class="chk"><input type="checkbox" id="eyeRemindChk"> 开启护眼提醒（每 20 分钟一次，默认关闭）</label>
+      </section>
+
+      <section class="profile-section">
+        <h4>② 目录位置</h4>
         <p class="hint">PPT 原始帧（图片）放在数据目录；Markdown / PDF / 公式图放在笔记目录。笔记目录可以直接指向 Obsidian 库，改完立即生效。</p>
         <label class="field"><span>数据目录</span><input type="text" id="setDataDir" placeholder="默认：项目下的 downloads/"></label>
         <div class="test-row"><button class="btn tiny" id="btnPickData">浏览…</button><span class="test-result" id="pickDataHint"></span></div>
@@ -278,7 +293,7 @@
       </section>
 
       <section class="profile-section">
-        <h4>② 转 MD 并行页数（单节内）</h4>
+        <h4>③ 转 MD 并行页数（单节内）</h4>
         <p class="hint">同一节课的 PPT 页之间并行转换（课与课之间仍串行）。<b>默认「自动」</b>：按当前空闲显存算能并行几页（实测模型基座约 6.2G、每多一页约 1G，并留 1.5G 余量）。版面分析会自动串行，保证结果和逐页转换完全一致。</p>
         <div class="test-row">
           <label class="field compact"><span>单节内并行页数</span>
@@ -296,7 +311,7 @@
       </section>
 
       <section class="profile-section">
-        <h4>③ 导出 / 导入</h4>
+        <h4>④ 导出 / 导入</h4>
         <p class="hint">导出给手机 / 备份：<b>内容包</b> = 笔记 + 课件图（给手机看）；<b>学习记录包</b> = 进度 + 标记 + 对话（体积小，可两端来回合并）；<b>全量备份</b> = 全部内容 + 记录。学习记录导入时永远按时间合并，不受下方「覆盖」开关影响。</p>
         <div class="test-row">
           <label class="field compact"><span>包类型</span>
@@ -332,7 +347,7 @@
       </section>
 
       <section class="profile-section">
-        <h4>④ 回收站</h4>
+        <h4>⑤ 回收站</h4>
         <p class="hint">删除的课次先放到这里（按「课件与转换文件 / 学习记录」分类保存）。确认不再需要后可以彻底删除释放空间。</p>
         <div id="trashList" class="trash-list"><p class="empty">（空）</p></div>
         <div class="test-row">
@@ -342,7 +357,7 @@
       </section>
 
       <section class="profile-section">
-        <h4>⑤ 升级 / 退出</h4>
+        <h4>⑥ 升级 / 退出</h4>
         <p class="hint">升级走 git（需要是 git clone 安装的）；退出会关闭服务与后台浏览器进程。</p>
         <div class="test-row">
           <button class="btn tiny" id="btnBrowser">显示浏览器</button>

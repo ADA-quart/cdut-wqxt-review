@@ -1137,6 +1137,7 @@ $('btnRefresh').onclick = loadCourses;
 async function openSettings() {
   $('settingsModal').hidden = false;
   loadTrash();
+  syncComfortSettings();
   try {
     const m = await api('/md-config');
     $('mdParallel').value = String(m.parallel ?? 'auto');
@@ -1172,6 +1173,27 @@ async function pickFolderInto(inputId, hintId) {
 }
 
 $('btnSettings').onclick = openSettings;
+
+// ---------- 阅读舒适（主题 / 护眼提醒） ----------
+
+function syncComfortSettings() {
+  document.querySelectorAll('input[name="themePick"]').forEach((r) => {
+    r.checked = r.value === Comfort.theme();
+  });
+  $('eyeRemindChk').checked = Comfort.reminderOn();
+}
+
+document.querySelectorAll('input[name="themePick"]').forEach((r) => {
+  r.onchange = () => { if (r.checked) Comfort.setTheme(r.value); };
+});
+
+$('eyeRemindChk').onchange = () => {
+  Comfort.setReminder($('eyeRemindChk').checked);
+  toast($('eyeRemindChk').checked ? '护眼提醒已开启（每 20 分钟一次）' : '护眼提醒已关闭', 'ok');
+};
+
+window.addEventListener('wqppt-theme', () => { syncComfortSettings(); });
+window.addEventListener('wqppt-reminder', () => { $('eyeRemindChk').checked = Comfort.reminderOn(); });
 
 // ---------- 删除已下载（回收站） ----------
 

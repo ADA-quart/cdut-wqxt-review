@@ -103,7 +103,7 @@ body {
 
 .btn {
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--panel);
   color: var(--ink);
   border-radius: 6px;
   padding: 6px 12px;
@@ -112,11 +112,11 @@ body {
   transition: background .15s, border-color .15s;
 }
 
-.btn:hover { background: #f7f8fa; }
+.btn:hover { background: var(--hover); }
 .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
-.btn.primary:hover { background: #1746a8; }
+.btn.primary:hover { background: var(--brand-strong); }
 .btn.ghost { background: transparent; }
-.btn.danger { color: var(--err); border-color: #f0c8c6; }
+.btn.danger { color: var(--err); border-color: var(--err-line); }
 
 /* ---------- 回收站列表 ---------- */
 .trash-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
@@ -140,7 +140,7 @@ input[type="text"], input[type="password"], select {
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 14px;
-  background: #fff;
+  background: var(--panel);
   color: var(--ink);
   outline: none;
 }
@@ -196,24 +196,24 @@ select { padding: 6px 8px; font-size: 13px; }
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 10px;
-  background: #f0f1f3;
+  background: var(--panel-2);
   color: var(--ink-2);
   white-space: nowrap;
 }
 
 .badge.running { background: var(--brand-soft); color: var(--brand); }
-.badge.done { background: #e8f5ee; color: var(--ok); }
-.badge.error { background: #fdecea; color: var(--err); }
-.badge.canceled, .badge.skipped { background: #f5f0e6; color: var(--warn); }
-.badge.md.running { background: #f3edfb; color: #7c3aed; }
-.badge.llm.running { background: #eafaf3; color: #0f9d58; }
-.badge.delisted { background: #f0f1f3; color: var(--ink-3); }
+.badge.done { background: var(--ok-bg); color: var(--ok); }
+.badge.error { background: var(--err-bg); color: var(--err); }
+.badge.canceled, .badge.skipped { background: var(--warn-bg); color: var(--warn); }
+.badge.md.running { background: var(--purple-bg); color: var(--purple); }
+.badge.llm.running { background: var(--ok-bg); color: var(--ok); }
+.badge.delisted { background: var(--panel-2); color: var(--ink-3); }
 .course-item.delisted { opacity: .72; }
 
 .bar {
   height: 6px;
   border-radius: 3px;
-  background: #eceef1;
+  background: var(--panel-2);
   overflow: hidden;
   margin-top: 8px;
 }
@@ -234,7 +234,7 @@ select { padding: 6px 8px; font-size: 13px; }
   color: var(--ink-2);
 }
 
-.task-row:nth-child(odd) { background: #fafbfc; }
+.task-row:nth-child(odd) { background: var(--panel-2); }
 
 .task-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -245,7 +245,7 @@ select { padding: 6px 8px; font-size: 13px; }
 .tree { font-size: 13px; }
 .tree .dir { margin: 4px 0; }
 .tree summary { cursor: pointer; padding: 4px 6px; border-radius: 6px; }
-.tree summary:hover { background: #f7f8fa; }
+.tree summary:hover { background: var(--hover); }
 .tree .file-thumbs { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 6px 20px; }
 
 .tree .thumb {
@@ -253,7 +253,7 @@ select { padding: 6px 8px; font-size: 13px; }
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
-  background: #fafbfc;
+  background: var(--panel-2);
 }
 
 .tree .thumb img { width: 100%; display: block; }
@@ -276,7 +276,7 @@ select { padding: 6px 8px; font-size: 13px; }
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(20, 24, 30, .45);
+  background: var(--mask);
   display: grid;
   place-items: center;
   z-index: 50;
@@ -284,7 +284,7 @@ select { padding: 6px 8px; font-size: 13px; }
 }
 
 .modal {
-  background: #fff;
+  background: var(--panel);
   border-radius: 10px;
   padding: 20px;
   width: min(420px, 100%);
@@ -358,7 +358,7 @@ select { padding: 6px 8px; font-size: 13px; }
 }
 
 .toast {
-  background: #252a31;
+  background: var(--toast-bg);
   color: #fff;
   border-radius: 6px;
   padding: 10px 14px;
@@ -381,33 +381,33 @@ select { padding: 6px 8px; font-size: 13px; }
   flex-wrap: wrap;
   margin: 0 18px 10px;
   padding: 8px 14px;
-  background: var(--brand-soft, #eef4ff);
-  border: 1px solid #dbe6fb;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-line);
   border-radius: 10px;
   font-size: 12.5px;
   color: var(--ink-3);
 }
-.flow-step { padding: 3px 9px; border-radius: 999px; color: var(--ink-2); background: #fff; border: 1px solid #e3e9f5; white-space: nowrap; }
+.flow-step { padding: 3px 9px; border-radius: 999px; color: var(--ink-2); background: var(--panel); border: 1px solid var(--brand-line); white-space: nowrap; }
 .flow-step b { font-weight: 700; margin-right: 3px; }
-.flow-step.done { color: #1f7a3d; background: #eefaf1; border-color: #cde9d5; }
-.flow-step.active { color: #fff; background: var(--brand, #2f6fed); border-color: var(--brand, #2f6fed); font-weight: 600; }
-.flow-sep { color: #b9c6da; }
-.flow-hint { margin-left: auto; color: var(--brand, #2f6fed); font-weight: 600; }
+.flow-step.done { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-line); }
+.flow-step.active { color: #fff; background: var(--brand); border-color: var(--brand); font-weight: 600; }
+.flow-sep { color: var(--ink-3); }
+.flow-hint { margin-left: auto; color: var(--brand); font-weight: 600; }
 
 /* ---------- 使用说明内容 ---------- */
 .help-steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.85; color: var(--ink-2); }
 .help-steps li { margin-bottom: 8px; }
 .help-steps b { color: var(--ink); }
 .help-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.help-table th, .help-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eef1f6; vertical-align: top; line-height: 1.6; }
-.help-table th { color: var(--ink-3); font-weight: 600; background: #fafbfd; }
+.help-table th, .help-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; line-height: 1.6; }
+.help-table th { color: var(--ink-3); font-weight: 600; background: var(--panel-2); }
 .help-table td:first-child { color: var(--ink-3); white-space: nowrap; }
-.help-table code, .help-faq code { background: #f2f4f7; border-radius: 4px; padding: 0 4px; font-size: 12px; }
+.help-table code, .help-faq code { background: var(--code-bg); border-radius: 4px; padding: 0 4px; font-size: 12px; }
 .help-faq { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.85; color: var(--ink-2); }
 .help-faq li { margin-bottom: 6px; }
 
 /* ---------- 课程多选 ---------- */
-.course-pick { flex: none; width: 15px; height: 15px; margin-right: 10px; cursor: pointer; accent-color: var(--brand, #2f6fed); }
+.course-pick { flex: none; width: 15px; height: 15px; margin-right: 10px; cursor: pointer; accent-color: var(--brand); }
 .course-pick:disabled { cursor: not-allowed; opacity: .4; }
 
 /* ---------- 已下载文件：一级（课程）/ 二级（课次）明显区分 ---------- */
@@ -415,14 +415,14 @@ select { padding: 6px 8px; font-size: 13px; }
 .tree .dir.lvl-1 > summary {
   font-weight: 700;
   font-size: 13.5px;
-  color: var(--ink, #1f2329);
-  background: #f4f7fc;
-  border: 1px solid #e6ecf6;
+  color: var(--ink);
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-line);
   border-radius: 8px;
   padding: 6px 10px;
 }
-.tree .dir.lvl-1 > summary:hover { background: #eaf1fd; }
-.tree .dir.lvl-2 { margin: 2px 0 2px 14px; border-left: 2px solid #e6ecf6; padding-left: 8px; }
-.tree .dir.lvl-2 > summary { font-weight: 400; font-size: 12.5px; color: var(--ink-2, #4a5361); padding: 3px 6px; }
-.tree .dir.lvl-2 > summary:hover { background: #f7f8fa; }
+.tree .dir.lvl-1 > summary:hover { background: var(--brand-soft); }
+.tree .dir.lvl-2 { margin: 2px 0 2px 14px; border-left: 2px solid var(--brand-line); padding-left: 8px; }
+.tree .dir.lvl-2 > summary { font-weight: 400; font-size: 12.5px; color: var(--ink-2); padding: 3px 6px; }
+.tree .dir.lvl-2 > summary:hover { background: var(--hover); }
 .tree .tree-name { margin-right: 6px; }

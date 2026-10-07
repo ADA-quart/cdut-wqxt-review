@@ -1,0 +1,129 @@
+/* 清渠 · 主题系统：浅色 / 深色 / 护眼暖纸
+   在 style.css / review.css 之后加载，用 CSS 变量统一覆盖。
+   深浅色遵循"避开纯黑纯白"原则（降低极端对比），护眼为暖纸色。 */
+
+:root,
+:root[data-theme="light"] {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --panel-2: #fafbfc;
+  --hover: #f7f8fa;
+  --ink: #1f2329;
+  --ink-2: #646a73;
+  --ink-3: #8f959e;
+  --line: #e5e6eb;
+  --line-soft: #eef1f6;
+  --brand: #1a54c8;
+  --brand-2: #2f6fed;
+  --brand-strong: #1746a8;
+  --brand-soft: #eef3fd;
+  --brand-line: #dbe6fb;
+  --ok: #0f9d58;
+  --warn: #d97706;
+  --err: #d64541;
+  --ok-bg: #e8f5ee;
+  --warn-bg: #f5f0e6;
+  --err-bg: #fdecea;
+  --purple-bg: #f3edfb;
+  --purple: #7c3aed;
+  --ok-line: #cde9d5;
+  --err-line: #f0c8c6;
+  --warn-line: #f0dfb8;
+  --code-bg: #f2f4f7;
+  --toast-bg: #252a31;
+  --mask: rgba(20, 24, 30, .45);
+}
+
+:root[data-theme="dark"] {
+  --bg: #121212;
+  --panel: #1e1e1e;
+  --panel-2: #262626;
+  --hover: #2a2a2a;
+  --ink: #dddddd;
+  --ink-2: #a8a8a8;
+  --ink-3: #7d7d7d;
+  --line: #343434;
+  --line-soft: #2c2c2c;
+  --brand: #4f83e8;
+  --brand-2: #6f9df0;
+  --brand-strong: #6f9df0;
+  --brand-soft: #1b2a45;
+  --brand-line: #2c3d5e;
+  --ok: #57bf7a;
+  --warn: #e0a350;
+  --err: #ef6e6a;
+  --ok-bg: #16301f;
+  --warn-bg: #33290f;
+  --err-bg: #3a1d1c;
+  --purple-bg: #2a1f3d;
+  --purple: #b18cf0;
+  --ok-line: #24513a;
+  --err-line: #5c3535;
+  --warn-line: #5a4a20;
+  --code-bg: #2a2a2a;
+  --toast-bg: #2c2c2c;
+  --mask: rgba(0, 0, 0, .62);
+}
+
+:root[data-theme="eye"] {
+  --bg: #f5efe1;
+  --panel: #fbf7ec;
+  --panel-2: #f7f1e4;
+  --hover: #efe8d7;
+  --ink: #3a3226;
+  --ink-2: #6f6350;
+  --ink-3: #95876f;
+  --line: #e3d9c4;
+  --line-soft: #ece3d0;
+  --brand: #8a6134;
+  --brand-2: #a07845;
+  --brand-strong: #6e4c1e;
+  --brand-soft: #f2e7d2;
+  --brand-line: #dfd0b4;
+  --ok: #4f7d3f;
+  --warn: #b07a1f;
+  --err: #b5543f;
+  --ok-bg: #e7f0e0;
+  --warn-bg: #f3e7cd;
+  --err-bg: #f6e3dd;
+  --purple-bg: #ece4d4;
+  --purple: #8a6134;
+  --ok-line: #c9dcc0;
+  --err-line: #dcb9ae;
+  --warn-line: #e0cfa4;
+  --code-bg: #efe7d6;
+  --toast-bg: #3a3226;
+  --mask: rgba(46, 36, 18, .45);
+}
+
+/* ---------- 20-20-20 护眼提醒条 ---------- */
+.comfort-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 560px);
+  background: var(--toast-bg);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .28);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.comfort-bar[hidden] { display: none; }
+.comfort-bar .cb-btn {
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, .3);
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.comfort-bar .cb-btn:hover { background: rgba(255, 255, 255, .22); }
