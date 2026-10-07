@@ -54,6 +54,10 @@
 | 命令行 | `npm install && npm start` → <http://127.0.0.1:3901> | 同左 |
 | 升级 / 卸载 | `update.cmd` / `uninstall.cmd` | `bash wqppt.sh update` / `uninstall` |
 
+> 桌面壳（Electron）首次安装要从 GitHub 下载约 100MB 运行库；国内网络下载失败时，启动脚本会提示（Windows）或自动（macOS）用国内镜像修复。
+> 手动修复：Windows 设 `$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'`、macOS 用 `export` 同理，然后 `npm install`；
+> 依赖已装但仍缺运行库时执行 `npm rebuild electron`。网页版（`start.cmd`）不需要 Electron，不受影响。
+
 第一次使用走完一遍：
 
 1. **登录**：右上角「登录」，输入统一认证账号。动态防护需要真实浏览器会话，窗口默认在屏幕外，可在 设置 → 显示浏览器 唤出。

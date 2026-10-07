@@ -10,6 +10,10 @@
   uv 的 `--index-url` 只是追加索引、默认索引（PyPI）仍优先，会把 torch 装成 CPU 版，
   连带 ONNX Runtime 回落 CPU（[#1](https://github.com/ADA-quart/cdut-wqxt-review/issues/1)）；
   新增 `PYTORCH_INDEX` 环境变量，可切换南京大学 / 上海交大镜像
+- `启动复习软件.vbs` / `启动复习软件.command`：Electron 运行库缺失（postinstall 下载失败）时
+  不再只提示「请运行 npm install」（重跑无效）——Windows 弹窗可一键用国内镜像修复；
+  macOS 改为检测真实二进制，自动镜像修复、启动失败输出日志而非静默吞错
+  （[#2](https://github.com/ADA-quart/cdut-wqxt-review/issues/2)）
 
 ## [0.1.3] - 2026-10-07
 
