@@ -85,16 +85,18 @@ function resolveMdAssets(root) {
 // ---------- Markdown 渲染 ----------
 
 /**
- * 公式保护：先把 $$...$$ / $...$ 抽成占位符，再交给 markdown 解析。
+ * 公式保护：先把公式抽成占位符，再交给 markdown 解析。
+ * 支持四种分隔符：$$...$$ / \[...\]（块级）、$...$ / \(...\)（行内）。
+ * 大模型（如 DeepSeek）常输出标准 LaTeX 的 \[ \] / \( \) 写法，必须兼容。
  * 否则 LaTeX 里的下划线会被当成斜体（E_{{}_{d}} → E_{{}<em>{d}}），
  * 公式被 <em> 劈成多个文本节点，KaTeX 就匹配不到完整的 $$，只能原样显示。
  */
 function extractMathSpans(text) {
   const store = [];
-  const re = /\$\$([\s\S]+?)\$\$|\$(?!\$)(?!\s)([^$\n]+?)(?<!\s)\$(?!\$)/g;
-  const out = String(text).replace(re, (raw, disp, inline) => {
-    const display = disp !== undefined;
-    const tex = String(display ? disp : inline).trim();
+  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$(?!\$)(?!\s)([^$\n]+?)(?<!\s)\$(?!\$)|\\\(([\s\S]+?)\\\)/g;
+  const out = String(text).replace(re, (raw, d1, d2, inline1, inline2) => {
+    const display = d1 !== undefined || d2 !== undefined;
+    const tex = String(d1 ?? d2 ?? inline1 ?? inline2).trim();
     const token = '@@MATH' + store.length + '@@';
     store.push({ tex: tex, display: display, raw: raw });
     return token;
