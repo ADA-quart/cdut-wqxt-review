@@ -133,17 +133,33 @@ body.dragging { user-select: none; cursor: col-resize; }
 .md-scroll { flex: 1; overflow: auto; padding: 18px 22px 40vh; scroll-behavior: smooth; }
 .markdown { line-height: 1.75; font-size: var(--reading-font, 14.5px); max-width: 45em; }
 .markdown h1 { font-size: 1.38em; margin: 8px 0 12px; }
-.markdown h2 { font-size: 1.17em; margin: 18px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
-.markdown h3 { font-size: 1.04em; margin: 14px 0 6px; }
-.markdown p { margin: 8px 0; }
-.markdown ul, .markdown ol { margin: 6px 0; padding-left: 24px; }
-.markdown li { margin: 3px 0; }
+.markdown h2 { font-size: 1.17em; margin: 22px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.markdown h3 { font-size: 1.04em; margin: 18px 0 8px; }
+.markdown p { margin: 8px 0 14px; }
+.markdown ul, .markdown ol { margin: 8px 0 14px; padding-left: 24px; }
+.markdown li { margin: 5px 0; }
+.markdown li > p { margin: 4px 0 8px; }
 .markdown img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
 .markdown blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--brand); background: var(--brand-soft); color: var(--ink-2); border-radius: 0 6px 6px 0; }
 .markdown code { background: var(--code-bg); border-radius: 4px; padding: 0 4px; font-size: 90%; }
 .markdown pre { background: var(--hover); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; }
 .markdown table { border-collapse: collapse; margin: 8px 0; }
 .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 10px; }
+
+/* 块级公式：窄屏防溢出——长公式在容器内横向滚动（KaTeX 官方建议 overflow: auto hidden），
+   min-width: max-content 保证居中与滚动范围在超宽公式下仍正确 */
+.markdown .katex-display,
+.msg .katex-display,
+.q-back .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 2px 8px;
+  scrollbar-width: thin;
+}
+.markdown .katex-display { margin: 12px 0; }
+.katex-display > .katex { min-width: max-content; }
+.katex-display::-webkit-scrollbar { height: 6px; }
+.katex-display::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 
 .page-sec { border-top: 1px dashed transparent; padding-top: 6px; margin-top: 6px; border-radius: 6px; }
 .page-sec.active { background: var(--panel-2); border-top-color: var(--brand-soft); box-shadow: inset 3px 0 0 var(--brand); padding-left: 10px; }
@@ -673,3 +689,32 @@ li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230,
 #mdContent li.note-color-yellow,
 #mdContent li.note-color-green,
 #mdContent li.note-color-blue { border-radius: 6px; padding: 4px 8px 4px 10px; margin-left: -10px; }
+
+/* ---------- 窄屏（手机 / 平板竖屏）：更松的阅读节奏（依据手机中文阅读研究） ---------- */
+@media (max-width: 700px) {
+  .markdown { line-height: 1.8; }
+  .markdown p { margin: 10px 0 16px; }
+  .markdown li { margin: 6px 0; }
+  .markdown h2 { margin: 24px 0 10px; }
+  .markdown h3 { margin: 20px 0 8px; }
+  .markdown .katex-display { margin: 14px 0; }
+  /* 行内长公式：超宽时缩进容器内横向滚动，不撑破版面 */
+  .markdown .katex {
+    display: inline-block;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    vertical-align: middle;
+    scrollbar-width: thin;
+  }
+  .markdown .katex::-webkit-scrollbar { height: 5px; }
+  .markdown .katex::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  /* 块级公式内部恢复原结构（滚动交给 .katex-display 处理） */
+  .markdown .katex-display .katex {
+    display: block;
+    max-width: none;
+    overflow: visible;
+    vertical-align: baseline;
+  }
+  .chat-msgs { padding: 10px; }
+}
