@@ -839,6 +839,21 @@ function quoteToInput(text) {
 
 // ---------- 划词提问 ----------
 
+// App（本地模式）：显示「AI 设置」入口，并把提示文案改成 App 版
+function setupAiSettingsEntry() {
+  if (!window.QingquLocal || !window.QingquLocal.openAiSettings) return;
+  const btn = $('btnAiSettings');
+  if (btn) {
+    btn.hidden = false;
+    btn.onclick = () => window.QingquLocal.openAiSettings();
+  }
+  const hint = document.querySelector('.chat-hint');
+  if (hint) {
+    hint.innerHTML = '选中左侧笔记或对话里的文字，可「引用到提问」或让它「解释这段」。<br>'
+      + '对话使用「AI 设置」里配置的接口（OpenAI 兼容；Key 只保存在本机）。';
+  }
+}
+
 function setupSelection() {
   const menu = $('selMenu');
   let lastText = '';
@@ -2068,6 +2083,7 @@ async function markCardBadges() {
 // ---------- 启动 ----------
 
 (async function init() {
+  setupAiSettingsEntry();
   if (!dir) {
 $('mdContent').innerHTML = '<p class="empty">缺少 dir 参数，请从主界面的课次列表进入「复习」。</p>';
     return;

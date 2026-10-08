@@ -2,6 +2,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.7] - 2026-10-08
+
+### 新增
+
+- App 内 AI 对话可用：复习页「AI 对话」右上角新增「AI 设置」，填 OpenAI 兼容接口
+  （DeepSeek / 通义 / OpenAI / Ollama 等）即可在平板上提问；「本课」自动附带当前页原文，
+  「本课程 / 全库」先用本地检索找出相关片段再回答并附来源；Key 只保存在本机
+
 ## [0.1.6] - 2026-10-08
 
 ### 修复
@@ -86,6 +94,7 @@
   传到平板 / 手机 → App 内点「＋ 导入内容包」
 - 学习记录（进度、标记、对话）保存在本机
 
+[0.1.7]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.7
 [0.1.6]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.6
 [0.1.5]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.5
 [0.1.4]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.4
