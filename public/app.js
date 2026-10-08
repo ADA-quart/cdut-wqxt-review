@@ -1612,7 +1612,8 @@ function fillExportLessons() {
   const sel = $('expLesson');
   const prev = sel.value;
   sel.innerHTML = '';
-  const lessons = (node?.children || []).filter((x) => x.type === 'dir' && !x.name.startsWith('_'));
+  const lessons = (node?.children || []).filter((x) =>
+    x.type === 'dir' && !x.name.startsWith('_') && !x.name.endsWith('_assets'));
   for (const l of lessons) {
     const opt = document.createElement('option');
     opt.value = l.name;

@@ -450,7 +450,9 @@ function readTree(dir, depth) {
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
   const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|note\.work\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json|progress\.json)$/i;
   return entries
-    .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_') && !HIDDEN.test(e.name))
+    .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_')
+      && !(e.isDirectory() && e.name.endsWith('_assets'))   // 转 MD 的图形素材目录，不算课次
+      && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
     .map((e) => {
       const full = path.join(dir, e.name);
