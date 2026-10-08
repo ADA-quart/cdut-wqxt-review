@@ -252,3 +252,5 @@ npm run mobile:apk  # 构建安卓 APK（需 JDK 21 + Android SDK 36）
 [PolyForm Noncommercial License 1.0.0](LICENSE) © 2026 ADA-quart
 
 个人使用与非商业用途免费；商业用途需另行授权。
+
+第三方开源组件（地址与协议单独成表，含 PyMuPDF / JSZip 等特别说明）见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
