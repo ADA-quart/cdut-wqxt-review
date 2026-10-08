@@ -27,6 +27,8 @@ const DEFAULTS = {
   },
   // 转 MD（Pix2Text）并行任务数：1 个任务约 6~7GB 显存，按显卡容量调
   md: { parallel: 'auto' },   // 'auto' = 按显存自动，或 1~4
+  // 简化流水线：转 MD 后自动校订；生成笔记后自动复核（质量审计）
+  automation: { polishAfterMd: true, auditAfterNote: true },
 };
 
 function readFile() {
@@ -65,7 +67,35 @@ export function loadConfig() {
       profiles,
     },
     md: { ...DEFAULTS.md, ...(raw.md || {}) },
+    automation: { ...DEFAULTS.automation, ...(raw.automation || {}) },
   };
+}
+
+/** 记住的登录凭据（本机保存；password 以 base64 混淆，非加密） */
+export function loadLogin() {
+  const raw = readFile();
+  const l = raw?.login || {};
+  let password = '';
+  if (l.passwordB64) {
+    try { password = Buffer.from(String(l.passwordB64), 'base64').toString('utf8'); } catch { password = ''; }
+  }
+  return { username: String(l.username || ''), password, remember: !!l.remember };
+}
+
+/** 保存 / 清除记住的登录凭据 */
+export function saveLogin({ username, password, remember } = {}) {
+  const raw = readFile();
+  const next = { ...raw };
+  if (remember && username && password) {
+    next.login = {
+      username: String(username),
+      passwordB64: Buffer.from(String(password), 'utf8').toString('base64'),
+      remember: true,
+    };
+  } else {
+    delete next.login;
+  }
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), 'utf8');
 }
 
 /** 取某个档位（供 LLM 调用方使用） */

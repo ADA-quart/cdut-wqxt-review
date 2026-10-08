@@ -44,10 +44,19 @@
   <span class="flow-sep">→</span>
   <span class="flow-step" data-step="2"><b>②</b> 勾选课程 →「下载所选」</span>
   <span class="flow-sep">→</span>
-  <span class="flow-step" data-step="3"><b>③</b> 在「已下载文件」里点「转 MD」</span>
+  <span class="flow-step" data-step="3"><b>③</b> 点「转 MD」（完成后自动校订）</span>
   <span class="flow-sep">→</span>
   <span class="flow-step" data-step="4"><b>④</b> 点「复习」看笔记 + 自测</span>
   <span class="flow-hint" id="flowHint"></span>
+</div>
+
+<!-- 一键批处理：按今天 / 本周 / 本月范围下载课件、生成笔记、导出 -->
+<div class="rangebar" id="rangeBar">
+  <span class="rangebar-label">一键处理：</span>
+  <button class="btn" id="btnRangeDownload" title="下载所选周期内所有课程的课件">📥 下载课件 <span class="caret">▾</span></button>
+  <button class="btn" id="btnRangeNote" title="对该周期内已下载的课次执行：转 MD → 校订 → 生成笔记 → 复核">🧠 一键笔记 <span class="caret">▾</span></button>
+  <button class="btn" id="btnRangeExport" title="把该周期内的笔记 + 课件导出为内容包（给手机 / 平板）">📦 一键导出 <span class="caret">▾</span></button>
+  <span class="range-hint" id="rangeHint"></span>
 </div>
 
 <main class="layout">
@@ -117,6 +126,7 @@
       <span>密码</span>
       <input type="password" id="inpPass" placeholder="统一认证密码" autocomplete="current-password">
     </label>
+    <label class="chk"><input type="checkbox" id="inpRemember" checked> 记住登录状态（本机保存，下次自动登录）</label>
     <div class="modal-actions">
       <button class="btn ghost" id="btnCancelLogin">取消</button>
       <button class="btn primary" id="btnDoLogin">登录</button>

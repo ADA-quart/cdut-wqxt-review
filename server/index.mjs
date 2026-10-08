@@ -20,7 +20,7 @@ import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
   findPython, events as mdEvents,
 } from './mdconvert.mjs';
-import { publicConfig, saveConfig, loadConfig } from './config.mjs';
+import { publicConfig, saveConfig, loadConfig, loadLogin, saveLogin } from './config.mjs';
 import { streamChat } from './chat.mjs';
 import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
 import { autoParallel } from './gpu.mjs';
@@ -42,10 +42,115 @@ app.use(express.json({ limit: '1mb' }));
 
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+// ---------- 简化流水线：时间范围 + 任务串联 ----------
+
+/** 今天 / 本周 / 本月（本机时区）→ [起, 止]（毫秒时间戳） */
+function periodRangeMs(range) {
+  const now = new Date();
+  const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (range === 'today') {
+    return [day0.getTime(), day0.getTime() + 86400000 - 1];
+  }
+  if (range === 'week') {
+    const mondayOffset = (now.getDay() + 6) % 7; // 周一为一周开始
+    const start = new Date(day0.getTime() - mondayOffset * 86400000);
+    return [start.getTime(), start.getTime() + 7 * 86400000 - 1];
+  }
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return [start.getTime(), end.getTime() - 1];
+}
+
+/** 课次名（如 2026-09-04第7-8节）里的日期 */
+function lessonDateOf(name) {
+  const m = String(name || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** 等某个任务跑完（done / error / canceled） */
+function waitJobDone(emitter, getter, id) {
+  return new Promise((resolve) => {
+    const finishIfDone = () => {
+      const j = getter(id);
+      if (!j || ['done', 'error', 'canceled'].includes(j.status)) {
+        emitter.off('update', on);
+        resolve(j);
+        return true;
+      }
+      return false;
+    };
+    const on = (j) => { if (j && j.id === id) finishIfDone(); };
+    if (finishIfDone()) return;
+    emitter.on('update', on);
+  });
+}
+
+/** LLM 是否已配置（本地接口无需 key） */
+function llmReady() {
+  try {
+    const llm = loadConfig().llm;
+    const p = llm.profiles?.[llm.defaultMode || 'text'] || {};
+    const local = /(localhost|127\.0\.0\.1)/.test(p.baseUrl || '');
+    return Boolean(p.baseUrl && p.model && (p.apiKey || local));
+  } catch {
+    return false;
+  }
+}
+
+/** 未登录时用记住的账号自动恢复（供一键下载等主动操作使用）；返回是否已登录 */
+async function ensureLoggedIn() {
+  try {
+    const s = await checkLogin();
+    if (s.loggedIn) return true;
+  } catch { /* 继续尝试自动登录 */ }
+  const saved = loadLogin();
+  if (!saved.remember || !saved.username || !saved.password) return false;
+  try {
+    const r = await login(saved.username, saved.password);
+    return Boolean(r && r.ok);
+  } catch {
+    return false;
+  }
+}
+
+// 自动串联：转 MD 完成 → 校订；生成笔记完成 → 复核（可在 config.json 的 automation 里关闭）
+const autoPolished = new Set();
+mdEvents.on('update', (job) => {
+  if (!job || job.status !== 'done' || autoPolished.has(job.id)) return;
+  autoPolished.add(job.id);
+  try {
+    if (!loadConfig().automation.polishAfterMd) return;
+    if (!llmReady()) return;
+    createLlmJob({ op: 'polish', dir: job.dir });
+    console.log(`[auto] 转 MD 完成 → 自动校订：${job.dir}`);
+  } catch (e) {
+    console.warn('[auto] 自动校订加入失败：', e.message);
+  }
+});
+
+const autoAudited = new Set();
+llmEvents.on('update', (job) => {
+  if (!job || job.op !== 'note' || job.status !== 'done' || autoAudited.has(job.id)) return;
+  autoAudited.add(job.id);
+  try {
+    if (!loadConfig().automation.auditAfterNote) return;
+    if (!llmReady()) return;
+    createLlmJob({ op: 'audit', dir: job.dir });
+    console.log(`[auto] 生成笔记完成 → 自动复核：${job.dir}`);
+  } catch (e) {
+    console.warn('[auto] 自动复核加入失败：', e.message);
+  }
+});
+
 // ---------- 状态与登录 ----------
 
 app.get('/api/status', asyncRoute(async (_req, res) => {
   const status = { ...edgeStatus(), site: WQ_BASE };
+  const saved = loadLogin();
+  status.savedLogin = saved.remember && Boolean(saved.username && saved.password);
+  status.savedUser = status.savedLogin ? saved.username : '';
   try {
     const s = await checkLogin();
     Object.assign(status, s);
@@ -57,18 +162,33 @@ app.get('/api/status', asyncRoute(async (_req, res) => {
 }));
 
 app.post('/api/login', asyncRoute(async (req, res) => {
-  const { username, password } = req.body || {};
+  const { username, password, remember } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: '请输入学号和密码' });
   // 登录可能需要输验证码 → 先把 Edge 窗口唤到屏幕上
   await showBrowserWindow();
   const result = await login(username, password);
   if (!result.ok) return res.status(401).json({ error: result.error || '登录失败' });
+  if (remember === true) {
+    saveLogin({ username, password, remember: true });
+  }
+  res.json(result);
+}));
+
+/** 用记住的账号密码自动恢复登录（会话过期时用；可能需要验证码 → 失败时回退手动登录） */
+app.post('/api/auto-login', asyncRoute(async (_req, res) => {
+  const saved = loadLogin();
+  if (!saved.remember || !saved.username || !saved.password) {
+    return res.status(400).json({ error: '没有保存的登录信息' });
+  }
+  const result = await login(saved.username, saved.password);
+  if (!result.ok) return res.status(401).json({ error: result.error || '自动登录失败（可能需要验证码，请手动登录）' });
   res.json(result);
 }));
 
 app.post('/api/logout', asyncRoute(async (_req, res) => {
   const page = await getWorkPage();
   await page.goto(WQ_BASE + '/logout', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+  saveLogin({ remember: false });   // 退出即清除记住的登录，避免马上又被自动登回来
   res.json({ ok: true });
 }));
 
@@ -139,6 +259,48 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
   if (!job) return res.status(404).json({ error: '任务不存在' });
   res.json({ job });
 });
+
+/** 一键下载：今天 / 本周 / 本月 的课件（跨课程按课次开始时间筛，跳过已下架课程） */
+app.post('/api/download-range', asyncRoute(async (req, res) => {
+  const range = ['today', 'week', 'month'].includes(req.body?.range) ? req.body.range : 'week';
+  const [fromMs, toMs] = periodRangeMs(range);
+  const dryRun = req.body?.dryRun === true;
+  const termId = req.body?.termId;
+
+  if (!(await ensureLoggedIn())) {
+    return res.status(401).json({ error: '未登录：请先登录统一认证（勾选「记住登录状态」后会自动恢复）' });
+  }
+  const courses = await listMyCourses(termId != null && termId !== '' ? { termId } : {});
+  const matched = [];
+  for (const c of courses) {
+    if (c.delisted) continue; // 已下架课程没有课件
+    let subs = [];
+    try { subs = await listCourseSubs(String(c.courseId)); } catch { /* 单门课失败跳过 */ }
+    for (const s of subs) {
+      const t = Number(s.startAt) * 1000;
+      if (!t || t < fromMs || t > toMs) continue;
+      matched.push({
+        courseId: String(c.courseId), course: c.title || '',
+        subId: s.subId, title: s.title || '',
+        startAt: Number(s.startAt) || 0,
+      });
+    }
+  }
+  matched.sort((a, b) => a.startAt - b.startAt);
+
+  if (dryRun) return res.json({ range, from: fromMs, to: toMs, matched });
+  const jobs = [];
+  const failed = [];
+  for (const m of matched) {
+    try {
+      const job = await createJob({ mode: 'sub', courseId: m.courseId, subId: m.subId });
+      jobs.push({ id: job.id, course: m.course, title: m.title });
+    } catch (e) {
+      failed.push({ ...m, error: e.message });
+    }
+  }
+  res.json({ range, matched: matched.length, queued: jobs.length, jobs, failed });
+}));
 
 // ---------- PPT → Markdown 转换 ----------
 
@@ -407,6 +569,88 @@ app.post('/api/llm-jobs/:id/cancel', (req, res) => {
   if (!job) return res.status(404).json({ error: '任务不存在' });
   res.json({ job });
 });
+
+// ---------- 一键笔记（今天 / 本周 / 本月）：转 MD → 校订 → 生成笔记 → 复核 ----------
+
+const notePipelineQueue = [];
+let notePipelineRunning = false;
+
+async function runLessonPipeline(rel, needMd) {
+  if (needMd) {
+    const md = createMdJob({ dir: rel });
+    const r = await waitJobDone(mdEvents, getMdJob, md.id);
+    if (!r || r.status !== 'done') throw new Error(`转 MD ${r ? r.status : '中断'}${r?.error ? '：' + r.error : ''}`);
+  }
+  if (!llmReady()) return;
+  const polish = createLlmJob({ op: 'polish', dir: rel });
+  const p = await waitJobDone(llmEvents, getLlmJob, polish.id);
+  if (!p || p.status !== 'done') throw new Error(`校订 ${p ? p.status : '中断'}${p?.error ? '：' + p.error : ''}`);
+  const note = createLlmJob({ op: 'note', dir: rel });
+  const n = await waitJobDone(llmEvents, getLlmJob, note.id);
+  if (!n || n.status !== 'done') throw new Error(`生成笔记 ${n ? n.status : '中断'}${n?.error ? '：' + n.error : ''}`);
+  const audit = createLlmJob({ op: 'audit', dir: rel });
+  const a = await waitJobDone(llmEvents, getLlmJob, audit.id);
+  if (!a || a.status !== 'done') throw new Error(`复核 ${a ? a.status : '中断'}${a?.error ? '：' + a.error : ''}`);
+}
+
+async function pumpNotePipeline() {
+  if (notePipelineRunning) return;
+  notePipelineRunning = true;
+  try {
+    while (notePipelineQueue.length) {
+      const item = notePipelineQueue.shift();
+      try {
+        console.log(`[pipeline] 处理：${item.rel}${item.needMd ? '（含转 MD）' : ''}`);
+        await runLessonPipeline(item.rel, item.needMd);
+      } catch (e) {
+        console.warn(`[pipeline] ${item.rel} 失败：`, e.message);
+      }
+    }
+  } finally {
+    notePipelineRunning = false;
+  }
+}
+
+app.post('/api/note-range', asyncRoute(async (req, res) => {
+  const range = ['today', 'week', 'month'].includes(req.body?.range) ? req.body.range : 'week';
+  const force = req.body?.force === true;
+  const dryRun = req.body?.dryRun === true;
+  const [fromMs, toMs] = periodRangeMs(range);
+  if (!llmReady()) return res.status(400).json({ error: '还没配置 LLM：先在设置里填好接口和 Key' });
+
+  const plan = [];
+  for (const course of listCourses()) {
+    let entries = [];
+    try { entries = fs.readdirSync(path.join(DOWNLOAD_DIR, course), { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('_') || e.name.endsWith('_assets')) continue;
+      const d = lessonDateOf(e.name);
+      if (!d) continue;
+      const t = d.getTime();
+      if (t < fromMs || t > toMs) continue;
+      const rel = `${course}/${e.name}`;
+      const mdAbs = path.join(NOTES_DIR, `${rel}.md`);
+      const noteAbs = path.join(NOTES_DIR, `${rel}.note.md`);
+      const hasMd = fs.existsSync(mdAbs);
+      const hasNote = fs.existsSync(noteAbs);
+      let imgs = [];
+      try { imgs = fs.readdirSync(path.join(DOWNLOAD_DIR, rel), { withFileTypes: true }).filter((f) => f.isFile() && /\.(jpe?g|png|webp|bmp)$/i.test(f.name)); } catch { /* 无图片目录 */ }
+      if (!hasMd && !imgs.length) { plan.push({ rel, action: 'skip-no-images' }); continue; }
+      if (!force && hasMd && hasNote) {
+        try {
+          if (fs.statSync(noteAbs).mtimeMs >= fs.statSync(mdAbs).mtimeMs) { plan.push({ rel, action: 'skip-fresh' }); continue; }
+        } catch { /* 取时间失败 → 当作需要重做 */ }
+      }
+      plan.push({ rel, action: hasMd ? 'note' : 'full', needMd: !hasMd });
+    }
+  }
+
+  const todo = plan.filter((p) => p.action === 'full' || p.action === 'note');
+  if (dryRun) return res.json({ range, queued: todo.length, skipped: plan.length - todo.length, plan });
+  notePipelineQueue.push(...todo);
+  void pumpNotePipeline();
+  res.json({ range, queued: todo.length, skipped: plan.length - todo.length, plan });
+}));
 
 // ---------- SSE 进度 ----------
 
@@ -1019,6 +1263,14 @@ app.get('/api/export', asyncRoute(async (req, res) => {
   const stateMode = type === 'state';
   const courseFilter = String(req.query.course || '').trim();
   const lessonFilter = String(req.query.lesson || '').trim();
+  const parseDay = (s, endOfDay) => {
+    const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${endOfDay ? '23:59:59' : '00:00:00'}`);
+    return Number.isNaN(d.getTime()) ? null : d.getTime();
+  };
+  const rangeFrom = parseDay(req.query.from, false);
+  const rangeTo = parseDay(req.query.to, true);
   const includeImages = contentMode ? req.query.images !== '0' : (!stateMode && req.query.images === '1');
   const includePdf = !contentMode && !stateMode && req.query.pdf !== '0';
   const includeAssets = !contentMode && !stateMode && req.query.assets !== '0';
@@ -1037,12 +1289,15 @@ app.get('/api/export', asyncRoute(async (req, res) => {
     const courseInfo = { name: course, lessons: [] };
     let any = false;
 
-    // 课程索引 / 知识链（仅内容与全量包）
-    if (!stateMode && addFileToZip(zip, path.join(NOTES_DIR, course, `${course}.md`), `notes/${course}/${course}.md`)) any = true;
-    if (!stateMode && addFileToZip(zip, path.join(NOTES_DIR, '知识链.md'), 'notes/知识链.md')) any = true;
-
     for (const lesson of lessons) {
       if (lessonFilter && lesson !== lessonFilter) continue;
+      if (rangeFrom != null || rangeTo != null) {
+        const d = lessonDateOf(lesson);
+        if (!d) continue;
+        const t = d.getTime();
+        if (rangeFrom != null && t < rangeFrom) continue;
+        if (rangeTo != null && t > rangeTo) continue;
+      }
       const rel = `${course}/${lesson}`;
       const mdAbs = mdPathOf(course, lesson);
       const noteAbs = path.join(NOTES_DIR, `${rel}.note.md`);
@@ -1150,6 +1405,11 @@ app.get('/api/export', asyncRoute(async (req, res) => {
       courseInfo.lessons.push(info);
       counts.lessons++;
       any = true;
+    }
+    // 课程索引 / 知识链：只有课程里真的收了课次才带（按时间范围导出时不带空课程）
+    if (any && !stateMode) {
+      addFileToZip(zip, path.join(NOTES_DIR, course, `${course}.md`), `notes/${course}/${course}.md`);
+      addFileToZip(zip, path.join(NOTES_DIR, '知识链.md'), 'notes/知识链.md');
     }
     if (any) { courses.push(courseInfo); counts.courses++; }
   }

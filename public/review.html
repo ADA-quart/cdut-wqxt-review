@@ -31,9 +31,7 @@
       <input id="searchInput" class="search-input" type="search" placeholder="全库搜索 Ctrl+K" autocomplete="off">
       <div class="search-results" id="searchResults" hidden></div>
     </div>
-    <button class="btn" id="btnPolish" title="一次完成两步修订：① OCR 错字纠错（备份 .ocr-backup.md）② 修复 KaTeX 解析不了的公式（备份 .math-backup.md）">校订 md</button>
-    <button class="btn primary" id="btnMakeNote" title="用 AI 把原文整理成带页码引用的复习笔记（左栏显示的就是它）">生成笔记</button>
-    <button class="btn" id="btnAudit" title="检查笔记质量：①有没有页漏进笔记（本地检查，不花钱）②逐条和课件原文核对是否一致③把与原文不符的表述自动改对（AI 自己的补充内容保留；原版备份 .note-backup.md）（调用 AI，约 1-2 分钟）">质量审计</button>
+    <button class="btn primary" id="btnMakeNote" title="用 AI 把原文整理成带页码引用的复习笔记；生成后自动做质量复核（转 MD 后会自动校订，无需手动）">生成笔记</button>
     <button class="btn" id="btnQueue" title="复习队列（间隔重复）">复习<span class="badge" id="dueBadge" hidden>0</span></button>
     <button class="btn primary" id="btnChain">知识链</button>
     <button class="btn" id="btnGuide" title="这一页怎么看">❓ 指南</button>
@@ -41,6 +39,8 @@
     <div class="more-wrap">
       <button class="btn" id="btnMore" title="更多操作：笔记 PDF / 复制 / 下载 / 标签 / 图谱">⋯ 更多</button>
       <div class="more-menu" id="moreMenu" hidden>
+        <button class="btn tiny" id="btnPolish" title="高级：重新做一遍 OCR 错字纠错 + 公式修复（正常流程会在转 MD 后自动执行；备份 .ocr-backup.md / .math-backup.md）">重新校订</button>
+        <button class="btn tiny" id="btnAudit" title="高级：重新做一遍质量复核（正常流程会在生成笔记后自动执行；原版备份 .note-backup.md）">重新复核</button>
         <button class="btn tiny" id="btnNotePdf" title="把当前笔记渲染成 A4 PDF（首次生成，之后缓存秒开；保存在课次旁的 .note.pdf）">笔记 PDF</button>
         <button class="btn tiny" id="btnCopyMd">复制 Markdown</button>
         <a class="btn tiny" id="linkDownloadMd" download>下载 md</a>
@@ -178,7 +178,7 @@
       <button class="btn tiny" id="btnCloseAudit">×</button>
     </div>
   </div>
-  <div class="drawer-body" id="auditBody"><p class="empty">还没有审计结果。点顶部「质量审计」开始。</p></div>
+  <div class="drawer-body" id="auditBody"><p class="empty">还没有审计结果。生成笔记后会自动复核，也可到「⋯ 更多 → 重新复核」手动触发。</p></div>
 </aside>
 
 <aside class="drawer" id="tagsDrawer" hidden>
@@ -248,8 +248,8 @@
           <li><b>标签</b>：把笔记里写的 <code>#标签</code> 汇总起来。</li>
           <li><b>图谱</b>：知识链的可视化图。</li>
           <li><b>复习</b>：到期卡片列表（简化的间隔重复，四个按钮决定下次什么时候再出现）。</li>
-          <li><b>校订 md</b>：一次跑完「OCR 错字纠错 + 修复解析不了的公式」，分别备份 <code>.ocr-backup.md</code> / <code>.math-backup.md</code>。</li>
-          <li><b>⋯ 更多</b>：笔记 PDF、复制 / 下载 Markdown、标签、图谱收在这里；看原始文件用左栏「原文 md」。</li>
+          <li><b>自动流水线</b>：转 MD 完成后会自动「校订」（OCR 错字 + 公式修复）；生成笔记后会自动「复核」（质量审计）。要重跑，去「⋯ 更多 → 重新校订 / 重新复核」。</li>
+          <li><b>⋯ 更多</b>：重新校订 / 重新复核、笔记 PDF、复制 / 下载 Markdown、标签、图谱收在这里；看原始文件用左栏「原文 md」。</li>
         </ul>
       </section>
       <section class="guide-sec">

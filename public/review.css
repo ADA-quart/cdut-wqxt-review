@@ -720,6 +720,8 @@ li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230,
 .local-app .topbar #btnChain,
 .local-app .topbar #btnGuide,
 .local-app .topbar .search-wrap { display: none; }
+.local-app .more-menu #btnPolish,
+.local-app .more-menu #btnAudit,
 .local-app .more-menu #btnNotePdf,
 .local-app .more-menu #btnGraph,
 .local-app .more-menu #btnTags { display: none; }

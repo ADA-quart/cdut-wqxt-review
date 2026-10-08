@@ -62,6 +62,18 @@ function pct(done, total) {
 async function refreshStatus() {
   try {
     const s = await api('/status');
+    // 记住过账号 → 会话过期时自动恢复登录（每次页面加载只试一次，失败回退手动登录）
+    if (!s.loggedIn && s.savedLogin && !state.autoLoginTried) {
+      state.autoLoginTried = true;
+      $('statusText').textContent = '正在自动登录…';
+      try {
+        const r = await api('/auto-login', { method: 'POST' });
+        toast('已自动登录：' + (r.account || s.savedUser || ''), 'ok');
+        return await refreshStatus();
+      } catch (e) {
+        $('statusText').textContent = '未登录（自动登录失败，请手动登录）';
+      }
+    }
     state.loggedIn = !!s.loggedIn;
     $('statusDot').className = 'dot ' + (s.loggedIn ? 'online' : 'offline');
     $('statusText').textContent = s.loggedIn
@@ -798,28 +810,6 @@ async function batchNoteCourse(courseNode, btn) {
   }
 }
 
-/** 批量校订：对已转 MD 的课次提交 polish 任务（纠错 + 修公式，队列串行） */
-async function batchPolishCourse(courseNode, btn) {
-  const subs = courseLessons(courseNode).filter((c) => c.hasMd);
-  if (!subs.length) { toast('先转 MD，再校订', 'err'); return; }
-  const mode = state.llmConfig?.defaultMode || 'text';
-  const modeLabel = LLM_FIELDS[mode]?.label || mode;
-  if (!confirm(`对「${courseNode.name}」已转 MD 的 ${subs.length} 个课次做校订？\n步骤：① OCR 错字纠错 ② 公式修复（调用 AI，模式：${modeLabel}，队列串行）\n原文会先备份为 .ocr-backup.md / .math-backup.md，随时可找回。`)) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  let ok = 0;
-  try {
-    for (const sub of subs) {
-      btn.textContent = `提交 ${ok + 1}/${subs.length}…`;
-      try { await api('/llm-jobs', { method: 'POST', body: { op: 'polish', dir: sub.rel, mode } }); ok += 1; } catch { /* 跳过 */ }
-    }
-    toast(`已提交 ${ok} 个校订任务（队列串行执行，进度见任务卡片）`, 'ok');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
 async function loadFiles() {
   const box = $('fileTree');
   try {
@@ -884,8 +874,7 @@ function renderTreeLevel(nodes, level) {
         };
         mk('批量清洗', '对这门课所有已下载课次依次做去重预检（串行，每节约几十秒）', batchCleanCourse);
         mk('批量转 MD', '把这门课里还没转过的课次批量加入转换队列（已转的自动跳过）', batchMdCourse);
-        mk('批量校订', '对已转 MD 的课次依次纠错 + 修公式（队列串行；原文自动备份）', batchPolishCourse);
-        mk('批量生成笔记', '对所有已转 MD 的课次生成深度笔记（队列串行；已有笔记走整理稿缓存）', batchNoteCourse);
+        mk('批量生成笔记', '对所有已转 MD 的课次生成深度笔记（转 MD 后自动校订；生成后自动复核；队列串行）', batchNoteCourse);
       }
       // 目录内直接含图片（= 一个课次）→ 提供「转 Markdown」
       const kids = node.children || [];
@@ -1083,12 +1072,13 @@ $('btnCancelLogin').onclick = () => { $('loginModal').hidden = true; };
 $('btnDoLogin').onclick = async () => {
   const username = $('inpUser').value.trim();
   const password = $('inpPass').value;
+  const remember = $('inpRemember') ? $('inpRemember').checked : true;
   if (!username || !password) return toast('请填写学号和密码', 'err');
   const btn = $('btnDoLogin');
   btn.disabled = true;
   btn.textContent = '登录中…';
   try {
-    const r = await api('/login', { method: 'POST', body: { username, password } });
+    const r = await api('/login', { method: 'POST', body: { username, password, remember } });
     $('loginModal').hidden = true;
     toast('登录成功：' + (r.account || username), 'ok');
     // 登录完成，把窗口挪回屏幕外
@@ -1665,6 +1655,126 @@ $('btnExport').onclick = () => {
     $('exportHint').className = 'test-result ok';
   }, 1500);
 };
+
+// ---------- 一键批处理（今天 / 本周 / 本月） ----------
+
+const RANGE_LABEL = { today: '今天', week: '本周', month: '本月' };
+
+/** 客户端的周期起止（YYYY-MM-DD，和服务器端口径一致：周一为一周开始） */
+function rangeDates(range) {
+  const now = new Date();
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (range === 'today') return [fmt(day0), fmt(day0)];
+  if (range === 'week') {
+    const off = (now.getDay() + 6) % 7;
+    const mon = new Date(day0.getTime() - off * 86400000);
+    const sun = new Date(mon.getTime() + 6 * 86400000);
+    return [fmt(mon), fmt(sun)];
+  }
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return [fmt(first), fmt(last)];
+}
+
+function rangeHint(text, cls) {
+  const el = $('rangeHint');
+  el.textContent = text || '';
+  el.className = 'range-hint' + (cls ? ' test-result ' + cls : '');
+}
+
+/** 给按钮挂一个「今天 / 本周 / 本月」小菜单 */
+function makeRangeMenu(btn, onPick) {
+  if (!btn) return;
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const old = document.getElementById('rangeMenu');
+    const sameOwner = old && old.dataset.owner === btn.id;
+    if (old) old.remove();
+    if (sameOwner) return;
+    const menu = document.createElement('div');
+    menu.className = 'range-menu';
+    menu.id = 'rangeMenu';
+    menu.dataset.owner = btn.id;
+    for (const r of ['today', 'week', 'month']) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = RANGE_LABEL[r];
+      b.onclick = () => { menu.remove(); onPick(r); };
+      menu.appendChild(b);
+    }
+    document.body.appendChild(menu);
+    const rect = btn.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - 140, rect.left)) + 'px';
+    menu.style.top = (rect.bottom + 6) + 'px';
+  };
+}
+
+document.addEventListener('click', () => {
+  const m = document.getElementById('rangeMenu');
+  if (m) m.remove();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const m = document.getElementById('rangeMenu');
+  if (m) m.remove();
+});
+
+// 下载：今天 / 本周 / 本月 的课件（服务端跨课程检索课次并加入下载队列）
+makeRangeMenu($('btnRangeDownload'), async (range) => {
+  const btn = $('btnRangeDownload');
+  const label = RANGE_LABEL[range];
+  btn.disabled = true;
+  rangeHint(`正在检索「${label}」的课次…`);
+  try {
+    const r = await api('/download-range', { method: 'POST', body: { range, termId: state.termId } });
+    if (!r.matched) {
+      rangeHint(`「${label}」没有找到可下载的课次`);
+    } else {
+      rangeHint(`「${label}」匹配 ${r.matched} 个课次，已加入 ${r.queued} 个下载任务${r.failed?.length ? `（${r.failed.length} 个失败）` : ''}`);
+      if (r.queued) toast(`已加入 ${r.queued} 个下载任务（进度见下方任务列表）`, 'ok');
+    }
+  } catch (e) {
+    rangeHint('下载失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// 一键笔记：转 MD → 校订 → 生成笔记 → 复核（服务端逐个课次串行执行）
+makeRangeMenu($('btnRangeNote'), async (range) => {
+  const label = RANGE_LABEL[range];
+  if (!confirm(`对「${label}」内已下载的课次执行全流程？\n转 MD → 校订 → 生成笔记 → 复核（调用 AI；已有且未过期的笔记会自动跳过）`)) return;
+  const btn = $('btnRangeNote');
+  btn.disabled = true;
+  rangeHint(`正在排队「${label}」的笔记流程…`);
+  try {
+    const r = await api('/note-range', { method: 'POST', body: { range } });
+    if (r.queued) {
+      rangeHint(`「${label}」已排队 ${r.queued} 个课次（跳过 ${r.skipped} 个），在下方任务列表逐个执行`);
+      toast(`已排队 ${r.queued} 个课次的笔记流程`, 'ok');
+    } else {
+      rangeHint(`「${label}」没有需要处理的课次（都已是最新）`);
+    }
+  } catch (e) {
+    rangeHint('排队失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// 一键导出：把该周期的笔记 + 课件图打包成内容包
+makeRangeMenu($('btnRangeExport'), (range) => {
+  const [from, to] = rangeDates(range);
+  const qp = new URLSearchParams({ type: 'content', images: '1', from, to });
+  const a = document.createElement('a');
+  a.href = '/api/export?' + qp.toString();
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  rangeHint(`正在导出「${RANGE_LABEL[range]}」（${from} ~ ${to}）的内容包…`);
+});
 
 $('btnImport').onclick = async () => {
   const file = $('impFile').files && $('impFile').files[0];
