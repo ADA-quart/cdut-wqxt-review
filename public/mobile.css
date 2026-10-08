@@ -63,6 +63,12 @@ main { flex: 1; padding: 18px; max-width: 1280px; margin: 0 auto; }
 }
 .foot .btn.small { color: var(--ink-2); }
 .foot .btn.small:disabled { opacity: .55; cursor: default; }
+.foot-links { display: inline-flex; align-items: center; gap: 12px; }
+.linkbtn {
+  color: var(--ink-3); font-size: 12.5px; text-decoration: none;
+  border-bottom: 1px dashed var(--line); padding-bottom: 1px;
+}
+.linkbtn:hover { color: var(--brand); border-color: var(--brand); }
 /* 操作结果浮层（检查更新等） */
 .toast {
   position: fixed; left: 50%; bottom: calc(76px + var(--safe-area-inset-bottom, 0px));

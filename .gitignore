@@ -11,3 +11,4 @@ run/
 downloads-backup-*/
 tmp/
 public/vendor/
+public/third-party-notices.txt

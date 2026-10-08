@@ -30,3 +30,15 @@ for (const [src, dst] of jobs) {
   }
   console.log('[sync-mobile] synced', dst);
 }
+
+// 第三方组件声明：随 App 一起分发（MIT 等许可要求随分发保留版权声明）
+{
+  const src = path.join(ROOT, 'THIRD-PARTY-NOTICES.md');
+  const dst = path.join(ROOT, 'public/third-party-notices.txt');
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, dst);
+    console.log('[sync-mobile] synced public/third-party-notices.txt');
+  } else {
+    console.warn('[sync-mobile] 缺少 THIRD-PARTY-NOTICES.md');
+  }
+}
