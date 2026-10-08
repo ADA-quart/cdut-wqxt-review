@@ -17,6 +17,156 @@
 
   document.documentElement.classList.add('local-app');
 
+  // ---------- 应用内打开：不把系统浏览器拉进任务栈 ----------
+  // 安卓 WebView 里，window.open / 指向外站的链接都会被 Capacitor 交给系统浏览器（Chrome），
+  // 任务栈里会多出一个浏览器任务——退出 App 时就会落回浏览器界面。
+  // App 内统一拦截：本地笔记 → 对应课次的复习页；外部链接 → 应用内小面板（复制链接）。
+  if (NATIVE) {
+    var isExternalUrl = function (u) {
+      return /^https?:\/\//i.test(u) && !/^https?:\/\/(localhost|127\.0\.0\.1)([:/]|$)/i.test(u);
+    };
+
+    var injectSheetStyle = function () {
+      if (document.getElementById('qzSheetStyle')) return;
+      var css = ''
+        + '.qz-mask{position:fixed;inset:0;background:var(--mask,rgba(12,16,22,.5));z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}'
+        + '.qz-sheet{background:var(--panel,#fff);color:var(--ink,#222);border-radius:14px;max-width:min(560px,92vw);width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 18px 50px rgba(15,22,36,.3)}'
+        + '.qz-sheet-head{padding:12px 16px;font-weight:600;border-bottom:1px solid var(--line,#e3e6ea);display:flex;justify-content:space-between;align-items:center;gap:10px}'
+        + '.qz-sheet-body{padding:14px 16px;overflow:auto;font-size:13.5px;line-height:1.7;word-break:break-all}'
+        + '.qz-sheet-body pre{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.7;margin:0}'
+        + '.qz-sheet-acts{padding:10px 16px;border-top:1px solid var(--line,#e3e6ea);display:flex;justify-content:flex-end;gap:8px}'
+        + '.qz-sheet .btn{border:1px solid var(--line,#d8dce1);background:var(--panel,#fff);color:var(--ink,#222);border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer}'
+        + '.qz-sheet .btn.primary{background:var(--brand,#2f6bff);border-color:var(--brand,#2f6bff);color:#fff}';
+      var st = document.createElement('style');
+      st.id = 'qzSheetStyle';
+      st.textContent = css;
+      document.head.appendChild(st);
+    };
+
+    // 通用小面板：actions = [{text, primary, onClick}]
+    var showSheet = function (title, bodyEl, actions) {
+      injectSheetStyle();
+      var mask = document.createElement('div');
+      mask.className = 'qz-mask';
+      mask.id = 'qzSheet';
+      var sheet = document.createElement('div');
+      sheet.className = 'qz-sheet';
+      var head = document.createElement('div');
+      head.className = 'qz-sheet-head';
+      var t = document.createElement('span');
+      t.textContent = title;
+      var x = document.createElement('button');
+      x.className = 'btn';
+      x.style.padding = '2px 10px';
+      x.textContent = '✕';
+      head.appendChild(t);
+      head.appendChild(x);
+      var body = document.createElement('div');
+      body.className = 'qz-sheet-body';
+      if (bodyEl) body.appendChild(bodyEl);
+      var acts = document.createElement('div');
+      acts.className = 'qz-sheet-acts';
+      var close = function () { mask.remove(); };
+      x.onclick = close;
+      mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
+      (actions || []).forEach(function (a) {
+        var b = document.createElement('button');
+        b.className = 'btn' + (a.primary ? ' primary' : '');
+        b.textContent = a.text;
+        b.onclick = function () { a.onClick ? a.onClick(close) : close(); };
+        acts.appendChild(b);
+      });
+      var plain = document.createElement('button');
+      plain.className = 'btn';
+      plain.textContent = '关闭';
+      plain.onclick = close;
+      acts.appendChild(plain);
+      sheet.appendChild(head);
+      sheet.appendChild(body);
+      sheet.appendChild(acts);
+      mask.appendChild(sheet);
+      document.body.appendChild(mask);
+    };
+
+    var showNotePreview = function (rel, url) {
+      fetch(url).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      }).then(function (text) {
+        var pre = document.createElement('pre');
+        pre.textContent = text;
+        showSheet(rel, pre, []);
+      }).catch(function () {
+        showSheet(rel, document.createTextNode('读取失败：' + url), []);
+      });
+    };
+
+    var showLinkSheet = function (u) {
+      var wrap = document.createElement('div');
+      var p = document.createElement('p');
+      p.style.margin = '0 0 8px';
+      p.textContent = 'App 内不打开浏览器（会把浏览器任务留在后台）。链接如下，可复制后自行前往：';
+      var code = document.createElement('div');
+      code.style.userSelect = 'all';
+      code.textContent = u;
+      wrap.appendChild(p);
+      wrap.appendChild(code);
+      showSheet('外部链接', wrap, [{
+        text: '复制链接',
+        primary: true,
+        onClick: function (close) {
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(u).then(close).catch(close);
+              return;
+            }
+          } catch (e) { /* 回退手选 */ }
+          close();
+        },
+      }]);
+    };
+
+    var openAppUrl = function (u) {
+      u = String(u || '').trim();
+      if (!u) return;
+      var m = u.match(/^(?:https?:\/\/localhost)?\/notes\/(.+?)\.md(?:[?#].*)?$/i);
+      if (m) {
+        var rel = m[1];
+        try { rel = decodeURIComponent(rel); } catch (e) { /* 忽略 */ }
+        var parts = rel.split('/').filter(Boolean);
+        if (parts.length >= 2 && parts[parts.length - 1] !== parts[parts.length - 2]) {
+          location.href = 'review.html?dir=' + encodeURIComponent(rel);
+        } else {
+          showNotePreview(rel, '/notes/' + rel.split('/').map(encodeURIComponent).join('/') + '.md');
+        }
+        return;
+      }
+      if (isExternalUrl(u)) { showLinkSheet(u); return; }
+      location.href = u;
+    };
+
+    try {
+      window.open = function (url) {
+        if (url) openAppUrl(url);
+        return null;
+      };
+    } catch (e) { /* 忽略 */ }
+
+    // 捕获阶段拦截外链与笔记链接（含 target=_blank）
+    document.addEventListener('click', function (e) {
+      var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+      if (!a) return;
+      var href = a.getAttribute('href') || '';
+      if (!href || href.charAt(0) === '#') return;
+      var abs = a.href || href;
+      if (/^\/notes\//i.test(href) || isExternalUrl(abs)) {
+        e.preventDefault();
+        e.stopPropagation();
+        openAppUrl(abs);
+      }
+    }, true);
+  }
+
   // ---------- 安卓返回手势 / 返回键 ----------
   // @capacitor/app 注册的返回回调在「无 JS 监听者且 WebView 无历史可退」时什么都不做，
   // 会把返回事件吞掉（根页面返回手势退不回桌面，v0.1.1 起引入）。

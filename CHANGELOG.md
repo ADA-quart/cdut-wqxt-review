@@ -2,6 +2,13 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.6] - 2026-10-08
+
+### 修复
+
+- App 内点击外部链接不再调起系统浏览器：此前会在任务栈里留下浏览器任务，退出 App 时落回浏览器界面；
+  现在本地笔记链接直接跳对应课次的复习页，外部链接改用应用内小面板展示（可复制链接）
+
 ## [0.1.5] - 2026-10-08
 
 ### 修复
@@ -79,6 +86,7 @@
   传到平板 / 手机 → App 内点「＋ 导入内容包」
 - 学习记录（进度、标记、对话）保存在本机
 
+[0.1.6]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.6
 [0.1.5]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.5
 [0.1.4]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.4
 [0.1.3]: https://github.com/ADA-quart/cdut-wqxt-review/releases/tag/v0.1.3
