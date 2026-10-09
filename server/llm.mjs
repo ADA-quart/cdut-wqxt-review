@@ -550,6 +550,25 @@ function extractBlock(text, marker) {
 }
 
 /** 替换/插入带标记的块；block 为 null 时移除 */
+/**
+ * 事务通知块可能为空：模型有时仍会写出「（无）」的标题，
+ * 这里剥掉整块，免得笔记顶上挂一个空标题。
+ */
+function stripEmptyNotice(text) {
+  const lines = String(text).split('\n');
+  const start = lines.findIndex((l) => /^##\s*(📌)?\s*事务通知/.test(l.trim()));
+  if (start === -1) return text;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^##\s/.test(lines[i].trim())) { end = i; break; }
+  }
+  const body = lines.slice(start + 1, end).join('\n').replace(/^[-•\s]+/gm, '').trim();
+  const empty = !body || /^(（?\s*(无|暂无|没有|无通知|无事务性通知)[^）]{0,12}）?[。.]?)$/.test(body);
+  if (!empty) return text;
+  lines.splice(start, end - start);
+  return lines.join('\n').replace(/^\n+/, '').trim();
+}
+
 function upsertBlock(text, marker, block) {
   const re = new RegExp(`<!-- ${marker}:start -->[\\s\\S]*?<!-- ${marker}:end -->\\n?`);
   if (!block) return text.replace(re, '');
@@ -742,7 +761,11 @@ async function runNote(job) {
 6) 每条关键内容末尾标注来源页码，格式 [[${lessonName}.pdf#page=N|N]]（N 必须来自上方「[第 N 页]」）；
 7) 【老师讲解】是课堂录音的语音识别结果，可能有同音错字、口语和废话：**理解语义后再整理**，
    不要照抄；它讲清了课件没写的内容（尤其是课件只有一张图时）就补进来，与课件冲突时以课件为准；
-8) 只整理上面材料里有的内容：明显错字可以改顺，但不要编造。
+   **听错的术语不要照抄**：先到课件里找对应说法（如「新一页公司」→「公式」），
+   找不到对应就换成稳妥的一般表述或省略，绝不要把明显讲不通的词（如「十二定律」）原样写进笔记；
+8) **事务性信息必须原样保留**：考试时间 / 地点 / 题型 / 范围、作业截止、提交要求、课程安排等，
+   照抄关键数字与名称、前面标【通知】，不要归纳、不要润色、不要因为「不是知识点」而删掉；
+9) 只整理上面材料里有的内容：明显错字可以改顺，但不要编造。
 直接输出 Markdown 文本（可用小标题和「- 」列表），不要前言、不要代码块。`,
         },
         { role: 'user', content: body },
@@ -789,7 +812,10 @@ async function runNote(job) {
 2) Associate（关联）：显式写出与前面知识的联系、对比、适用条件——写成「- 💭 讲解：…」的行（为什么成立、怎么用、容易和什么混淆），**不带页码角标**，一条 1-2 句；
 3) 关键要点用「- 」开头，每条末尾保留来源页码角标 [[${lessonName}.pdf#page=N|N]]（N 必须出现过）；**整理稿里出现过的每一页，在成稿里至少要被引用一次**（合并条目时必须保留角标）；
 4) 整理稿里标了【题目】的，逐题处理：先原样给出题干和选项，然后紧跟 <details><summary>先自己想，点开看答案</summary>参考答案（AI 推断）+ 解析（为什么选它、其他选项错在哪）</details>；**每道【题目】都必须有一个 details 块**；
-5) 公式用 LaTeX（$…$）；不要代码块、不要前言；不要编造整理稿之外的知识。
+5) 整理稿里标了【通知】的（考试时间/地点/题型、作业截止、提交要求等）：**用一个独立小节收进来，
+   数字、日期、地点照原文写，不要改写**——这类信息复习时最要紧，漏了就白搭；
+6) 公式用 LaTeX（$…$）；不要代码块、不要前言；不要编造整理稿之外的知识。
+7) 整理稿里若残留明显听错的词（讲不通的术语）：换成课件里的正确说法，找不到就别写，不要照搬。
 直接输出笔记正文（从 ### 开始），不要写全课总结（后面统一写）。`,
         },
         { role: 'user', content: segment },
@@ -837,11 +863,33 @@ ${p.text}`).join('\n\n').slice(0, 12000);
   }
 
   // ---------- ③ 本课脉络 + 课末必记 ----------
-  const { content: digest, usage: dUsage } = await chatRetry(
+  // 事务性信息（考试时间/地点、作业截止）常在最后一页，而下面只喂正文前 18k 字，
+  // 所以从整理稿和笔记里把相关段落单独捞出来一起给模型，别让它在长度截断里丢掉
+  const noticeLines = (() => {
+    const lines = `${workText || ''}\n${note}`.split('\n');
+    const hits = new Set();
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/(【通知】|考试|考查|题型|作业|提交|截止|答辩|调课|考场|上课时间)/.test(lines[i])) {
+        for (const l of lines.slice(Math.max(0, i - 1), i + 3)) {
+          const t = l.trim();
+          if (t) hits.add(t);
+        }
+        if (hits.size > 80) break;
+      }
+    }
+    return [...hits].join('\n').slice(0, 2500);
+  })();
+
+  const { content: digestRaw, usage: dUsage } = await chatRetry(
     [
       {
         role: 'system',
-        content: `下面是《${ctx.course || '本课程'}》一节课的复习笔记。请提炼两样东西，严格按格式输出：
+        content: `下面是《${ctx.course || '本课程'}》一节课的复习笔记。请提炼三样东西，严格按格式输出：
+## 📌 事务通知
+（只写这节课明确提到的**事务性信息**：考试时间 / 地点 / 题型 / 考查范围、作业与提交要求、课程安排变化。
+ 逐条「- 」开头，日期、时间、地点、数字**必须与原文完全一致**，不要改写、不要推测。
+ **如果这节课没有任何这类信息，就整块不输出**（连标题也不要写）。）
+
 ## 🧭 本课脉络
 （2-4 句话讲清这节课的整体逻辑：从什么讲到什么、解决什么问题）
 
@@ -850,11 +898,16 @@ ${p.text}`).join('\n\n').slice(0, 12000);
 
 不要重复笔记里的大段内容，不要前言和后记。`,
       },
-      { role: 'user', content: note.slice(0, 18000) },
+      {
+        role: 'user',
+        content: note.slice(0, 18000)
+          + (noticeLines ? `\n\n【整理稿里的事务性片段（可能来自老师口头，务必核对）】\n${noticeLines}` : ''),
+      },
     ],
     { profile: 'text', temperature: 0.3, maxTokens: 2000, thinking: 'off' },
   );
   addUsage(job, dUsage);
+  const digest = stripEmptyNotice(digestRaw);
   done += 1;
   job.progress.done = done;
   job.progress.current = '必记提炼';

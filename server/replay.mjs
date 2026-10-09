@@ -304,6 +304,20 @@ function extractAudio(job, videoPath, audioAbs) {
   });
 }
 
+/**
+ * 语音识别提示词（whisper 的 initial_prompt）。
+ *
+ * 实测（2026-10-09，3 分钟样本 A/B）：
+ *   - 塞 300 字课件术语 → **污染输出**：模型把提示词本身接进正文
+ *     （「其实是代表强性波动力学2026-06-29第1-2节目」），还反复回吐提示里的词；
+ *   - 只留课程名（几字）→ 干净，无回显。
+ * 原因是 initial_prompt 走 `sot_prev` 上下文，等于「上文」，越长越容易被续写。
+ * 所以这里只放极短的课程名，术语纠错交给后面的整理/审计环节（那里有课件原文可对照）。
+ */
+function buildGlossary(job) {
+  return String(job.courseTitle || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+}
+
 /** 调 transcribe.py 转写，逐行解析 JSON 进度 */
 function transcribe(job, audioAbs, transAbs) {
   const python = findAsrPython();
@@ -314,6 +328,8 @@ function transcribe(job, audioAbs, transAbs) {
   ensureDir(path.dirname(transAbs));
 
   return new Promise((resolve, reject) => {
+    const glossary = buildGlossary(job);
+    if (glossary) job.log.push(`术语提示：${glossary.slice(-60)}`);
     const child = spawn(python, [
       '-u', path.join(ROOT_DIR, 'transcribe.py'),
       audioAbs,
@@ -322,7 +338,7 @@ function transcribe(job, audioAbs, transAbs) {
       '--model-dir', MODEL_DIR,
       '--device', 'auto',
       '--title', `${job.courseTitle} ${job.subTitle}`,
-      '--prompt', `${job.courseTitle} ${job.subTitle}`,
+      '--prompt', glossary,
       '--json',
     ], {
       cwd: ROOT_DIR,
