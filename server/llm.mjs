@@ -690,16 +690,16 @@ async function runNote(job) {
   const ctx = courseContext(job);
   if (ctx.course) job.log.push('提示词上下文：《' + ctx.course + '》');
 
-  // 按页切分原文
-  const re = /<!-- page (\d+): [^>]+ -->/g;
+  // 按页切分原文（文件名要留着：讲稿按页对齐时靠它查这页出现在第几秒）
+  const re = /<!-- page (\d+): ([^>]+) -->/g;
   const marks = [...original.matchAll(re)];
-  const pages = marks.map((m, i) => {
+  const allPages = marks.map((m, i) => {
     const start = m.index + m[0].length;
     const end = i + 1 < marks.length ? marks[i + 1].index : original.length;
     const body = original.slice(start, end);
-    return { n: Number(m[1]), body, text: stripForSummary(body) };
-  }).filter((p) => p.text);
-  if (!pages.length) throw new Error('没有可用的页面内容（先转 MD）');
+    return { n: Number(m[1]), name: m[2].trim(), body, text: stripForSummary(body) };
+  });
+  if (!allPages.length) throw new Error('原文里没有页标记（先转 MD）');
 
   // 讲稿（回放转写）：按页切成「这一页老师当时讲了什么」，补课件里没写的内容
   let narration = new Map();
@@ -714,8 +714,8 @@ async function runNote(job) {
       })();
       const pageTimes = await ensurePageTimes(ctx.course, ctx.lesson, pageTimesByTitle);
       if (pageTimes) {
-        narration = narrationByPage(pageTimes, tr.segments);
-        job.log.push(`讲稿已按页对齐：${narration.size}/${pageTimes.length} 页有讲解（转写 ${tr.segments.length} 段）`);
+        narration = narrationByPage(pageTimes, tr.segments, allPages.map((p) => ({ n: p.n, name: p.name })));
+        job.log.push(`讲稿已按页对齐：${narration.size}/${allPages.length} 页有讲解（转写 ${tr.segments.length} 段）`);
       } else {
         job.log.push('发现讲稿，但缺页码时间轴——重新下载该课次可补上，本次先只用课件');
       }
@@ -724,19 +724,31 @@ async function runNote(job) {
     job.log.push('讲稿加载失败，本次只用课件：' + String(e?.message || e).slice(0, 120));
   }
 
+  // 只有图、OCR 没文字的页照样要进流水线——「一张图讲一节课」正是这种情况，
+  // 有讲稿就靠讲稿写这一页；既没文字也没讲解的页才跳过。
+  const pages = allPages.filter((p) => p.text || narration.get(p.n));
+  if (!pages.length) {
+    throw new Error('没有可用的页面内容：转 MD 后没有文字，也没有讲稿。整页是图时可先「转写讲稿」');
+  }
+  if (pages.length < allPages.length) {
+    job.log.push(`有 ${allPages.length - pages.length} 页既无文字也无讲解，跳过`);
+  }
+
   // 按「页数 + 字符预算」分块
   const CHUNK_CHARS = 5200;
   const chunks = [];
   let cur = [];
   let size = 0;
   for (const p of pages) {
-    if (cur.length && (size + p.text.length > CHUNK_CHARS || cur.length >= 10)) {
+    // 讲解也要计入块大小（图片页可能只有讲解、没有 OCR 文字）
+    const weight = p.text.length + (narration.get(p.n) || '').length;
+    if (cur.length && (size + weight > CHUNK_CHARS || cur.length >= 10)) {
       chunks.push(cur);
       cur = [];
       size = 0;
     }
     cur.push(p);
-    size += p.text.length;
+    size += weight;
   }
   if (cur.length) chunks.push(cur);
 
@@ -1020,8 +1032,8 @@ async function runAudit(job) {
       } catch { transMtime = 0; }
       const pageTimes = await ensurePageTimes(ctx.course, ctx.lesson, pageTimesByTitle);
       if (pageTimes) {
-        narration = narrationByPage(pageTimes, tr.segments);
-        job.log.push(`审计纳入讲稿：${narration.size}/${pageTimes.length} 页有老师讲解`);
+        narration = narrationByPage(pageTimes, tr.segments, pages.map((p) => ({ n: p.n, name: p.name })));
+        job.log.push(`审计纳入讲稿：${narration.size}/${pages.length} 页有老师讲解`);
       }
     }
   } catch (e) {

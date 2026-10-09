@@ -62,23 +62,37 @@ export async function ensurePageTimes(course, lesson, backfill) {
 }
 
 /**
- * 讲稿按页切片：第 i 页的讲解 = 时间落在 [该页出现时刻, 下一页出现时刻) 的转写段落。
- * @param {Array<{file:string, sec:number}>} pages 时间轴
- * @param {Array<{start:number, end:number, text:string}>} segments 转写段落
- * @returns {Map<number, string>} 页码（1 起）→ 该页讲解文本
+ * 讲稿按页切片。
+ *
+ * 两个必须踩准的点（都会被「清洗」影响）：
+ *   1) **只用清洗后仍在的页划时间片**。被删掉的重复帧 / 二维码页在原文 md 里没有对应页，
+ *      若参与切片，这段时间的讲解会挂到不存在的页号上直接丢失（实测某节课丢了 88 秒）。
+ *      正确语义：某页的讲解 = 从该页出现，到**下一张保留下来的页**出现为止。
+ *   2) **键用 md 里的页号**（第 1 页、第 2 页…），不是文件名编号——清洗掉的帧会让两者错开
+ *      （md 第 1 页可能是 0050.jpg）。
+ *
+ * @param {Array<{file:string, sec:number}>} pages 完整时间轴（含已被清洗掉的帧）
+ * @param {Array<{start:number,end:number,text:string}>} segments 转写段落
+ * @param {Array<{n:number|string, name:string}>} survivors 清洗后仍在原文里的页（顺序即 md 顺序）
+ * @returns {Map<number, string>} md 页号 → 该页讲解文本
  */
-export function narrationByPage(pages, segments) {
+export function narrationByPage(pages, segments, survivors) {
   const out = new Map();
   if (!pages?.length || !segments?.length) return out;
-  for (let i = 0; i < pages.length; i += 1) {
-    const from = Number(pages[i].sec) || 0;
-    const to = i + 1 < pages.length ? Number(pages[i + 1].sec) || Infinity : Infinity;
+  const secOf = new Map(pages.map((p) => [p.file, Number(p.sec) || 0]));
+  const list = (survivors?.length ? survivors : pages.map((p, i) => ({ n: i + 1, name: p.file })))
+    .map((s) => ({ n: Number(s.n), sec: secOf.get(s.name) }))
+    .filter((s) => Number.isFinite(s.n) && s.sec !== undefined)
+    .sort((a, b) => a.sec - b.sec);
+  for (let i = 0; i < list.length; i += 1) {
+    const from = list[i].sec;
+    const to = i + 1 < list.length ? list[i + 1].sec : Infinity;
     const text = segments
       .filter((s) => s.start >= from && s.start < to)
       .map((s) => String(s.text || '').trim())
       .filter(Boolean)
       .join(' ');
-    if (text) out.set(Number(String(pages[i].file).replace(/\D/g, '')) || i + 1, text);
+    if (text) out.set(list[i].n, text);
   }
   return out;
 }
