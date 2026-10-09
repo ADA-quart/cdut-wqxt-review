@@ -298,6 +298,51 @@ function ensureSlideCopy(course, lesson, name, job) {
 /** 丢掉笔记里指向不存在文件的图片（模型可能编路径），避免打开笔记一片破图 */
 const visionPickCache = new Map();   // baseUrl|model → 档位名 或 null（探测过不可用）
 
+/** 探测某个档位能不能读图（结果按 baseUrl|model 缓存；1×1 PNG 只为确认接口收不收图片） */
+async function probeVision(profileKey) {
+  const p = loadConfig().llm.profiles?.[profileKey];
+  if (!p?.baseUrl) return { ok: false, reason: '未配置接口地址' };
+  if (profileKey !== 'visionLocal' && !p.apiKey) return { ok: false, reason: '未配置 API Key' };
+  const cacheKey = `${p.baseUrl}|${p.model}`;
+  if (visionPickCache.has(cacheKey)) {
+    const v = visionPickCache.get(cacheKey);
+    return v === profileKey ? { ok: true, reason: '' } : { ok: false, reason: '不能读图' };
+  }
+  try {
+    await chat(
+      [{
+        role: 'user',
+        content: [
+          { type: 'text', text: '回复 OK 两个字母即可。' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' } },
+        ],
+      }],
+      { profile: profileKey, maxTokens: 64, thinking: 'off' },
+    );
+    visionPickCache.set(cacheKey, profileKey);
+    return { ok: true, reason: '', model: p.model };
+  } catch (e) {
+    visionPickCache.set(cacheKey, null);
+    return { ok: false, reason: String(e?.message || e).slice(0, 100), model: p.model };
+  }
+}
+
+/** 给前端看：三个档位各自能不能读图、笔记会走哪条链路 */
+export async function visionStatus() {
+  const profiles = loadConfig().llm.profiles || {};
+  const details = [];
+  let best = null;
+  for (const key of ['visionCloud', 'visionLocal', 'text']) {
+    if (!profiles[key]?.baseUrl) continue;
+    const r = await probeVision(key);
+    details.push({ key, model: profiles[key].model || '', ok: r.ok, reason: r.reason || '' });
+    if (r.ok && !best) best = key;
+  }
+  const want = String(loadConfig().llm.notePipeline || 'auto');
+  const effective = want === 'text' ? 'text' : (best ? 'vision' : 'text');
+  return { notePipeline: want, best, effective, details };
+}
+
 /**
  * 挑一个能看图的档位：专用视觉档（云端 qwen-vl 等）→ 本地视觉档（Ollama）→ 文本档。
  * 文本档也可能是多模态的（实测 deepseek-flash 能读表格），所以放在候选里；
@@ -308,31 +353,13 @@ async function pickVisionProfile(job) {
   const profiles = cfg.llm.profiles || {};
   const order = ['visionCloud', 'visionLocal', 'text'].filter((k) => profiles[k]?.baseUrl);
   for (const key of order) {
-    const p = profiles[key];
-    if (key !== 'visionLocal' && !p.apiKey) continue;          // 云端档没配 key 就别试
-    const cacheKey = `${p.baseUrl}|${p.model}`;
-    if (visionPickCache.has(cacheKey)) {
-      if (visionPickCache.get(cacheKey) === key) return key;
-      continue;
-    }
-    try {
-      const { content } = await chat(
-        [{
-          role: 'user',
-          content: [
-            { type: 'text', text: '回复 OK 两个字母即可。' },
-            // 1×1 透明 PNG：只用来确认这个档位收不收图片
-            { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' } },
-          ],
-        }],
-        { profile: key, maxTokens: 64, thinking: 'off' },
-      );
-      visionPickCache.set(cacheKey, key);
-      job.log.push(`图注使用「${MODE_LABELS[key] || key}」档位（${p.model}）`);
+    const r = await probeVision(key);
+    if (r.ok) {
+      job.log.push(`图注使用「${MODE_LABELS[key] || key}」档位（${profiles[key].model || ''}）`);
       return key;
-    } catch (e) {
-      visionPickCache.set(cacheKey, null);
-      job.log.push(`「${MODE_LABELS[key] || key}」不能读图，换下一个：${String(e?.message || e).slice(0, 80)}`);
+    }
+    if (r.reason && r.reason !== '未配置 API Key' && r.reason !== '未配置接口地址') {
+      job.log.push(`「${MODE_LABELS[key] || key}」不能读图，换下一个：${r.reason}`);
     }
   }
   return null;
@@ -1130,8 +1157,9 @@ ${digest.trim()}
  * 配置 llm.notePipeline：auto（默认）/ vision（强制视觉）/ text（强制文本）。
  */
 async function runNoteAuto(job) {
-  // 单次任务可用 mode 强制（API: {op:'note', dir, mode:'text'|'vision'}），否则按配置
-  const forced = ['text', 'vision'].includes(job.requestedMode) ? job.requestedMode : '';
+  // 单次任务可用 pipeline 强制（API: {op:'note', dir, pipeline:'text'|'vision'}），否则按配置。
+  // 注意别用 mode——前端一直在传 mode=纠错模式（默认 text），会误把视觉链路锁成文本
+  const forced = ['text', 'vision'].includes(job.requestedPipeline) ? job.requestedPipeline : '';
   const want = forced || String(loadConfig().llm.notePipeline || 'auto');
   if (want === 'text') {
     job.log.push(`笔记链路：文本${forced ? '（本次任务指定）' : '（config.llm.notePipeline=text）'}`);
@@ -2233,7 +2261,7 @@ export function getLlmJob(id) {
   return j ? publicJob(j) : null;
 }
 
-export function createLlmJob({ op, dir, mode, scope }) {
+export function createLlmJob({ op, dir, mode, scope, pipeline }) {
   if (!['proofread', 'summarize', 'weave', 'fixmath', 'polish', 'note', 'audit'].includes(op)) throw new Error(`不支持的操作：${op}`);
   const relDir = String(dir || '').replace(/^[/\\]+/, '');
   let absDir = null;
@@ -2281,7 +2309,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
     op,
     jobKey,
     mode: useMode,
-    requestedMode: mode || '',   // 原始请求参数：note 任务用它强制 text / vision 链路
+    requestedPipeline: pipeline || '',   // note 任务用它强制 text / vision 链路（别用 mode，见 runNoteAuto）
     scope: scope === 'all' ? 'all' : 'course',
     status: 'pending',
     relDir,

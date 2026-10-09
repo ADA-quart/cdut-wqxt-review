@@ -134,6 +134,10 @@ export function saveConfig(patch = {}) {
   if (p.defaultMode !== undefined) {
     next.llm.defaultMode = PROFILE_KEYS.includes(p.defaultMode) ? p.defaultMode : 'text';
   }
+  // 笔记生成链路：auto（有能读图的档位就走视觉）/ vision / text
+  if (p.notePipeline !== undefined) {
+    next.llm.notePipeline = ['auto', 'vision', 'text'].includes(p.notePipeline) ? p.notePipeline : 'auto';
+  }
 
   // 转 MD 并行数（1~3）
   const mdPatch = patch.md;
@@ -188,6 +192,7 @@ export function publicConfig() {
     temperature: llm.temperature,
     concurrency: llm.concurrency,
     defaultMode: llm.defaultMode,
+    notePipeline: llm.notePipeline || 'auto',   // auto | vision | text
   };
 }
 

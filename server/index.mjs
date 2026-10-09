@@ -32,7 +32,7 @@ import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCa
 import {
   createLlmJob, listLlmJobs, getLlmJob, cancelLlmJob,
   testProfile, expandQuery, generateQaCards, feynmanReview, listModels, getCaps,
-  events as llmEvents,
+  visionStatus, events as llmEvents,
 } from './llm.mjs';
 import {
   closeBrowser, edgeStatus, WQ_BASE,
@@ -554,8 +554,14 @@ app.put('/api/llm-config', asyncRoute(async (req, res) => {
   if (body.temperature !== undefined) patch.llm.temperature = Number(body.temperature) || 0;
   if (body.concurrency !== undefined) patch.llm.concurrency = Math.min(Math.max(Number(body.concurrency) || 3, 1), 8);
   if (body.defaultMode !== undefined) patch.llm.defaultMode = body.defaultMode;
+  if (['auto', 'vision', 'text'].includes(body.notePipeline)) patch.llm.notePipeline = body.notePipeline;
   saveConfig(patch);
   res.json(publicConfig());
+}));
+
+/** 各 LLM 档位能不能读图 + 笔记会走哪条链路（设置弹窗用来提示） */
+app.get('/api/llm-vision', asyncRoute(async (_req, res) => {
+  res.json(await visionStatus());
 }));
 
 app.post('/api/llm-test', asyncRoute(async (req, res) => {
@@ -576,11 +582,11 @@ app.post('/api/llm-models', asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/llm-jobs', asyncRoute(async (req, res) => {
-  const { op, dir, mode, scope } = req.body || {};
+  const { op, dir, mode, scope, pipeline } = req.body || {};
   if (!op) return res.status(400).json({ error: '缺少 op' });
   if (op !== 'weave' && !dir) return res.status(400).json({ error: '缺少 dir' });
   if (op === 'weave' && scope !== 'all' && !dir) return res.status(400).json({ error: '缺少 dir' });
-  const job = createLlmJob({ op, dir, mode, scope });
+  const job = createLlmJob({ op, dir, mode, scope, pipeline });
   res.status(201).json({ job });
 }));
 

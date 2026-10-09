@@ -759,7 +759,28 @@ function openLlmConfig() {
   }
   $('llmDefaultMode').value = c.defaultMode || 'text';
   $('llmConcurrency').value = String(c.concurrency || 3);
+  $('llmNotePipeline').value = c.notePipeline || 'auto';
   $('llmModal').hidden = false;
+  renderVisionHint();
+}
+
+/** 显示「哪些档位能读图、笔记实际会走哪条链路」——视觉链路省一半 token、快一倍 */
+async function renderVisionHint() {
+  const el = $('llmVisionHint');
+  if (!el) return;
+  el.textContent = '检测中…';
+  try {
+    const s = await api('/llm-vision');
+    const LABEL = { text: '纯文本', visionCloud: '图片上云', visionLocal: '图片本地' };
+    const okList = s.details.filter((d) => d.ok).map((d) => `${LABEL[d.key] || d.key}（${d.model}）`);
+    const badList = s.details.filter((d) => !d.ok).map((d) => `${LABEL[d.key] || d.key}：${d.reason}`);
+    const eff = s.effective === 'vision' ? '视觉（看图写）' : '文本（按 OCR 原文写）';
+    el.textContent = `笔记将走：${eff}。`
+      + (okList.length ? ` 能读图：${okList.join('、')}。` : ' 当前没有能读图的模型。')
+      + (badList.length ? ` 不可用：${badList.join('；')}。` : '');
+  } catch (e) {
+    el.textContent = '读图能力检测失败：' + e.message;
+  }
 }
 
 function collectLlmForm() {
@@ -774,6 +795,7 @@ function collectLlmForm() {
     profiles,
     defaultMode: $('llmDefaultMode').value,
     concurrency: Number($('llmConcurrency').value) || 3,
+    notePipeline: $('llmNotePipeline').value,
   };
 }
 

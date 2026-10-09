@@ -204,7 +204,16 @@
               <option value="8">8</option>
             </select>
           </label>
+          <label class="field compact">
+            <span>笔记生成方式</span>
+            <select id="llmNotePipeline">
+              <option value="auto">自动（有能读图的模型就用视觉）</option>
+              <option value="vision">视觉：看图写（省 token、快）</option>
+              <option value="text">文本：按 OCR 原文写</option>
+            </select>
+          </label>
         </div>
+        <p class="hint" id="llmVisionHint">检测中…</p>
       </section>
     </div>
     <div class="modal-actions">
