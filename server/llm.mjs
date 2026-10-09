@@ -554,6 +554,29 @@ function extractBlock(text, marker) {
  * 事务通知块可能为空：模型有时仍会写出「（无）」的标题，
  * 这里剥掉整块，免得笔记顶上挂一个空标题。
  */
+/**
+ * 剥掉正文里的空小节与「本材料中未出现…故无…」这类占位说明。
+ * 模型偶尔会把提示词的要求当成正文写出来（实测出现过 `### 通知` + 「本材料中未出现…故无【通知】条目」），
+ * 对复习的人是纯噪音，这里按小节确定性清除。
+ */
+export function stripPlaceholderSections(md) {
+  const lines = String(md).split('\n');
+  const out = [];
+  const PLACEHOLDER = /^(?:本?(?:段)?材料(?:中)?(?:未|没有)(?:出现|提及|涉及)|材料中未见|未出现|未提及)[^。！？]{0,80}(?:故无|没有|无【|不涉及|无需)/;
+  for (let i = 0; i < lines.length;) {
+    const head = /^(#{2,4})\s+(.+)$/.exec(lines[i]);
+    if (!head) { out.push(lines[i]); i += 1; continue; }
+    let j = i + 1;
+    while (j < lines.length && !/^#{2,4}\s/.test(lines[j])) j += 1;
+    const body = lines.slice(i + 1, j).join('\n').trim();
+    const placeholder = !body || PLACEHOLDER.test(body.replace(/\s+/g, ' '));
+    if (!placeholder) out.push(...lines.slice(i, j));
+    else if (out.length && out[out.length - 1].trim() !== '') out.push('');
+    i = j;
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function stripEmptyNotice(text) {
   const lines = String(text).split('\n');
   const start = lines.findIndex((l) => /^##\s*(📌)?\s*事务通知/.test(l.trim()));
@@ -816,6 +839,8 @@ async function runNote(job) {
    数字、日期、地点照原文写，不要改写**——这类信息复习时最要紧，漏了就白搭；
 6) 公式用 LaTeX（$…$）；不要代码块、不要前言；不要编造整理稿之外的知识。
 7) 整理稿里若残留明显听错的词（讲不通的术语）：换成课件里的正确说法，找不到就别写，不要照搬。
+8) **不要输出空小节，也不要在笔记里解释材料缺什么**：「本材料中未出现…故无…」这类说明是给系统的，
+   不是给复习的人看的——没有的内容直接不写。
 直接输出笔记正文（从 ### 开始），不要写全课总结（后面统一写）。`,
         },
         { role: 'user', content: segment },
@@ -926,11 +951,13 @@ ${p.text}`).join('\n\n').slice(0, 12000);
 ${digest.trim()}
 
 `;
+  const body = stripPlaceholderSections(note);
+  if (body !== note.trim()) job.log.push('已清掉正文里的空小节 / 占位说明');
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
   if (fs.existsSync(notePath)) {
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
-  fs.writeFileSync(notePath, head + note + '\n', 'utf8');
+  fs.writeFileSync(notePath, head + body + '\n', 'utf8');
 
   // 把「本课脉络 + 课末必记」同步回原文 md 顶部（upsert llm-summary 块），两处重点保持一致
   try {
