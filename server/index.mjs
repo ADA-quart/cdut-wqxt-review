@@ -14,7 +14,7 @@ import {
   DOWNLOAD_DIR, DATA_DIR, NOTES_DIR, PUBLIC_DIR, ROOT_DIR,
   ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf, sanitizeName,
 } from './paths.mjs';
-import { checkLogin, login, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
+import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
 import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
@@ -32,7 +32,7 @@ import {
   events as llmEvents,
 } from './llm.mjs';
 import {
-  closeBrowser, edgeStatus, getWorkPage, WQ_BASE,
+  closeBrowser, edgeStatus, WQ_BASE,
   showBrowserWindow, hideBrowserWindow, browserWindowVisible,
 } from './browser.mjs';
 
@@ -186,10 +186,12 @@ app.post('/api/auto-login', asyncRoute(async (_req, res) => {
 }));
 
 app.post('/api/logout', asyncRoute(async (_req, res) => {
-  const page = await getWorkPage();
-  await page.goto(WQ_BASE + '/logout', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
   saveLogin({ remember: false });   // 退出即清除记住的登录，避免马上又被自动登回来
-  res.json({ ok: true });
+  const result = await logout();
+  if (!result.ok) {
+    return res.status(500).json({ error: '会话未完全清除，可能是校园统一认证仍保持登录，请重试', detail: result });
+  }
+  res.json(result);
 }));
 
 // ---------- 课程数据 ----------

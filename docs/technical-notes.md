@@ -9,7 +9,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET/POST | `/api/status` `/api/login` `/api/logout` | 登录状态 / 统一认证登录 / 退出 |
+| GET/POST | `/api/status` `/api/login` `/api/logout` | 登录状态 / 统一认证登录 / 退出（走统一认证登出，见下） |
 | GET | `/api/terms` `/api/courses` `/api/courses/:id/subs` `/api/subs/:courseId/:subId/ppt` | 学期 / 课程 / 课次 / 课次图片清单 |
 | POST/GET | `/api/jobs`（创建/列表）、`/api/jobs/:id`、`/api/jobs/:id/cancel` | 下载任务 |
 | POST/GET | `/api/md-jobs`（创建/列表）、`/api/md-jobs/:id`、`/api/md-jobs/:id/cancel`、`/api/md-tools`、`/api/md-config` | 转 MD 任务与配置 |
@@ -50,6 +50,18 @@
                     ▼                 ▼                  ▼
                 复习台(标记/卡片/AI)  审计(质量核对)   导出 zip(手机/Obsidian)
 ```
+
+### 退出登录（2026-10 实测）
+
+- 站点的 `/logout` **只是前端路由**：返回 200 + 应用 HTML，不清任何会话（访问后 `infosimple` 仍返回账号）。
+- 官方登出流程（从 app bundle 读出）：清 `_token` / `live_token` / `iPlanetDirectoryPro`，再跳
+  `window.CONFIG.CASAPI + /index.php?r=auth/cmc-loginout&tenant_code=<租户>&forward=<完整 URL>`。
+  本站实测 `CASAPI=https://yjapi.wqxt.cdut.edu.cn/casapi`、`tenant_code=21`——都从页面 `CONFIG` 读，不要写死。
+- 本项目登出实现（`wqxt.mjs` 的 `logout()`）：统一认证登出 → 清 cdut 域下的鉴权 cookie
+  （`JWTUser` / `_token` / `live_token` / `iPlanetDirectoryPro` / `SESSION` / `PHPSESSID`，**保留**瑞数 WAF cookie）→
+  回站点复检；未清干净时返回 `ok:false`，不假装成功。
+- 附带约束：登出后页面停在统一认证页，`browser.mjs` 的「工作页面」判定必须把 CAS 主机也算合法，
+  否则每次状态查询都会新开一个标签页。
 
 ### 模块一览（server/）
 

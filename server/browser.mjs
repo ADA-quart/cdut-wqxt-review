@@ -197,10 +197,30 @@ export async function ensureBrowser() {
   return launching;
 }
 
+/** 统一认证（CAS）主机：登录/退出流程中工作页面会停在这里 */
+export const CAS_HOST = 'cas.paas.cdut.edu.cn';
+
+/**
+ * 工作页面判定：问渠学堂站点，或统一认证页。
+ * 退出登录后页面会停在 CAS，必须认它——否则每次状态查询都认不出旧页面，会不断新开标签页。
+ */
+function isWorkUrl(u) {
+  return u.startsWith(WQ_BASE) || u.includes(CAS_HOST);
+}
+
+/** 是否 cdut 域（用于兜底复用标签页） */
+function isCdutUrl(u) {
+  try {
+    return /(^|\.)cdut\.edu\.cn$/.test(new URL(u).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** 取一个位于问渠学堂域下的工作页面（离屏 API 调用均在此页面内执行） */
 export async function getWorkPage() {
   const b = await ensureBrowser();
-  if (workPage && !workPage.isClosed() && workPage.url().startsWith(WQ_BASE)) return workPage;
+  if (workPage && !workPage.isClosed() && isWorkUrl(workPage.url())) return workPage;
 
   // 并发保护：页面初始化/导航期间，多个请求共享同一个 promise，
   // 避免第二个请求在导航中途执行页面脚本（否则报 Execution context was destroyed）
@@ -208,10 +228,13 @@ export async function getWorkPage() {
 
   navPromise = (async () => {
     const ctx = b.contexts()[0];
-    // 优先复用已打开的问渠学堂标签
-    const existing = ctx.pages().find((p) => p.url().startsWith(WQ_BASE));
-    const page = existing ?? (await ctx.newPage());
-    if (!page.url().startsWith(WQ_BASE)) {
+    // 优先复用问渠/统一认证标签页，其次复用任意 cdut 页面，最后才新开（避免标签页堆积）
+    const existing =
+      ctx.pages().find((p) => isWorkUrl(p.url())) ??
+      ctx.pages().find((p) => isCdutUrl(p.url())) ??
+      (await ctx.newPage());
+    const page = existing;
+    if (!isWorkUrl(page.url())) {
       await page.goto(WQ_BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     }
     workPage = page;
@@ -269,6 +292,28 @@ export async function apiGet(endpoint, params = {}, timeoutMs = 30000) {
 export async function currentUrl() {
   const page = await getWorkPage();
   return page.url();
+}
+
+/**
+ * 清掉登录会话类 cookie（退出登录用）。
+ *
+ * 只删鉴权 cookie，保留瑞数 WAF 与埋点 cookie：WAF cookie 被清会触发重新挑战，
+ * 而它不携带身份信息。
+ */
+const AUTH_COOKIE_NAMES = ['JWTUser', '_token', 'live_token', 'iPlanetDirectoryPro', 'SESSION', 'PHPSESSID'];
+
+export async function clearAuthCookies() {
+  const b = await ensureBrowser();
+  const ctx = b.contexts()[0];
+  const cleared = [];
+  for (const name of AUTH_COOKIE_NAMES) {
+    try {
+      // 限定在 cdut 域下，避免误删其它站点的同名 cookie
+      await ctx.clearCookies({ name, domain: /cdut\.edu\.cn$/ });
+      cleared.push(name);
+    } catch { /* 忽略：cookie 不存在时无操作 */ }
+  }
+  return cleared;
 }
 
 export async function getPageForLogin() {

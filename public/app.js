@@ -1099,8 +1099,12 @@ $('btnDoLogin').onclick = async () => {
 };
 
 $('btnLogout').onclick = async () => {
-  await api('/logout', { method: 'POST' });
-  toast('已退出');
+  try {
+    await api('/logout', { method: 'POST' });
+    toast('已退出登录');
+  } catch (e) {
+    toast('退出失败：' + e.message, 'err');
+  }
   await refreshStatus();
   $('courseList').innerHTML = '<p class="empty">登录后加载课程列表</p>';
 };

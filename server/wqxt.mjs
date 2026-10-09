@@ -7,7 +7,7 @@
  *
  * 所有业务接口均在浏览器页面上下文内 fetch（同源、自动带 cookie），已实测无需签名参数。
  */
-import { apiGet, getWorkPage, WQ_BASE } from './browser.mjs';
+import { apiGet, clearAuthCookies, getWorkPage, WQ_BASE } from './browser.mjs';
 
 export const API = {
   infoSimple: '/userapi/v1/infosimple',
@@ -94,6 +94,56 @@ export async function login(username, password) {
     }
   }
   return { ok: false, error: '登录超时：请在弹出的浏览器窗口中完成登录后重试' };
+}
+
+/**
+ * 退出登录。
+ *
+ * 站点的 `/logout` 只是前端路由，不清会话（实测：访问后 infosimple 仍返回账号），
+ * 所以这里按站点自身的登出流程走：
+ *   1. 用页面里的 window.CONFIG 拼官方 CAS 登出地址，让服务端注销 SSO 会话；
+ *   2. 清掉 cdut 域下的鉴权 cookie，兜住 CAS 没清干净的情况；
+ *   3. 回到站点复检，未清干净时如实返回 ok:false，不假装成功。
+ */
+export async function logout() {
+  const page = await getWorkPage();
+
+  // tenant_code 必须是当前租户，写死 21 换校区就废了，所以从页面配置里读
+  const casLogoutUrl = await page
+    .evaluate(() => {
+      const c = window.CONFIG || {};
+      if (!c.CASAPI) return '';
+      let tenant = c.TENANT_ID || '';
+      try {
+        tenant = JSON.parse(sessionStorage.getItem('user') || '{}').tenant_id || tenant;
+      } catch { /* 忽略 */ }
+      // forward 必须是完整 URL（WEB_DOMAIN 是 cookie 域，不能直接用）
+      const forward = location.origin + '/';
+      return `${c.CASAPI}/index.php?r=auth/cmc-loginout&tenant_code=${tenant}&forward=${encodeURIComponent(forward)}`;
+    })
+    .catch(() => '');
+
+  let casError = '';
+  if (casLogoutUrl) {
+    await page
+      .goto(casLogoutUrl, { waitUntil: 'domcontentloaded', timeout: 45000 })
+      .catch((e) => { casError = String(e?.message || e); });
+    await page.waitForTimeout(500);
+  }
+
+  await clearAuthCookies();
+
+  // 回站点复检：CAS 若仍认为会话有效，会静默重新发票，这里能立刻发现
+  await page.goto(WQ_BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  const state = await checkLogin();
+  return {
+    ok: !state.loggedIn,
+    casLogoutUrl,
+    casError,
+    loggedIn: !!state.loggedIn,
+    reason: state.loggedIn ? 'session-still-alive' : state.reason || 'logged-out',
+  };
 }
 
 /** 学期列表（含 current 标记） */
