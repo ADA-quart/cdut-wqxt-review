@@ -309,3 +309,35 @@ export async function listSubPpt(courseId, subId) {
   all.sort((a, b) => (a.created || a.createdSec * 1000) - (b.created || b.createdSec * 1000));
   return all;
 }
+
+let courseIndexCache = null;
+
+/** 课程标题 → 课程（含 courseId），近 24 个月，缓存 10 分钟（列表接口较重） */
+async function courseByTitle() {
+  const now = Date.now();
+  if (courseIndexCache && now - courseIndexCache.at < 10 * 60 * 1000) return courseIndexCache.map;
+  const months = [];
+  const d = new Date();
+  for (let i = 0; i < 24; i += 1) {
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    d.setMonth(d.getMonth() - 1);
+  }
+  const courses = await listMyCourses({ months });
+  const map = new Map(courses.map((c) => [c.title, c]));
+  courseIndexCache = { at: now, map };
+  return map;
+}
+
+/**
+ * 按标题反查课次的 PPT 列表（老课件补页码时间轴用）。
+ * 本地目录里只有「课程名 / 课次名」，要拿 createdSec 得先换回 course_id / sub_id。
+ */
+export async function pageTimesByTitle(courseTitle, lessonTitle) {
+  const map = await courseByTitle();
+  const course = map.get(String(courseTitle));
+  if (!course || course.delisted) return null;
+  const subs = await listCourseSubs(course.courseId);
+  const sub = subs.find((s) => s.title === String(lessonTitle));
+  if (!sub) return null;
+  return listSubPpt(course.courseId, sub.subId);
+}

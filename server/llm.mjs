@@ -19,6 +19,8 @@ import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ensureInside } from './paths.mjs';
 import { loadConfig, getProfile, PROFILE_KEYS } from './config.mjs';
 import { describeFetchError } from './net.mjs';
 import { findMath, findBrokenMath, mathError, applyMathFixes } from './mdmath.mjs';
+import { ensurePageTimes, narrationByPage, readTranscript } from './pages.mjs';
+import { pageTimesByTitle } from './wqxt.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -654,6 +656,29 @@ async function runNote(job) {
   }).filter((p) => p.text);
   if (!pages.length) throw new Error('没有可用的页面内容（先转 MD）');
 
+  // 讲稿（回放转写）：按页切成「这一页老师当时讲了什么」，补课件里没写的内容
+  let narration = new Map();
+  let transMtime = 0;
+  try {
+    const tr = readTranscript(NOTES_DIR, ctx.course, ctx.lesson);
+    if (tr) {
+      transMtime = (() => {
+        try {
+          return fs.statSync(path.join(NOTES_DIR, ctx.course, `${ctx.lesson}.trans.json`)).mtimeMs;
+        } catch { return 0; }
+      })();
+      const pageTimes = await ensurePageTimes(ctx.course, ctx.lesson, pageTimesByTitle);
+      if (pageTimes) {
+        narration = narrationByPage(pageTimes, tr.segments);
+        job.log.push(`讲稿已按页对齐：${narration.size}/${pageTimes.length} 页有讲解（转写 ${tr.segments.length} 段）`);
+      } else {
+        job.log.push('发现讲稿，但缺页码时间轴——重新下载该课次可补上，本次先只用课件');
+      }
+    }
+  } catch (e) {
+    job.log.push('讲稿加载失败，本次只用课件：' + String(e?.message || e).slice(0, 120));
+  }
+
   // 按「页数 + 字符预算」分块
   const CHUNK_CHARS = 5200;
   const chunks = [];
@@ -675,7 +700,9 @@ async function runNote(job) {
   // 原文没变且已有整理稿 → 直接复用，跳过最贵的整理阶段
   let workText = null;
   try {
-    if (fs.existsSync(workPath) && fs.statSync(workPath).mtimeMs + 500 >= fs.statSync(mdPath).mtimeMs) {
+    // 讲稿后来才转的也要重算：转写文件比整理稿新就作废缓存
+    const workMtime = fs.existsSync(workPath) ? fs.statSync(workPath).mtimeMs : 0;
+    if (workMtime + 500 >= fs.statSync(mdPath).mtimeMs && workMtime + 500 >= transMtime) {
       workText = fs.readFileSync(workPath, 'utf8').replace(/^# [^\n]*知识整理稿（中间产物）\n+/, '').trim();
     }
   } catch { workText = null; }
@@ -694,12 +721,15 @@ async function runNote(job) {
   const works = await mapLimit(chunks, limit, async (chunk) => {
     const from = chunk[0].n;
     const to = chunk[chunk.length - 1].n;
-    const body = chunk.map((p) => `[第 ${p.n} 页]\n${p.text}`).join('\n\n');
+    const body = chunk.map((p) => {
+      const talk = narration.get(p.n);
+      return `[第 ${p.n} 页]\n${p.text}` + (talk ? `\n【老师讲解·语音转写】\n${talk}` : '');
+    }).join('\n\n');
     const { content, usage } = await chatRetry(
       [
         {
           role: 'system',
-          content: `你是《${ctx.course || '本课程'}》的助教。下面给你课件第 ${from}-${to} 页的 OCR 原文（可能有零星错字）。
+           content: `你是《${ctx.course || '本课程'}》的助教。下面给你课件第 ${from}-${to} 页的 OCR 原文（可能有零星错字）${narration.size ? '，以及带【老师讲解·语音转写】标记的课堂录音转写' : ''}。
 第一遍：按 SOAR 笔记框架把它**消化后整理**成一份「知识整理稿」（后面还要基于它写正式笔记，不要照抄原句）：
 1) Select（筛选）：只留关键——概念 / 公式 / 结论 / 对比 / 流程；先用一句话说清这一部分在讲什么；
 2) Organize + Associate（组织与关联）：把要点按知识逻辑组织，并显式写出相互关系（因果 / 对比 / 流程 / 条件）；
@@ -707,7 +737,9 @@ async function runNote(job) {
 4) **逐页覆盖**：这一块里的每一页都至少有一条整理内容（哪怕该页只有图表，也要写一条「该页在讲什么」）；
 5) **题目**：课件里的习题 / 例题要原样保留题干和选项，前面标【题目】；
 6) 每条关键内容末尾标注来源页码，格式 [[${lessonName}.pdf#page=N|N]]（N 必须来自上方「[第 N 页]」）；
-7) 只整理原文里有的内容：明显 OCR 错字可以改顺，但不要编造。
+7) 【老师讲解】是课堂录音的语音识别结果，可能有同音错字、口语和废话：**理解语义后再整理**，
+   不要照抄；它讲清了课件没写的内容（尤其是课件只有一张图时）就补进来，与课件冲突时以课件为准；
+8) 只整理上面材料里有的内容：明显错字可以改顺，但不要编造。
 直接输出 Markdown 文本（可用小标题和「- 」列表），不要前言、不要代码块。`,
         },
         { role: 'user', content: body },

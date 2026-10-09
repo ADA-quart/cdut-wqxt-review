@@ -10,6 +10,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { DOWNLOAD_DIR, ensureDir, ensureInside, sanitizeName } from './paths.mjs';
 import { listMyCourses, listCourseSubs, listSubPpt } from './wqxt.mjs';
+import { savePageTimes } from './pages.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -213,6 +214,15 @@ async function runTask(job, task) {
     emit(job);
     return;
   }
+
+  // 顺手记下每页出现在录播的第几秒（下载后只剩 0001.jpg 这样的名字，时间就找不回来了）
+  try {
+    savePageTimes(task.courseTitle || path.dirname(task.relDir), path.basename(absDir), images, {
+      source: 'download',
+      courseId: task.courseId,
+      subId: task.subId,
+    });
+  } catch { /* 记不上不影响下载 */ }
 
   const trashDir = path.join(path.dirname(absDir), '_回收站', path.basename(absDir));
   const concurrency = 5;

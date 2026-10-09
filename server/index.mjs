@@ -724,7 +724,7 @@ function readTree(dir, depth) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
-  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|note\.work\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json|progress\.json|trans\.json)$/i;
+  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|note\.work\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json|progress\.json|trans\.json|pages\.json)$/i;
   return entries
     .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_')
       && !(e.isDirectory() && e.name.endsWith('_assets'))   // 转 MD 的图形素材目录，不算课次
