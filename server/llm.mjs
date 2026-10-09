@@ -223,11 +223,52 @@ function imageRefs(text) {
   return (text.match(/!\[[^\]]*\]\([^)]*\)/g) || []).sort();
 }
 
-/** 取页面正文里的图片相对路径（转 MD 时裁出的图形素材就在 <课次>_assets/ 下） */
+/** 读 JPEG 的宽高（只看文件头，不解码整张图） */
+function jpegSize(file) {
+  try {
+    const buf = fs.readFileSync(file);
+    if (buf[0] !== 0xFF || buf[1] !== 0xD8) return null;
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xFF) { i += 1; continue; }
+      const marker = buf[i + 1];
+      const len = buf.readUInt16BE(i + 2);
+      // SOF0..SOF15（除 DHT=C4 / JPG=C8 / DAC=CC）
+      if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+        return { h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) };
+      }
+      i += 2 + len;
+    }
+  } catch { /* 读不到就当没有 */ }
+  return null;
+}
+
+/**
+ * 取页面正文里的图片相对路径（转 MD 时裁出的图形素材就在 <课次>_assets/ 下）。
+ * 布局模型会把**校徽、涂鸦、装饰**也裁成 figure，所以这里按尺寸过滤：
+ * 实测垃圾件（涂鸦 107×37 = 整页 0.4%、校徽 130×133 = 1.9%）与真图（挡土墙 6.8%、坝体 11%）
+ * 用「最小边 ≥150px 且面积 ≥整页 3%」能干净分开。
+ */
 function figurePaths(body) {
   return [...String(body || '').matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)]
     .map((m) => m[1].trim().replace(/^\.\//, ''))
     .filter((p) => p && !/^(https?:|data:|\/)/i.test(p));
+}
+
+/** 过滤掉校徽/涂鸦这类小裁片，返回（按面积从大到小）可用图形素材 */
+function usableFigures(paths, course, lessonName, pageSize) {
+  const pageArea = pageSize ? pageSize.w * pageSize.h : 0;
+  return paths
+    .map((rel) => {
+      const abs = path.join(NOTES_DIR, course, rel);
+      const size = jpegSize(abs);
+      return { rel, size, area: size ? size.w * size.h : 0 };
+    })
+    .filter((f) => f.size
+      && Math.min(f.size.w, f.size.h) >= 150
+      && (!pageArea || f.area / pageArea >= 0.03))
+    .sort((a, b) => b.area - a.area)
+    .map((f) => f.rel);
 }
 
 /**
@@ -879,11 +920,19 @@ async function runNote(job) {
   let copiedSlides = 0;
   for (const p of pages) {
     p.talk = narration.get(p.n) || '';
-    const figs = [...figurePaths(p.body)];
+    const slidePath = path.join(DATA_DIR, ctx.course, ctx.lesson, p.name);
+    const pageSize = jpegSize(slidePath);
+    const rawFigs = figurePaths(p.body);
+    const figs = usableFigures(rawFigs, ctx.course, ctx.lesson, pageSize);
     let slide = null;
-    if (p.text.length < 60) {
+    // 两种回退：① 整页就是一张图（图文页）；② 本来裁出了图、但全被判成装饰（校徽/涂鸦）——
+    // 这时宁可贴整页原图，也别把垃圾贴进笔记。本来就没什么图形的页不塞整页，免得笔记变成课件翻页。
+    if (p.text.length < 60 || (rawFigs.length > 0 && figs.length === 0)) {
       slide = ensureSlideCopy(ctx.course, ctx.lesson, p.name, job);
-      if (slide) { figs.push(slide); copiedSlides += 1; }
+      if (slide) {
+        if (!figs.length) figs.push(slide);
+        copiedSlides += 1;
+      }
     }
     p.figures = figs;
     if (slide) slideAssets.set(slide, true);
