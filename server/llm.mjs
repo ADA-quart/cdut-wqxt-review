@@ -865,6 +865,292 @@ async function runPolish(job) {
  *  ② 基于整理稿成稿：按知识逻辑重组小节，带页码角标 + 💭 讲解 + 易混提示 + 习题解答（折叠）
  *  ③ 从成稿提炼「本课脉络 + 课末必记」放到笔记最前面。
  */
+/**
+ * 视觉版笔记：以「幻灯片截图 + 该页讲稿」为主干，OCR 文本只做上下文与事后检查。
+ *
+ * 为什么有这条链路（2026-10-09 同一课次 A/B 实测）：
+ *   视觉版 23.9k 入 / 9.3k 出 / 43 秒；文本管线 55.4k 入 / 23.8k 出 / 120 秒；
+ *   关键知识点覆盖一致（逐条查过 20+ 个术语都命中，公式两边都对）。
+ *   省的原因是：不用把整份 OCR 文本塞进提示词，也不用「整理稿 → 成稿」两遍。
+ *
+ * 护栏（都是确定性的，不靠模型自觉）：
+ *   ① 角标规整：把 ⁽²⁾ 这类上标引用还原成 [[课次.pdf#page=N|N]]，保证可点击、可审计；
+ *   ② 覆盖自检 + 按页补漏：哪页一条都没引用，就单独拿那页的图再补一次；
+ *   ③ 无效图剔除：指向不存在文件的图片引用一律去掉；
+ *   ④ 听错词提示：讲稿里出现过、课件原文里没有的可疑中文片段，列进任务日志提醒核对
+ *      （真正的语义修正交给生成时「以幻灯片为准」的护栏和生成后的质量审计）。
+ */
+async function runNoteVision(job) {
+  const mdPath = job.mdPath;
+  const ctx = courseContext(job);
+  const lessonName = path.basename(mdPath).replace(/\.md$/i, '');
+  const original = fs.readFileSync(mdPath, 'utf8');
+  if (ctx.course) job.log.push(`提示词上下文：《${ctx.course}》（视觉链路）`);
+
+  const allPages = [...original.matchAll(/<!-- page (\d+): ([^>]+) -->/g)]
+    .map((m) => ({ n: Number(m[1]), name: m[2].trim() }));
+  if (!allPages.length) throw new Error('原文里没有页标记（先转 MD）');
+
+  // 讲稿按页对齐（没有讲稿也能跑，只是只有图）
+  let narr = new Map();
+  let transMtime = 0;
+  try {
+    const tr = readTranscript(NOTES_DIR, ctx.course, ctx.lesson);
+    if (tr) {
+      try { transMtime = fs.statSync(path.join(NOTES_DIR, ctx.course, `${ctx.lesson}.trans.json`)).mtimeMs; } catch { transMtime = 0; }
+      const pageTimes = await ensurePageTimes(ctx.course, ctx.lesson, pageTimesByTitle);
+      if (pageTimes) {
+        narr = narrationByPage(pageTimes, tr.segments, allPages);
+        job.log.push(`讲稿已按页对齐：${narr.size}/${allPages.length} 页有讲解（转写 ${tr.segments.length} 段）`);
+      }
+    }
+  } catch (e) {
+    job.log.push('讲稿加载失败，本节课只用截图：' + String(e?.message || e).slice(0, 100));
+  }
+
+  const items = [];
+  for (const p of allPages) {
+    const img = path.join(DATA_DIR, ctx.course, ctx.lesson, p.name);
+    if (!fs.existsSync(img)) continue;
+    items.push({ n: p.n, name: p.name, img, rel: `${ctx.lesson}/${p.name}`, talk: narr.get(p.n) || '' });
+  }
+  if (!items.length) throw new Error('找不到课件截图（先下载该课次）');
+
+  // 章节 / 习题标题：只给「结构上下文」，几十 token，避免把整份 OCR 文本塞回来
+  const heads = [...new Set([...original.matchAll(/^#{1,3}\s+(.+)$/gm)].map((m) => m[1].trim()))].slice(0, 30);
+  // 习题清单（课件标题里就写着）——用来强制「每道题都要有答案块」，否则模型只挑几道做
+  const exercises = heads.filter((h) => /习题|例题/.test(h)).slice(0, 20);
+  const headHint = heads.length ? `\n这节课课件里的小节/习题标题依次是：${heads.join('、')}。` : '';
+  const exHint = exercises.length
+    ? `\n课件里出现的习题有：${exercises.join('、')}——**每一道都必须有题干 + 折叠答案**，一道都不能漏。`
+    : '';
+  const valid = new Set(items.map((p) => p.n));
+
+  // 第一段：逐页消化（图片进模型，页码天然绑在每页上——
+  // 实测「一遍过写完整笔记」会让模型记错页码，角标指到别的页上，审计因此判「无依据」）
+  const SYS_READ = `你是《${ctx.course || '本课程'}》的助教。下面按顺序给你这节课**某一页幻灯片的截图**和该页老师讲解（语音转写，可能有同音错字）。${exHint}
+请**逐页**输出「页面整理稿」，每页一段，格式严格照下面（不要合并页、不要写别的标题）：
+[第 N 页]
+- （这一页的要点，2-5 条，每条末尾**必须**带 [[${lessonName}.pdf#page=N|N]] 角标，N 就是这一页的页号）
+- 【题目】…（这一页有习题就原样抄题干与选项，没有就不写这条）
+- 【通知】…（这一页有考试/作业/时间地点这类事务信息就原样照抄，没有就不写）
+- 【图】图片路径（这一页有值得贴进笔记的图时，从下面给的「图片路径」里原样挑一条）
+要求：只写这一页看到/听到的内容；**术语以幻灯片为准**，讲解里听错、讲不通的词（如「十二定律」）不要照抄，
+按幻灯片写法纠正，幻灯片上也没有就改成稳妥表述或省略；看不清的小字、公式、数字不要猜。`;
+
+  // 分块：每块 6 页（图片按块计费，太大会撞输出上限）
+  const chunks = [];
+  for (let i = 0; i < items.length; i += 6) chunks.push(items.slice(i, i + 6));
+  job.progress.total = chunks.length + 3;
+  job.progress.done = 0;
+  emit(job);
+
+  const bodies = [];
+  for (let ci = 0; ci < chunks.length; ci += 1) {
+    const chunk = chunks[ci];
+    const content = [];
+    for (const p of chunk) {
+      content.push({ type: 'text', text: `【第 ${p.n} 页】图片路径（贴图时原样使用）：${p.rel}\n老师讲解：\n${p.talk || '（这一页没有识别到讲解）'}` });
+      content.push({ type: 'image_url', image_url: { url: toImageDataUrl(p.img) } });
+    }
+    const { content: text, usage } = await chatRetry(
+      [{ role: 'system', content: SYS_READ }, { role: 'user', content }],
+      { profile: job.noteProfile, temperature: 0.2, maxTokens: 4000, thinking: 'off' },
+    );
+    addUsage(job, usage);
+    bodies.push(String(text || '').trim());
+    job.progress.done = ci + 1;
+    job.progress.current = `逐页整理 第 ${chunk[0].n}-${chunk[chunk.length - 1].n} 页`;
+    job.log.push(`第 ${chunk[0].n}-${chunk[chunk.length - 1].n} 页整理稿（${String(text || '').length} 字）`);
+    emit(job);
+  }
+  let work = bodies.join('\n\n').trim();
+  fs.writeFileSync(mdPath.replace(/\.md$/i, '.note.work.md'), `# ${lessonName} · 页面整理稿（视觉链路中间产物）\n\n${work}\n`, 'utf8');
+
+  // 第二段：按知识逻辑重组成稿（纯文本，便宜；角标已经在整理稿里绑好，重组时不丢）
+  const { content: noteRaw, usage: wUsage } = await chatRetry(
+    [
+      {
+        role: 'system',
+        content: `你是《${ctx.course || '本课程'}》的学霸助教。下面是这节课**逐页**的整理稿（每条已带页码角标）。请按 SOAR 框架写成**有思考的复习笔记**：
+1) Organize：按知识逻辑重组小节（### 知识主题标题），不要按页码流水账，也不要用「第几页」当标题；每个小节先用 1-2 句讲清核心结论；
+2) Associate：需要理解的地方写「- 💭 讲解：…」（为什么成立、怎么用、容易和什么混淆）；
+3) 关键要点用「- 」开头，**逐条保留原有的 [[${lessonName}.pdf#page=N|N]] 角标**（不许改写页号、不许丢角标）；
+4) 整理稿里标了【题目】的：**每道题都要**先给题干，再跟 <details><summary>先自己想，点开看答案</summary>…</details>，
+   折叠里必须有三段：① 思路（考什么、为什么用这个公式）② 计算（完整代入与结果）③ 易错点与自查；
+5) 整理稿里标了【通知】的，用一个独立小节原样收进来（数字、日期、地点不许改写）；
+6) 整理稿里标了【图】的，在相关要点下贴出来（原样保留路径）；
+7) 公式用 LaTeX；不要代码块、不要前言；不要编造整理稿之外的内容。
+直接输出正文（从 ### 开始），不要写全课总结（后面统一写）。`,
+      },
+      { role: 'user', content: work.slice(0, 24000) },
+    ],
+    { profile: job.noteProfile, temperature: 0.35, maxTokens: 8000, thinking: 'off' },
+  );
+  addUsage(job, wUsage);
+  let note = String(noteRaw || '').trim();
+  job.progress.done += 1;
+  emit(job);
+
+  // ① 角标规整：上标引用 → 可点击 wikilink
+  const supDigits = { '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9' };
+  let fixedRefs = 0;
+  note = note.replace(/⁽\s*([⁰¹²³⁴⁵⁶⁷⁸⁹]{1,2})\s*⁾/g, (m, d) => {
+    const n = Number([...d].map((c) => supDigits[c]).join(''));
+    if (!valid.has(n)) return m;
+    fixedRefs += 1;
+    return `[[${lessonName}.pdf#page=${n}|${n}]]`;
+  });
+  if (fixedRefs) job.log.push(`角标规整：${fixedRefs} 处上标引用还原成可点击角标`);
+
+  // ② 覆盖自检 + 按页补漏（用图片补，不看 OCR 文本）
+  const cited = new Set([...note.matchAll(/#page=(\d+)/g)].map((m) => Number(m[1])));
+  const missing = items.filter((p) => !cited.has(p.n));
+  if (missing.length) {
+    job.progress.total += 1;
+    emit(job);
+    const content = [{ type: 'text', text: `这节课的笔记漏掉了下面 ${missing.length} 页，请**为每一页补 1-2 条要点**（「- 」开头、末尾带 [[${lessonName}.pdf#page=N|N]] 角标，N 就是该页页号）；纯图页就写清「这一页画的是什么、和本节什么关系」。第一行输出「### 📌 补充要点（自动补漏）」。` }];
+    for (const p of missing) {
+      content.push({ type: 'text', text: `【第 ${p.n} 页】图片路径：${p.rel}\n老师讲解：\n${p.talk || '（无）'}` });
+      content.push({ type: 'image_url', image_url: { url: toImageDataUrl(p.img) } });
+    }
+    try {
+      const { content: patch, usage } = await chatRetry(
+        [{ role: 'system', content: `你是《${ctx.course || '本课程'}》的助教。按页给要点，术语以幻灯片为准，看不清的不要猜。` }, { role: 'user', content }],
+        { profile: job.noteProfile, temperature: 0.2, maxTokens: 2500, thinking: 'off' },
+      );
+      addUsage(job, usage);
+      note = `${note}\n\n${String(patch || '').trim()}`;
+      job.log.push(`覆盖补漏：为未引用的 ${missing.length} 页补写要点（${missing.map((p) => p.n).join('、')}）`);
+    } catch (e) {
+      job.log.push('补漏失败：' + String(e?.message || e).slice(0, 80));
+    }
+  }
+  job.progress.done += 1;
+  emit(job);
+
+  // ③ 顶部块（事务通知 / 脉络 / 必记）
+  const { content: digestRaw, usage: dUsage } = await chatRetry(
+    [
+      {
+        role: 'system',
+        content: `下面是《${ctx.course || '本课程'}》一节课的复习笔记。请提炼三块，严格按格式输出：
+## 📌 事务通知
+（只写明确提到的事务性信息：考试时间/地点/题型/范围、作业提交；日期地点数字与原文一致；没有就整块不输出）
+## 🧭 本课脉络
+（2-4 句话讲清这节课的逻辑）
+## 🎯 课末必记
+（最核心的 6-10 个考点，「- 」开头，末尾带 [[${lessonName}.pdf#page=N|N]] 角标）`,
+      },
+      { role: 'user', content: note.slice(0, 20000) },
+    ],
+    { profile: job.noteProfile, temperature: 0.3, maxTokens: 2500, thinking: 'off' },
+  );
+  addUsage(job, dUsage);
+  const digest = stripEmptyNotice(digestRaw);
+  job.progress.done += 1;
+  emit(job);
+
+  // ④ 图兜底（确定性）：模型这次没贴图（同样的提示词两次跑结果不同），就自动附一节关键图。
+  //    关键图 = 该页裁出的图形素材里面积最大的那几张（校徽/涂鸦已在 usableFigures 里过滤掉），
+  //    找不到合格裁片就用整页原图——宁可贴整页，也不贴垃圾。
+  if ((note.match(/!\[[^\]]*\]\([^)]+\)/g) || []).length < 2) {
+    const bodyOf = new Map(splitPages(original).pages.map((p) => [Number(p.n), p.body]));
+    const withCrop = [];
+    const withSlide = [];
+    for (const p of items) {
+      const slide = path.join(DATA_DIR, ctx.course, ctx.lesson, p.name);
+      const crops = usableFigures(figurePaths(bodyOf.get(p.n) || ''), ctx.course, ctx.lesson, jpegSize(slide));
+      if (crops.length) {
+        const size = jpegSize(path.join(NOTES_DIR, ctx.course, crops[0]));
+        withCrop.push({ n: p.n, rel: crops[0], area: size ? size.w * size.h : 0 });
+        continue;
+      }
+      // 没有合格裁片的页：只有「整页就是一张图」才用整页原图，
+      // 而且**不参与面积排名**——整页永远比裁图大，混在一起排会把关键图挤掉
+      if (stripForSummary(bodyOf.get(p.n) || '').length < 60) {
+        const rel = ensureSlideCopy(ctx.course, ctx.lesson, p.name, job);
+        if (rel) withSlide.push({ n: p.n, rel });
+      }
+    }
+    withCrop.sort((a, b) => b.area - a.area);
+    const top = withCrop.slice(0, 5);
+    for (const s of withSlide) {
+      if (top.length >= 3) break;
+      if (!top.some((t) => t.n === s.n)) top.push({ ...s, area: 0 });
+    }
+    top.sort((a, b) => a.n - b.n);
+    if (top.length) {
+      const lines = top.map((p) => `- 第 ${p.n} 页（点角标可回课件核对）[[${lessonName}.pdf#page=${p.n}|${p.n}]]\n\n![第 ${p.n} 页图](${p.rel})`);
+      note = `${note}\n\n### 📎 关键图（自动附上）\n\n${lines.join('\n\n')}`;
+      job.log.push(`模型没贴图，已自动附上 ${top.length} 张关键图`);
+    }
+  }
+
+  // ⑤ 落盘（清理空小节 / 无效图；备份旧笔记）
+  const body = dropBrokenImages(stripPlaceholderSections(note), ctx.course);
+  if (body.dropped) job.log.push(`丢掉 ${body.dropped} 个指向不存在文件的图片引用`);
+  const head = `# ${lessonName} · 深度复习笔记
+
+> 由 AI 通读课件截图与课堂讲解后整理：带角标的条目可跳到课件对应页核对，💭 是讲解与补充（AI 生成，注意甄别），折叠框里是习题参考答案（先自己想再点开）。
+
+${digest.trim()}
+
+`;
+  const notePath = mdPath.replace(/\.md$/i, '.note.md');
+  if (fs.existsSync(notePath)) {
+    try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
+  }
+  fs.writeFileSync(notePath, head + body.out + '\n', 'utf8');
+
+  // 同步摘要块到原文顶部（与文本链路一致，便于复习页顶部显示重点）
+  try {
+    const block = `<!-- llm-summary:start -->\n${digest.trim()}\n<!-- llm-summary:end -->\n\n`;
+    const stat = fs.statSync(mdPath);
+    let mdText = fs.readFileSync(mdPath, 'utf8');
+    mdText = /<!-- llm-summary:start -->/.test(mdText)
+      ? mdText.replace(/<!-- llm-summary:start -->[\s\S]*?<!-- llm-summary:end -->\n?/, block)
+      : mdText;
+    fs.writeFileSync(mdPath, mdText, 'utf8');
+    try { fs.utimesSync(mdPath, stat.atime, stat.mtime); } catch { /* 忽略 */ }
+  } catch { /* 忽略 */ }
+
+  const cov = new Set([...body.out.matchAll(/#page=(\d+)/g)].map((m) => Number(m[1])));
+  job.log.push(`覆盖自检：${[...valid].filter((n) => cov.has(n)).length}/${items.length} 页被引用（视觉链路）`);
+  job.noteRel = path.relative(NOTES_DIR, notePath).split(path.sep).join('/');
+  job.progress.done = job.progress.total;
+  job.progress.current = '完成';
+  emit(job);
+  return { chunks: chunks.length, pages: items.length, note: job.noteRel };
+}
+
+/**
+ * 生成笔记的入口：能用视觉就走视觉链路（省 3/4 token、快 3 倍），否则回落文本链路。
+ * 配置 llm.notePipeline：auto（默认）/ vision（强制视觉）/ text（强制文本）。
+ */
+async function runNoteAuto(job) {
+  const want = String(loadConfig().llm.notePipeline || 'auto');
+  if (want === 'text') {
+    job.log.push('笔记链路：文本（config.llm.notePipeline=text）');
+    return runNote(job);
+  }
+  const profileKey = want === 'vision' ? (await pickVisionProfile(job)) || 'text' : await pickVisionProfileQuiet(job);
+  if (profileKey) {
+    job.noteProfile = profileKey;
+    return runNoteVision(job);
+  }
+  job.log.push('没有可读图的档位，笔记回落到文本链路');
+  return runNote(job);
+}
+
+/** 和 pickVisionProfile 一样，但不往任务日志里写「不能读图」的探测过程（自动模式下太吵） */
+async function pickVisionProfileQuiet(job) {
+  const before = job.log.length;
+  const key = await pickVisionProfile(job);
+  job.log.splice(before);
+  return key;
+}
+
 async function runNote(job) {
   const mdPath = job.mdPath;
   const original = fs.readFileSync(mdPath, 'utf8');
@@ -1944,7 +2230,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
             : op === 'polish'
               ? await runPolish(job)
               : op === 'note'
-                ? await runNote(job)
+                ? await runNoteAuto(job)
                 : op === 'audit'
                   ? await runAudit(job)
                   : await runWeave(job);

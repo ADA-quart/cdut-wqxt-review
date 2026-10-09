@@ -24,6 +24,8 @@ const DEFAULTS = {
     temperature: 0.2,
     concurrency: 3,
     defaultMode: 'text', // text | visionCloud | visionLocal
+    // 笔记生成链路：auto = 有能读图的档位就走视觉（省 3/4 token、快 3 倍），否则回落文本
+    notePipeline: 'auto', // auto | vision | text
   },
   // 转 MD（Pix2Text）并行任务数：1 个任务约 6~7GB 显存，按显卡容量调
   md: { parallel: 'auto' },   // 'auto' = 按显存自动，或 1~4
