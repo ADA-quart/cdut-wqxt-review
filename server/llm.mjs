@@ -965,7 +965,8 @@ async function runNoteVision(job) {
     emit(job);
   }
   let work = bodies.join('\n\n').trim();
-  fs.writeFileSync(mdPath.replace(/\.md$/i, '.note.work.md'), `# ${lessonName} · 页面整理稿（视觉链路中间产物）\n\n${work}\n`, 'utf8');
+  // 中间产物用**独立文件名**：两条链路的整理稿格式不同，共用 `.note.work.md` 会互相误用缓存（踩过）
+  fs.writeFileSync(mdPath.replace(/\.md$/i, '.note.work.vision.md'), `# ${lessonName} · 页面整理稿（视觉链路中间产物）\n\n${work}\n`, 'utf8');
 
   // 第二段：按知识逻辑重组成稿（纯文本，便宜；角标已经在整理稿里绑好，重组时不丢）
   const { content: noteRaw, usage: wUsage } = await chatRetry(
@@ -1129,9 +1130,11 @@ ${digest.trim()}
  * 配置 llm.notePipeline：auto（默认）/ vision（强制视觉）/ text（强制文本）。
  */
 async function runNoteAuto(job) {
-  const want = String(loadConfig().llm.notePipeline || 'auto');
+  // 单次任务可用 mode 强制（API: {op:'note', dir, mode:'text'|'vision'}），否则按配置
+  const forced = ['text', 'vision'].includes(job.requestedMode) ? job.requestedMode : '';
+  const want = forced || String(loadConfig().llm.notePipeline || 'auto');
   if (want === 'text') {
-    job.log.push('笔记链路：文本（config.llm.notePipeline=text）');
+    job.log.push(`笔记链路：文本${forced ? '（本次任务指定）' : '（config.llm.notePipeline=text）'}`);
     return runNote(job);
   }
   const profileKey = want === 'vision' ? (await pickVisionProfile(job)) || 'text' : await pickVisionProfileQuiet(job);
@@ -2278,6 +2281,7 @@ export function createLlmJob({ op, dir, mode, scope }) {
     op,
     jobKey,
     mode: useMode,
+    requestedMode: mode || '',   // 原始请求参数：note 任务用它强制 text / vision 链路
     scope: scope === 'all' ? 'all' : 'course',
     status: 'pending',
     relDir,
