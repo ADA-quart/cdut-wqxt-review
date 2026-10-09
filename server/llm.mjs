@@ -31,6 +31,9 @@ let queue = Promise.resolve();
 
 const MODE_LABELS = { text: '纯文本', visionCloud: '图片上云', visionLocal: '图片本地' };
 
+/** 知识点清单的提取口径版本：改动提取逻辑（如纳入讲稿）就 +1，让旧缓存自动失效 */
+const POINTS_CACHE_V = 2;
+
 // ---------- LLM 调用 ----------
 
 /**
@@ -925,6 +928,26 @@ async function runAudit(job) {
   // ① 覆盖检查（本地）
   const { pages } = splitPages(original);
   if (!pages.length) throw new Error('原文里没有页标记（先转 MD）');
+
+  // 讲稿（若有）必须一起作为审计依据：否则讲稿带来的内容会被判成「原文不支持」而被削掉
+  let narration = new Map();
+  let transMtime = 0;
+  try {
+    const tr = readTranscript(NOTES_DIR, ctx.course, ctx.lesson);
+    if (tr) {
+      try {
+        transMtime = fs.statSync(path.join(NOTES_DIR, ctx.course, `${ctx.lesson}.trans.json`)).mtimeMs;
+      } catch { transMtime = 0; }
+      const pageTimes = await ensurePageTimes(ctx.course, ctx.lesson, pageTimesByTitle);
+      if (pageTimes) {
+        narration = narrationByPage(pageTimes, tr.segments);
+        job.log.push(`审计纳入讲稿：${narration.size}/${pageTimes.length} 页有老师讲解`);
+      }
+    }
+  } catch (e) {
+    job.log.push('讲稿加载失败，本次只按课件审计：' + String(e?.message || e).slice(0, 100));
+  }
+
   const cov = coverageReport(pages, noteText);
   job.log.push(`覆盖检查：${cov.covered}/${cov.total} 页被笔记引用；有文字但未覆盖 ${cov.gaps.length} 页，图片页未覆盖 ${cov.picOnly.length} 页`);
 
@@ -961,26 +984,37 @@ async function runAudit(job) {
   let done = 1;
   await mapLimit(groupList, limit, async (g) => {
     if (job.canceled) return;
-    const src = String(pageMap.get(g.page) || '').slice(0, 3200);
+    // 条目常引用多页（如 [[page=7]] [[page=8]]）：只拿首引页核对会把别页的内容误判成没依据，
+    // 所以把这一组条目引用到的页都带上（最多 4 页）
+    const cited = [...new Set(g.items.flatMap((it) => it.pages))].slice(0, 4);
+    const src = cited
+      .map((n) => `【第 ${n} 页课件原文】\n${String(pageMap.get(n) || '').slice(0, 1800)}`)
+      .join('\n\n');
+    const talk = cited
+      .filter((n) => narration.get(n))
+      .map((n) => `【第 ${n} 页老师讲解·语音转写】\n${String(narration.get(n)).slice(0, 1100)}`)
+      .join('\n\n');
     const list = g.items.map((it, k) => `${k + 1}. ${it.text}`).join('\n');
     try {
       const { content, usage } = await chatRetry(
         [
           {
             role: 'system',
-            content: `你是严谨的课件笔记审计员。逐条核对「笔记条目」是否被「课件原文」支持。
+            content: `你是严谨的课件笔记审计员。逐条核对「笔记条目」是否被材料支持。材料有两部分：
+【课件原文】= 课件 OCR 文本；【老师讲解】= 课堂录音的语音转写（可能缺字、同音错字、口语）。
+**只要其中之一支持就算被支持**；两者都不支持才是不支持。讲解里的错字不算「不符」，按语义判断即可。
 判定等级（只能四选一）：
-- ok：原文完全支持（允许同义改写；数字、公式、术语一致）
-- partial：部分支持——有原文没有的细节、过度推测、或丢了关键限定条件
-- unsupported：原文不支持或与之矛盾
+- ok：课件原文或老师讲解完全支持（允许同义改写；数字、公式、术语一致）
+- partial：部分支持——有材料里没有的细节、过度推测、或丢了关键限定条件
+- unsupported：两部分都不支持或与之矛盾
 - figure：该条依赖图片/图表才能核实，纯文本无法判断
-从严对待「原文没有而笔记自己添加的内容」；reason 用中文、不超过 30 字。
-对 partial / unsupported 的条目：如果与原文不符的部分能依据原文改对（错字、公式、数字、术语、丢掉的限定条件），在 fix 里给出「修正后的完整条目正文」——保留条目里属于 AI 自己的补充内容，只把与原文不符/矛盾的部分改对；不要新增知识、不要删掉补充、不要带页码角标。无法确定或整条主要是 AI 补充时省略 fix。
+从严对待「材料里没有而笔记自己添加的内容」；reason 用中文、不超过 30 字。
+对 partial / unsupported 的条目：如果与材料不符的部分能依据材料改对（错字、公式、数字、术语、丢掉的限定条件），在 fix 里给出「修正后的完整条目正文」——保留条目里属于 AI 自己的补充内容，只把与材料不符/矛盾的部分改对；**依据只来自老师讲解、且不是明显错字的，不要改动它**；不要新增知识、不要删掉补充、不要带页码角标。无法确定或整条主要是 AI 补充时省略 fix。
 只输出 JSON：{"items":[{"i":1,"verdict":"ok","reason":"...","fix":"..."}]}，i 是条目序号，fix 可选。`,
           },
           {
             role: 'user',
-            content: `【第 ${g.page} 页课件原文】\n${src}\n\n【待核对的笔记条目】\n${list}`,
+            content: `${src}\n` + (talk ? `\n${talk}\n` : '') + `\n【待核对的笔记条目】\n${list}`,
           },
         ],
         { profile: 'text', temperature: 0.1, maxTokens: 1500 },
@@ -1048,26 +1082,36 @@ async function runAudit(job) {
   const pointsMdPath = mdPath.replace(/\.md$/i, '.points.md');
   let points = [];
   let reusedPoints = false;
+  let pointsVersion = 0;   // 复用旧清单时保留它原本的版本，别让旧内容被贴上「新版」标签
   try {
     const mdMtime = fs.statSync(mdPath).mtimeMs;
     if (fs.existsSync(pointsJsonPath)) {
       const cached = JSON.parse(fs.readFileSync(pointsJsonPath, 'utf8'));
-      if (cached && Number(cached.sourceMtimeMs || 0) + 500 >= mdMtime && Array.isArray(cached.items)) {
+      if (cached && Number(cached.sourceMtimeMs || 0) + 500 >= mdMtime
+        && Number(cached.sourceMtimeMs || 0) + 500 >= transMtime
+        && Number(cached.v || 0) >= POINTS_CACHE_V   // 提取口径变了就重提，别用旧清单
+        && Array.isArray(cached.items)) {
         points = cached.items
           .map((p) => ({ point: String(p.point || '').trim(), page: Number(p.page) || 0 }))
           .filter((p) => p.point);
         reusedPoints = points.length > 0;
+        pointsVersion = Number(cached.v) || 0;
       }
     }
     // 兼容旧版：只有 .points.md 时从清单里解析
-    if (!reusedPoints && fs.existsSync(pointsMdPath) && fs.statSync(pointsMdPath).mtimeMs + 500 >= mdMtime) {
+    // （已有 .points.json 就别走这条——否则版本升级后仍会被旧清单挡住）
+    if (!reusedPoints && !fs.existsSync(pointsJsonPath)
+      && fs.existsSync(pointsMdPath) && fs.statSync(pointsMdPath).mtimeMs + 500 >= mdMtime
+      && fs.statSync(pointsMdPath).mtimeMs + 500 >= transMtime) {
       for (const line of fs.readFileSync(pointsMdPath, 'utf8').split('\n')) {
         const m = /^- (?:✅|⚠️|❌|·)\s+(.+?)\s*\[\[[^\]]*#page=(\d+)\|[^\]]*\]\]\s*$/.exec(line.trim());
         if (m) points.push({ point: m[1].trim(), page: Number(m[2]) || 0 });
       }
       reusedPoints = points.length > 0;
+      pointsVersion = 0;
     }
   } catch { points = []; reusedPoints = false; }
+  if (!reusedPoints) pointsVersion = POINTS_CACHE_V;
 
   const pointChunks = [];
   if (reusedPoints) {
@@ -1077,7 +1121,8 @@ async function runAudit(job) {
     let cur = [];
     let size = 0;
     for (const p of pages) {
-      const txt = pageMap.get(Number(p.n)) || '';
+      // 讲稿也要计入块大小，否则加了讲解以后单块会过大
+      const txt = (pageMap.get(Number(p.n)) || '') + (narration.get(Number(p.n)) || '');
       if (cur.length && (cur.length >= 12 || size + txt.length > 15000)) {
         pointChunks.push(cur);
         cur = [];
@@ -1097,15 +1142,19 @@ async function runAudit(job) {
     const to = Number(chunk[chunk.length - 1].n);
     job.progress.current = `提取知识点（第 ${from}-${to} 页）`;
     emit(job);
-    const body = chunk.map((p) => `[第 ${p.n} 页]\n${pageMap.get(Number(p.n)) || ''}`).join('\n\n');
+    const body = chunk.map((p) => {
+      const talk = narration.get(Number(p.n));
+      return `[第 ${p.n} 页]\n${pageMap.get(Number(p.n)) || ''}` + (talk ? `\n【老师讲解·语音转写】\n${talk.slice(0, 1500)}` : '');
+    }).join('\n\n');
     try {
       const { content, usage } = await chatRetry(
         [
           {
             role: 'system',
-            content: `你是《${ctx.course || '本课程'}》的助教。从课件原文提取「知识点清单」：每条 = 一个可考试/可自测的独立知识点（概念、公式、结论、方法、现象解释等）。
+            content: `你是《${ctx.course || '本课程'}》的助教。从下面材料提取「知识点清单」：每条 = 一个可考试/可自测的独立知识点（概念、公式、结论、方法、现象解释等）。
+材料可能含【老师讲解·语音转写】（可能有同音错字）——**老师强调的考点、易错点、例题思路也要收进清单**，这是课件上没有的信息。
 要求：
-1) 覆盖全部页面，宁多勿漏；完全重复的合并；
+1) 覆盖全部页面，宁多勿漏；完全重复的合并；讲解里的错字按语义理解后再写，不要照抄错字；
 2) 每条给出来源页码（取原文里的「[第 N 页]」标记）；
 3) point 用中文 15-40 字，公式保留 LaTeX；
 4) 本段最多 60 条。
@@ -1218,7 +1267,7 @@ async function runAudit(job) {
     try { knownMtime = fs.statSync(mdPath).mtimeMs; } catch { /* 忽略 */ }
     try {
       fs.writeFileSync(pointsJsonPath, JSON.stringify({
-        v: 1,
+        v: pointsVersion,
         generatedAt: Date.now(),
         lesson: lessonName,
         sourceMtimeMs: knownMtime,
