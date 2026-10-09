@@ -255,6 +255,102 @@ function ensureSlideCopy(course, lesson, name, job) {
 }
 
 /** 丢掉笔记里指向不存在文件的图片（模型可能编路径），避免打开笔记一片破图 */
+const visionPickCache = new Map();   // baseUrl|model → 档位名 或 null（探测过不可用）
+
+/**
+ * 挑一个能看图的档位：专用视觉档（云端 qwen-vl 等）→ 本地视觉档（Ollama）→ 文本档。
+ * 文本档也可能是多模态的（实测 deepseek-flash 能读表格），所以放在候选里；
+ * 探测结果按 baseUrl|model 缓存，探测失败的下次直接跳过，不白等。
+ */
+async function pickVisionProfile(job) {
+  const cfg = loadConfig();
+  const profiles = cfg.llm.profiles || {};
+  const order = ['visionCloud', 'visionLocal', 'text'].filter((k) => profiles[k]?.baseUrl);
+  for (const key of order) {
+    const p = profiles[key];
+    if (key !== 'visionLocal' && !p.apiKey) continue;          // 云端档没配 key 就别试
+    const cacheKey = `${p.baseUrl}|${p.model}`;
+    if (visionPickCache.has(cacheKey)) {
+      if (visionPickCache.get(cacheKey) === key) return key;
+      continue;
+    }
+    try {
+      const { content } = await chat(
+        [{
+          role: 'user',
+          content: [
+            { type: 'text', text: '回复 OK 两个字母即可。' },
+            // 1×1 透明 PNG：只用来确认这个档位收不收图片
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' } },
+          ],
+        }],
+        { profile: key, maxTokens: 64, thinking: 'off' },
+      );
+      visionPickCache.set(cacheKey, key);
+      job.log.push(`图注使用「${MODE_LABELS[key] || key}」档位（${p.model}）`);
+      return key;
+    } catch (e) {
+      visionPickCache.set(cacheKey, null);
+      job.log.push(`「${MODE_LABELS[key] || key}」不能读图，换下一个：${String(e?.message || e).slice(0, 80)}`);
+    }
+  }
+  return null;
+}
+
+/**
+ * 关键图图注：把整页截图交给视觉模型，写 2-4 句「这页的图在画什么」。
+ * 只对图多字少的页做（图文页 / 图表页），最多 30 页，控制花费。
+ */
+async function captionFigures(pages, { course, lesson, job }) {
+  // 有图的页都值得看一眼，但优先图多字少的页（真正的「一张图讲一节课」先拿到图注）
+  const targets = pages
+    .filter((p) => p.figures?.length)
+    .sort((a, b) => a.text.length - b.text.length)
+    .slice(0, 30);
+  if (!targets.length) return 0;
+  const profileKey = await pickVisionProfile(job);
+  if (!profileKey) {
+    job.log.push('没有可读图的档位，跳过图注（配一个视觉模型或用多模态文本模型即可）');
+    return 0;
+  }
+  const limit = Math.min(loadConfig().llm.concurrency || 3, 3);
+  let done = 0;
+  await mapLimit(targets, limit, async (p) => {
+    if (job.canceled) return;
+    const imgPath = path.join(DATA_DIR, course, lesson, p.name);
+    if (!fs.existsSync(imgPath)) return;
+    try {
+      const { content, usage } = await chatRetry(
+        [
+          {
+            role: 'system',
+            content: `你在帮学生整理《${course}》的复习笔记。下面给你**一页课件截图**，以及这一页的 OCR 文字与老师讲解。
+请写 2-4 句「图注」，说清：这张图/表在画什么（坐标轴、曲线、几何关系、标注符号）、它和这一页知识点的关系。
+要求：只写你真正看到的和材料里有的；小字、公式、数字看不清就不要猜；不要复述整页文字；不要客套话。直接输出图注正文。`,
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `【本页 OCR 文字】\n${p.text.slice(0, 1200)}\n\n【老师讲解】\n${(p.talk || '').slice(0, 1200) || '（无）'}` },
+              { type: 'image_url', image_url: { url: toImageDataUrl(imgPath) } },
+            ],
+          },
+        ],
+        { profile: profileKey, temperature: 0.2, maxTokens: 800, thinking: 'off' },
+      );
+      addUsage(job, usage);
+      const text = String(content || '').trim();
+      if (text) { p.caption = text; done += 1; }
+    } catch (e) {
+      job.log.push(`第 ${p.n} 页图注失败：${String(e?.message || e).slice(0, 80)}`);
+    }
+    job.progress.current = `图注 ${done}/${targets.length}`;
+    emit(job);
+  });
+  if (done) job.log.push(`图注完成：${done}/${targets.length} 页（视觉档位：${profileKey}）`);
+  return done;
+}
+
 function dropBrokenImages(mdText, course) {
   let dropped = 0;
   const out = String(mdText).replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, src) => {
@@ -782,6 +878,7 @@ async function runNote(job) {
   const slideAssets = new Map();
   let copiedSlides = 0;
   for (const p of pages) {
+    p.talk = narration.get(p.n) || '';
     const figs = [...figurePaths(p.body)];
     let slide = null;
     if (p.text.length < 60) {
@@ -836,15 +933,19 @@ async function runNote(job) {
     job.log.push('原文没变，复用已有整理稿（跳过整理阶段）');
     emit(job);
   } else {
+  // ---------- ⓪.5 关键图图注（视觉模型看整页截图，只对图多字少的页） ----------
+  await captionFigures(pages, { course: ctx.course, lesson: ctx.lesson, job });
+
   // ---------- ① 逐块整理（消化，不照抄） ----------
   const limit = loadConfig().llm.concurrency || 3;
   const works = await mapLimit(chunks, limit, async (chunk) => {
     const from = chunk[0].n;
     const to = chunk[chunk.length - 1].n;
     const body = chunk.map((p) => {
-      const talk = narration.get(p.n);
+      const talk = p.talk || narration.get(p.n);
       const figs = p.figures?.length ? `\n【本页可贴的图】\n${p.figures.join('\n')}` : '';
-      return `[第 ${p.n} 页]\n${p.text}` + (talk ? `\n【老师讲解·语音转写】\n${talk}` : '') + figs;
+      const cap = p.caption ? `\n【图示·视觉模型看图所得】\n${p.caption}` : '';
+      return `[第 ${p.n} 页]\n${p.text}` + (talk ? `\n【老师讲解·语音转写】\n${talk}` : '') + cap + figs;
     }).join('\n\n');
     const { content, usage } = await chatRetry(
       [
@@ -862,6 +963,8 @@ async function runNote(job) {
    不要照抄；它讲清了课件没写的内容（尤其是课件只有一张图时）就补进来，与课件冲突时以课件为准；
    **听错的术语不要照抄**：先到课件里找对应说法（如「新一页公司」→「公式」），
    找不到对应就换成稳妥的一般表述或省略，绝不要把明显讲不通的词（如「十二定律」）原样写进笔记；
+   【图示】是视觉模型**看这一页截图**写的图注，可以用它讲清图里画的是什么（轴、曲线、几何关系），
+   但它是辅助描述，与课件文字冲突时以课件为准；
 8) **事务性信息必须原样保留**：考试时间 / 地点 / 题型 / 范围、作业截止、提交要求、课程安排等，
    照抄关键数字与名称、前面标【通知】，不要归纳、不要润色、不要因为「不是知识点」而删掉；
 9) **图**：【本页可贴的图】列出的是这一页可以贴进笔记的图片路径。若某张图是理解该页的关键
