@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ensureInside } from './paths.mjs';
+import { DATA_DIR, NOTES_DIR, DOWNLOAD_DIR, ensureDir, ensureInside } from './paths.mjs';
 import { loadConfig, getProfile, PROFILE_KEYS } from './config.mjs';
 import { describeFetchError } from './net.mjs';
 import { findMath, findBrokenMath, mathError, applyMathFixes } from './mdmath.mjs';
@@ -221,6 +221,50 @@ function splitPages(md) {
 
 function imageRefs(text) {
   return (text.match(/!\[[^\]]*\]\([^)]*\)/g) || []).sort();
+}
+
+/** 取页面正文里的图片相对路径（转 MD 时裁出的图形素材就在 <课次>_assets/ 下） */
+function figurePaths(body) {
+  return [...String(body || '').matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)]
+    .map((m) => m[1].trim().replace(/^\.\//, ''))
+    .filter((p) => p && !/^(https?:|data:|\/)/i.test(p));
+}
+
+/**
+ * 整页图（课件原图）复制进笔记目录，返回相对课程目录的路径。
+ *
+ * 为什么复制而不是直接引用：课件图在数据目录、笔记在笔记目录，两个目录可以分开
+ * （比如笔记直接写进 Obsidian 库），相对路径跨不过去；复习页也只按笔记目录解析图片。
+ * 只复制「图文页」（OCR 没文字、内容全在图里），不是整本课件都拷。
+ */
+function ensureSlideCopy(course, lesson, name, job) {
+  const src = path.join(DATA_DIR, course, lesson, name);
+  const rel = `${lesson}_assets/slides/${name}`;
+  const dst = path.join(NOTES_DIR, course, rel);
+  try {
+    if (!fs.existsSync(dst)) {
+      if (!fs.existsSync(src)) return null;
+      ensureDir(path.dirname(dst));
+      fs.copyFileSync(src, dst);
+    }
+    return rel;
+  } catch (e) {
+    job?.log.push(`第 ${name} 张原图复制失败：${String(e?.message || e).slice(0, 60)}`);
+    return null;
+  }
+}
+
+/** 丢掉笔记里指向不存在文件的图片（模型可能编路径），避免打开笔记一片破图 */
+function dropBrokenImages(mdText, course) {
+  let dropped = 0;
+  const out = String(mdText).replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, src) => {
+    if (/^(https?:|data:)/i.test(src)) return m;
+    const abs = path.join(NOTES_DIR, course, src.replace(/^\.\//, ''));
+    if (fs.existsSync(abs)) return m;
+    dropped += 1;
+    return alt ? `（图：${alt}）` : '';
+  });
+  return { out, dropped };
 }
 
 function wikiLinks(text) {
@@ -734,6 +778,25 @@ async function runNote(job) {
     job.log.push(`有 ${allPages.length - pages.length} 页既无文字也无讲解，跳过`);
   }
 
+  // 每页可用的图：转 MD 裁出的图形素材 + （图文页）整页原图
+  const slideAssets = new Map();
+  let copiedSlides = 0;
+  for (const p of pages) {
+    const figs = [...figurePaths(p.body)];
+    let slide = null;
+    if (p.text.length < 60) {
+      slide = ensureSlideCopy(ctx.course, ctx.lesson, p.name, job);
+      if (slide) { figs.push(slide); copiedSlides += 1; }
+    }
+    p.figures = figs;
+    if (slide) slideAssets.set(slide, true);
+  }
+  const withFigures = pages.filter((p) => p.figures.length);
+  if (withFigures.length) {
+    job.log.push(`可贴的图：${withFigures.length} 页共 ${withFigures.reduce((n, p) => n + p.figures.length, 0)} 张`
+      + (copiedSlides ? `（含 ${copiedSlides} 张整页原图，已复制到笔记目录）` : ''));
+  }
+
   // 按「页数 + 字符预算」分块
   const CHUNK_CHARS = 5200;
   const chunks = [];
@@ -780,7 +843,8 @@ async function runNote(job) {
     const to = chunk[chunk.length - 1].n;
     const body = chunk.map((p) => {
       const talk = narration.get(p.n);
-      return `[第 ${p.n} 页]\n${p.text}` + (talk ? `\n【老师讲解·语音转写】\n${talk}` : '');
+      const figs = p.figures?.length ? `\n【本页可贴的图】\n${p.figures.join('\n')}` : '';
+      return `[第 ${p.n} 页]\n${p.text}` + (talk ? `\n【老师讲解·语音转写】\n${talk}` : '') + figs;
     }).join('\n\n');
     const { content, usage } = await chatRetry(
       [
@@ -800,7 +864,10 @@ async function runNote(job) {
    找不到对应就换成稳妥的一般表述或省略，绝不要把明显讲不通的词（如「十二定律」）原样写进笔记；
 8) **事务性信息必须原样保留**：考试时间 / 地点 / 题型 / 范围、作业截止、提交要求、课程安排等，
    照抄关键数字与名称、前面标【通知】，不要归纳、不要润色、不要因为「不是知识点」而删掉；
-9) 只整理上面材料里有的内容：明显错字可以改顺，但不要编造。
+9) **图**：【本页可贴的图】列出的是这一页可以贴进笔记的图片路径。若某张图是理解该页的关键
+   （示意图、曲线、结构图、纯图页），在对应要点后面另起一行写「【图】路径」，路径**原样照抄**；
+   一页最多留 1 张，不是关键的图不要留；
+10) 只整理上面材料里有的内容：明显错字可以改顺，但不要编造。
 直接输出 Markdown 文本（可用小标题和「- 」列表），不要前言、不要代码块。`,
         },
         { role: 'user', content: body },
@@ -853,6 +920,9 @@ async function runNote(job) {
 7) 整理稿里若残留明显听错的词（讲不通的术语）：换成课件里的正确说法，找不到就别写，不要照搬。
 8) **不要输出空小节，也不要在笔记里解释材料缺什么**：「本材料中未出现…故无…」这类说明是给系统的，
    不是给复习的人看的——没有的内容直接不写。
+9) **关键图要贴出来**：整理稿里标了「【图】路径」的，在相关要点下面插入一张 Markdown 图片——
+   感叹号 + 方括号（里面写「第 N 页图」）+ 圆括号（里面**逐字照抄**该路径，不要改写、不要自己编）；
+   一张图只贴一次、贴在讲它的那一节；纯装饰或与正文无关的图不要贴；
 直接输出笔记正文（从 ### 开始），不要写全课总结（后面统一写）。`,
         },
         { role: 'user', content: segment },
@@ -965,11 +1035,13 @@ ${digest.trim()}
 `;
   const body = stripPlaceholderSections(note);
   if (body !== note.trim()) job.log.push('已清掉正文里的空小节 / 占位说明');
+  const imgFix = dropBrokenImages(body, ctx.course);
+  if (imgFix.dropped) job.log.push(`丢掉 ${imgFix.dropped} 个指向不存在文件的图片引用`);
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
   if (fs.existsSync(notePath)) {
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
-  fs.writeFileSync(notePath, head + body + '\n', 'utf8');
+  fs.writeFileSync(notePath, head + imgFix.out + '\n', 'utf8');
 
   // 把「本课脉络 + 课末必记」同步回原文 md 顶部（upsert llm-summary 块），两处重点保持一致
   try {
