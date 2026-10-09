@@ -1517,6 +1517,81 @@ ${digest.trim()}
  *     ok / partial / unsupported / figure（依赖图片，需人工看图）。
  * 结果写 <课次>.audit.json（复习页读它画标记）+ <课次>.audit.md（人读报告）。
  */
+/**
+ * 审计后补写：把「缺失 / 不完整」的知识点补进笔记末尾。
+ *
+ * 为什么放这儿：知识点清单是审计自己提出的（每条带页号），拿这几页的课件原文 + 老师讲解就能补；
+ * 补完立刻做一次小核对，把清单状态改回 ✅/⚠️，免得「清单说缺、笔记其实有」两边对不上。
+ * 材料只用文本（页原文 + 讲稿切片），不额外花图片 token。
+ */
+async function supplementMissingPoints(job, { notePath, noteText, lessonName, course, pageMap, narration, knowledge }) {
+  const targets = knowledge.items
+    .filter((p) => p.status === 'missing' || p.status === 'partial')
+    .slice(0, 20);
+  if (!targets.length) return { targets: 0, covered: 0 };
+
+  const pages = [...new Set(targets.map((p) => Number(p.page) || 0))].filter(Boolean);
+  const material = pages.map((n) => {
+    const src = String(pageMap.get(n) || '').slice(0, 1400);
+    const talk = narration.get(n) ? `\n老师讲解（语音转写）：${String(narration.get(n)).slice(0, 900)}` : '';
+    return `【第 ${n} 页课件原文】\n${src}${talk}`;
+  }).join('\n\n');
+  const list = targets.map((t, i) => `${i + 1}. 第 ${t.page} 页：${t.point}`).join('\n');
+
+  const { content: add, usage } = await chatRetry(
+    [
+      {
+        role: 'system',
+        content: `你是《${course || '本课程'}》的助教。下面给你课件若干页的原文与老师讲解，以及**笔记里缺失或不完整的知识点清单**。
+请逐条补写：每条知识点写 1-2 行「- 」要点，末尾带 [[${lessonName}.pdf#page=N|N]] 角标（N 用清单里给的页号）。
+只写材料里有的内容；公式用 LaTeX；术语以课件原文为准（讲解里的同音错字不要照抄）；
+不要写别的标题、不要解释你在做什么。第一行输出「### 📌 知识点补全（自动）」。`,
+      },
+      { role: 'user', content: `【待补的知识点】\n${list}\n\n【材料】\n${material}` },
+    ],
+    { profile: 'text', temperature: 0.2, maxTokens: 3000, thinking: 'off' },
+  );
+  addUsage(job, usage);
+  const section = String(add || '').trim();
+  if (!section || !/- /.test(section)) {
+    job.log.push('知识点补全：模型没给出可用内容，跳过');
+    return { targets: targets.length, covered: 0 };
+  }
+
+  // 已有补全小节就替换，避免反复追加
+  const MARK = '### 📌 知识点补全（自动）';
+  let next = noteText;
+  const at = next.indexOf(MARK);
+  if (at >= 0) next = next.slice(0, at).trimEnd();
+  fs.writeFileSync(notePath, `${next}\n\n${section}\n`, 'utf8');
+  job.log.push(`知识点补全：为 ${targets.length} 条缺失/不完整知识点补写了要点（${section.length} 字）`);
+
+  // 小核对：补写后这些点算覆盖了吗（只核对补写的这一批，成本很小）
+  let covered = 0;
+  try {
+    const { content: verdict, usage: vUsage } = await chatRetry(
+      [
+        {
+          role: 'system',
+          content: `下面有一批「知识点」和刚补写的「补充内容」。请判断每条知识点现在是否已被补充内容覆盖。
+只输出 JSON：{"covered":[1,3]}（数组里是被覆盖的编号；部分覆盖也算覆盖）。不要输出别的。`,
+        },
+        { role: 'user', content: `【知识点】\n${list}\n\n【补充内容】\n${section.slice(0, 4000)}` },
+      ],
+      { profile: 'text', temperature: 0.1, maxTokens: 400, thinking: 'off' },
+    );
+    addUsage(job, vUsage);
+    const okIdx = new Set((parseJsonLoose(verdict)?.covered || []).map((x) => Number(x)));
+    targets.forEach((t, i) => {
+      if (okIdx.has(i + 1)) { t.status = 'covered'; covered += 1; }
+    });
+    job.log.push(`知识点补全核对：${covered}/${targets.length} 条现在已覆盖`);
+  } catch (e) {
+    job.log.push('知识点补全核对失败（下次审计会重新判定）：' + String(e?.message || e).slice(0, 60));
+  }
+  return { targets: targets.length, covered };
+}
+
 async function runAudit(job) {
   const mdPath = job.mdPath;
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
@@ -1847,6 +1922,20 @@ async function runAudit(job) {
       fs.writeFileSync(notePath, noteText2, 'utf8');
     } catch (e) {
       job.log.push('修正落盘失败：' + String(e?.message || e).slice(0, 60));
+    }
+  }
+
+  // ③.5 知识点补全：按审计结果把缺失/不完整的知识点补进笔记（可关，见 config.automation）。
+  // 放在「修正落盘」之后——否则补写会被上面那次整篇覆盖冲掉
+  if (knowledge && loadConfig().automation?.supplementAfterAudit !== false) {
+    try {
+      const current = fs.existsSync(notePath) ? fs.readFileSync(notePath, 'utf8') : noteText2;
+      const r = await supplementMissingPoints(job, {
+        notePath, noteText: current, lessonName, course: ctx.course, pageMap, narration, knowledge,
+      });
+      if (r.targets) job.log.push(`（补全小结：${r.covered}/${r.targets} 条已并入笔记）`);
+    } catch (e) {
+      job.log.push('知识点补全失败：' + String(e?.message || e).slice(0, 80));
     }
   }
 
