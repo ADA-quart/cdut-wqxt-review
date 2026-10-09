@@ -759,12 +759,15 @@ function openLlmConfig() {
   }
   $('llmDefaultMode').value = c.defaultMode || 'text';
   $('llmConcurrency').value = String(c.concurrency || 3);
-  $('llmNotePipeline').value = c.notePipeline || 'auto';
   $('llmModal').hidden = false;
   renderVisionHint();
 }
 
-/** 显示「哪些档位能读图、笔记实际会走哪条链路」——视觉链路省一半 token、快一倍 */
+/**
+ * 显示「哪些档位能读图、笔记实际会走哪条链路」。
+ * 笔记链路不在这里选：默认自动（有能读图的档位走视觉，否则回落文本）。
+ * 要强制走文本（技术储备路径），改 config.json 的 llm.notePipeline 或调 PUT /api/llm-config。
+ */
 async function renderVisionHint() {
   const el = $('llmVisionHint');
   if (!el) return;
@@ -775,9 +778,10 @@ async function renderVisionHint() {
     const okList = s.details.filter((d) => d.ok).map((d) => `${LABEL[d.key] || d.key}（${d.model}）`);
     const badList = s.details.filter((d) => !d.ok).map((d) => `${LABEL[d.key] || d.key}：${d.reason}`);
     const eff = s.effective === 'vision' ? '视觉（看图写）' : '文本（按 OCR 原文写）';
-    el.textContent = `笔记将走：${eff}。`
+    el.textContent = `笔记自动选择链路，当前会走：${eff}。`
       + (okList.length ? ` 能读图：${okList.join('、')}。` : ' 当前没有能读图的模型。')
-      + (badList.length ? ` 不可用：${badList.join('；')}。` : '');
+      + (badList.length ? ` 不可用：${badList.join('；')}。` : '')
+      + (okList.length ? '' : ' 没有可读图的模型时自动按 OCR 原文写。');
   } catch (e) {
     el.textContent = '读图能力检测失败：' + e.message;
   }
@@ -795,7 +799,6 @@ function collectLlmForm() {
     profiles,
     defaultMode: $('llmDefaultMode').value,
     concurrency: Number($('llmConcurrency').value) || 3,
-    notePipeline: $('llmNotePipeline').value,
   };
 }
 

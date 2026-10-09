@@ -44,7 +44,7 @@
   <span class="flow-sep">→</span>
   <span class="flow-step" data-step="2"><b>②</b> 勾选课程 →「下载所选」</span>
   <span class="flow-sep">→</span>
-  <span class="flow-step" data-step="3"><b>③</b> 点「转 MD」（完成后自动校订）</span>
+  <span class="flow-step" data-step="3"><b>③</b> 点「转 MD」出原文与课件 PDF（完成后自动校订）</span>
   <span class="flow-sep">→</span>
   <span class="flow-step" data-step="4"><b>④</b> 点「复习」看笔记 + 自测</span>
   <span class="flow-hint" id="flowHint"></span>
@@ -204,14 +204,6 @@
               <option value="8">8</option>
             </select>
           </label>
-          <label class="field compact">
-            <span>笔记生成方式</span>
-            <select id="llmNotePipeline">
-              <option value="auto">自动（有能读图的模型就用视觉）</option>
-              <option value="vision">视觉：看图写（省 token、快）</option>
-              <option value="text">文本：按 OCR 原文写</option>
-            </select>
-          </label>
         </div>
         <p class="hint" id="llmVisionHint">检测中…</p>
       </section>
@@ -250,7 +242,7 @@
           <tr><td rowspan="2">课程区</td><td>勾选 + 下载所选</td><td>勾选想下的课程，点「下载所选」批量下载；也可「全选」一键选完</td></tr>
           <tr><td>课次</td><td>列出这门课的每一次课，可以只下某几次</td></tr>
           <tr><td rowspan="4">已下载文件</td><td>清洗 / 复核</td><td>去重预检：全部帧按网格排开，勾选 = 清理（自动识别的重复/空白/二维码帧默认勾选、红框标出）、取消 = 保留，误删随时拉回</td></tr>
-          <tr><td>转 MD</td><td>图片 → Markdown（公式变 LaTeX）+ 课件 PDF</td></tr>
+          <tr><td>转 MD</td><td>图片 → 原文 Markdown（公式变 LaTeX）+ 课件 PDF。笔记角标指向这个 PDF，质量审计与 AI 检索也读这份原文</td></tr>
           <tr><td>复习 / 校订</td><td>打开复习台 / 一次跑完 OCR 错字纠错 + 修复公式（分别备份）</td></tr>
           <tr><td>课程行的「批量…」</td><td>整门课批量清洗 / 批量转 MD / 批量生成笔记（自动跳过已完成项，串行排队）</td></tr>
           <tr><td rowspan="3">复习台</td><td>生成笔记</td><td>AI 通读原文 → 整理稿 → 深度笔记（讲解 / 习题答案 / 必记）；重点在笔记最前，并自动同步到原文顶部</td></tr>
@@ -264,7 +256,7 @@
         <table class="help-table">
           <tr><th>词</th><th>意思</th></tr>
           <tr><td>课次</td><td>一次课（如「2026-09-15第7-8节」）。下载、转 MD、复习都以课次为单位。<b>「已下载文件」里一级是课程、二级是课次</b></td></tr>
-          <tr><td>转 MD</td><td>把课件图片 OCR 成 Markdown，公式保留为 LaTeX，同时合成 PDF</td></tr>
+          <tr><td>转 MD</td><td>把课件图片 OCR 成原文 Markdown（公式保留为 LaTeX），同时合成 PDF</td></tr>
           <tr><td>去重清洗</td><td>录播按帧抓图会有大量重复，自动去重（空白帧 / 等待页二维码 / 渐进重复），移除的帧进 <code>_回收站/</code>；复核页是全部帧的网格，勾选 = 清理、取消 = 保留，随时可拉回</td></tr>
           <tr><td>知识链</td><td>AI 在课次之间、课程之间建立双向链接（标准 <code>[[...]]</code>，可直接丢进 Obsidian）</td></tr>
           <tr><td>图谱</td><td>知识链的可视化（课程 / 课次 / 链接关系）</td></tr>
