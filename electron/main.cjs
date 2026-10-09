@@ -22,9 +22,21 @@ let quitting = false;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 判断本地服务是否已经在跑。
+ * 先用 /api/ping（秒回，不碰浏览器），拿不到再退回 /api/status——后者冷启动要 2 秒以上
+ * （要唤醒浏览器会话），如果只按它判断，超时就绪的服务会被误判成没起（曾因此报「自动启动失败」）。
+ */
 async function isOurServer() {
   try {
-    const res = await fetch(`${BASE}/api/status`, { signal: AbortSignal.timeout(1200) });
+    const ping = await fetch(`${BASE}/api/ping`, { signal: AbortSignal.timeout(1500) });
+    if (ping.ok) {
+      const data = await ping.json().catch(() => ({}));
+      if (data.app === 'qingqu') return true;
+    }
+  } catch { /* 老版本服务没有 /api/ping，退回 status */ }
+  try {
+    const res = await fetch(`${BASE}/api/status`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return false;
     const data = await res.json();
     return typeof data.loggedIn === 'boolean';
@@ -46,10 +58,15 @@ async function startServer() {
     windowsHide: true,
   });
   serverChild.stderr.on('data', (d) => console.error('[server]', String(d).trim()));
-  serverChild.on('exit', () => { serverChild = null; });
+  let exited = false;
+  serverChild.on('exit', () => { exited = true; serverChild = null; });
   for (let i = 0; i < 60; i++) {
     if (await isOurServer()) return true;
-    if (!serverChild) return false;
+    // 子进程立刻退出（典型是端口已被占用：已经有别的实例在跑）→ 再确认一次端口，别急着报错
+    if (!serverChild) {
+      if (exited && (await isOurServer())) return true;
+      return false;
+    }
     await sleep(400);
   }
   return false;

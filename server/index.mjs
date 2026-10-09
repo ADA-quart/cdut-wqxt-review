@@ -149,6 +149,16 @@ llmEvents.on('update', (job) => {
 
 // ---------- 状态与登录 ----------
 
+/**
+ * 探活用：只回一个标记，不碰浏览器、不读磁盘。
+ * 桌面壳用它判断「本地服务是否已在跑」——`/api/status` 冷启动要 2 秒以上（要唤醒浏览器会话），
+ * 壳的探测超时只有 1.2 秒，会把正在跑的服务误判成没起（踩过）。
+ */
+app.get('/api/ping', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, app: 'qingqu', version: PKG.version || '0.0.0' });
+});
+
 app.get('/api/status', asyncRoute(async (_req, res) => {
   const status = { ...edgeStatus(), site: WQ_BASE };
   const saved = loadLogin();

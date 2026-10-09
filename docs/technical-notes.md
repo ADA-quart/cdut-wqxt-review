@@ -9,6 +9,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| GET | `/api/ping` | 探活（秒回，不碰浏览器；桌面壳用它判断服务在不在跑） |
 | GET/POST | `/api/status` `/api/login` `/api/logout` | 登录状态 / 统一认证登录 / 退出（走统一认证登出，见下） |
 | GET | `/api/terms` `/api/courses` `/api/courses/:id/subs` `/api/subs/:courseId/:subId/ppt` | 学期 / 课程 / 课次 / 课次图片清单 |
 | POST/GET | `/api/jobs`（创建/列表）、`/api/jobs/:id`、`/api/jobs/:id/cancel` | 下载任务 |
@@ -37,6 +38,18 @@
 ### 为什么必须用真实浏览器
 
 问渠学堂有动态防护（瑞数），纯 HTTP 请求会被拒；本工具用本机已安装的 Edge/Chrome 真实内核完成登录与接口初始化，窗口默认藏在屏幕外。
+
+### 桌面壳的启动探测
+
+Electron 壳启动时先探测本地服务在不在跑，没在跑才自己拉起 `server/index.mjs`。探测**必须用 `/api/ping`**
+这类不碰浏览器的接口：`/api/status` 要唤醒浏览器会话，冷启动实测 2.4 秒，而壳原来的探测超时只有 1.2 秒——
+正在跑的服务被误判成没起，壳又去启动自己的实例，端口被占、子进程退出，用户看到的就是
+「端口 3901 没有运行清渠本地服务，且自动启动失败」。现在：优先 `/api/ping`（1.5 秒超时），
+退回 `/api/status`（8 秒超时）；子进程若因端口占用立刻退出，会再确认一次端口而不是直接报错。
+
+排查这类问题的第一步永远是看**端口上有没有别人的实例**：`Get-NetTCPConnection -LocalPort 3901 -State Listen`；
+开发时建议用 `PORT=3902 npm start`，避免与用户正在用的桌面端抢同一个端口
+（两边的服务都能响应 `/api/system/shutdown`，会互相关掉）。
 
 ### 数据流
 
