@@ -8,6 +8,7 @@ const state = {
   jobs: new Map(),
   mdJobs: new Map(),
   llmJobs: new Map(),
+  replayJobs: new Map(),
   llmConfig: null,
   mdTool: null,
   subsCache: new Map(),
@@ -294,7 +295,13 @@ function renderSubs(course, subs) {
       btnDl.textContent = '下载此课次';
       btnDl.onclick = () => startSubJob(course, s, btnDl);
 
-      actions.append(btnPreview, btnDl);
+      const btnTrans = document.createElement('button');
+      btnTrans.className = 'btn';
+      btnTrans.textContent = '转写讲稿';
+      btnTrans.title = '抓这节课的回放音轨，本地转成带时间戳的讲稿（约 10~30 分钟/节）';
+      btnTrans.onclick = () => startReplayJob(course, s, btnTrans);
+
+      actions.append(btnPreview, btnDl, btnTrans);
     } else {
       const badge = document.createElement('span');
       badge.className = 'badge skipped';
@@ -337,6 +344,33 @@ async function startSubJob(course, sub, btn) {
   }
 }
 
+/** 抓回放音轨并本地转写讲稿（视频不落盘，只留音轨 + 讲稿） */
+async function startReplayJob(course, sub, btn) {
+  btn.disabled = true;
+  btn.textContent = '创建中…';
+  try {
+    const force = Boolean($('subsForce') && $('subsForce').checked);
+    const { job } = await api('/replay-jobs', {
+      method: 'POST',
+      body: {
+        courseId: course.courseId,
+        subId: sub.subId,
+        courseTitle: course.title,
+        subTitle: sub.title,
+        force,
+      },
+    });
+    toast(job?.skipped
+      ? `该课次已有讲稿：${job.transRel}`
+      : `已创建转写任务：${course.title} — ${sub.title}`, 'ok');
+  } catch (e) {
+    toast('创建失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '转写讲稿';
+  }
+}
+
 // ---------- 任务列表 ----------
 
 function renderJobs() {
@@ -344,7 +378,8 @@ function renderJobs() {
   const dl = [...state.jobs.values()].map((j) => ({ ...j, kind: 'download' }));
   const md = [...state.mdJobs.values()].map((j) => ({ ...j, kind: 'md' }));
   const llm = [...state.llmJobs.values()].map((j) => ({ ...j, kind: 'llm' }));
-  const all = [...dl, ...md, ...llm].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const replay = [...state.replayJobs.values()].map((j) => ({ ...j, kind: 'replay' }));
+  const all = [...dl, ...md, ...llm, ...replay].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   if (all.length === 0) {
     box.innerHTML = '<p class="empty">暂无任务</p>';
     return;
@@ -357,6 +392,10 @@ function renderJobs() {
     }
     if (j.kind === 'llm') {
       box.appendChild(renderLlmJobCard(j));
+      continue;
+    }
+    if (j.kind === 'replay') {
+      box.appendChild(renderReplayJobCard(j));
       continue;
     }
     const el = document.createElement('div');
@@ -438,6 +477,88 @@ function renderJobs() {
 
 function statusLabel(s) {
   return { pending: '等待中', running: '下载中', done: '已完成', error: '有错误', canceled: '已取消' }[s] || s;
+}
+
+/** 回放转写任务卡：抓流 → 抽音轨 → 转写，三段各有自己的进度口径 */
+function renderReplayJobCard(j) {
+  const el = document.createElement('div');
+  el.className = 'job';
+
+  const STAGE = { capture: '抓取音轨', 'download-model': '下载识别模型', transcribe: '语音识别', '': '排队' };
+  const head = document.createElement('div');
+  head.className = 'job-head';
+
+  const left = document.createElement('div');
+  const title = document.createElement('p');
+  title.className = 'job-title';
+  title.textContent = `#${j.id} 转写讲稿 · ${j.courseTitle} — ${j.subTitle}`;
+
+  const stats = document.createElement('div');
+  stats.className = 'job-stats';
+  const stage = STAGE[j.stage] || j.stage;
+  if (j.status === 'running') {
+    const p = j.progress || {};
+    const detail = p.unit === 'bytes' && p.done
+      ? `${fmtSize(p.done)}${p.total ? ' / ' + fmtSize(p.total) : ''}`
+      : p.unit === 'seconds' && p.total
+        ? `${p.done}/${p.total} 秒（${pct(p.done, p.total)}%）`
+        : '准备中…';
+    stats.textContent = `${stage} · ${detail}`;
+  } else if (j.status === 'done') {
+    stats.textContent = `完成：${j.transRel || ''}${j.device ? '（' + j.device + '）' : ''}`;
+  } else if (j.status === 'error') {
+    stats.textContent = j.error || '失败';
+  } else if (j.status === 'canceled') {
+    stats.textContent = '已取消';
+  } else {
+    stats.textContent = '排队中…';
+  }
+  left.append(title, stats);
+
+  const right = document.createElement('div');
+  const badge = document.createElement('span');
+  badge.className = 'badge ' + j.status + ' md';
+  badge.textContent = j.status === 'running' ? stage : statusLabel(j.status);
+  right.appendChild(badge);
+
+  if (j.status === 'done' && j.transUrl) {
+    const open = document.createElement('button');
+    open.className = 'btn';
+    open.textContent = '打开讲稿';
+    open.onclick = () => window.open(j.transUrl, '_blank');
+    right.append(document.createTextNode(' '), open);
+  }
+  if (j.status === 'running' || j.status === 'pending') {
+    const cancel = document.createElement('button');
+    cancel.className = 'btn danger';
+    cancel.textContent = '取消';
+    cancel.onclick = async () => {
+      try { await api(`/replay-jobs/${j.id}/cancel`, { method: 'POST' }); } catch {}
+    };
+    right.append(document.createTextNode(' '), cancel);
+  }
+  head.append(left, right);
+  el.appendChild(head);
+
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const fill = document.createElement('i');
+  const p = j.progress || {};
+  const width = j.status === 'done' ? 100
+    : j.status === 'running' && p.unit === 'bytes' && p.done
+      ? (p.total ? pct(p.done, p.total) : Math.min(95, Math.round(p.done / 1048576)))
+      : j.status === 'running' && p.total ? pct(p.done, p.total) : 0;
+  fill.style.width = width + '%';
+  bar.appendChild(fill);
+  el.appendChild(bar);
+
+  if (j.log && j.log.length) {
+    const log = document.createElement('div');
+    log.className = 'job-log';
+    log.textContent = j.log.slice(-3).join(' · ');
+    el.appendChild(log);
+  }
+  return el;
 }
 
 function renderMdJobCard(j) {
@@ -1955,6 +2076,20 @@ function connectEvents() {
       } else if (msg.type === 'llm-job') {
         state.llmJobs.set(msg.job.id, msg.job);
         renderJobs();
+      } else if (msg.type === 'hello-replay') {
+        for (const j of msg.jobs) state.replayJobs.set(j.id, j);
+        renderJobs();
+      } else if (msg.type === 'replay-job') {
+        state.replayJobs.set(msg.job.id, msg.job);
+        renderJobs();
+        if (msg.job.status === 'done' && msg.job.finishedAt && !notified.has('rp' + msg.job.id)) {
+          notified.add('rp' + msg.job.id);
+          toast('✅ 讲稿转写完成 → 打开「讲稿」查看', 'ok');
+        }
+        if (msg.job.status === 'error' && !notified.has('rpe' + msg.job.id)) {
+          notified.add('rpe' + msg.job.id);
+          toast('转写失败：' + (msg.job.error || '未知错误'), 'err');
+        }
       }
     } catch {}
   };
@@ -1975,16 +2110,18 @@ function connectEvents() {
   } else {
     $('termSel').innerHTML = '<option value="">未登录</option>';
   }
-  const [{ jobs }, mdTool, md, llm] = await Promise.all([
+  const [{ jobs }, mdTool, md, llm, replay] = await Promise.all([
     api('/jobs').catch(() => ({ jobs: [] })),
     api('/md-tools').catch(() => null),
     api('/md-jobs').catch(() => ({ jobs: [] })),
     api('/llm-jobs').catch(() => ({ jobs: [] })),
+    api('/replay-jobs').catch(() => ({ jobs: [] })),
   ]);
   for (const j of jobs) state.jobs.set(j.id, j);
   state.mdTool = mdTool;
   for (const j of md.jobs || []) state.mdJobs.set(j.id, j);
   for (const j of llm.jobs || []) state.llmJobs.set(j.id, j);
+  for (const j of replay.jobs || []) state.replayJobs.set(j.id, j);
   renderJobs();
   loadFiles();
   connectEvents();

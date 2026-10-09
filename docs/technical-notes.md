@@ -14,6 +14,7 @@
 | POST/GET | `/api/jobs`（创建/列表）、`/api/jobs/:id`、`/api/jobs/:id/cancel` | 下载任务 |
 | POST/GET | `/api/md-jobs`（创建/列表）、`/api/md-jobs/:id`、`/api/md-jobs/:id/cancel`、`/api/md-tools`、`/api/md-config` | 转 MD 任务与配置 |
 | POST/GET | `/api/dedup-scan`、`/api/dedup-decisions`、`/api/dedup-state`、`/api/dedup-image` | 清洗预检 / 保存勾选 / 复核页数据 / 复核页图片 |
+| POST/GET | `/api/replay-jobs`（创建/列表）、`/api/replay-jobs/:id`、`/api/replay-jobs/:id/cancel` | 回放转写任务（抓音轨 + 本地语音识别） |
 | POST/GET | `/api/llm-jobs`（note / audit / polish / proofread / fixmath / summarize / weave）及取消 | LLM 任务 |
 | GET/PUT/POST | `/api/llm-config`、`/api/llm-limits`、`/api/llm-test`、`/api/llm-models` | LLM 配置 / 能力探测 / 连通测试 / 模型列表 |
 | GET | `/api/note-pdf?dir=`（`&download=1` 直接下载） | 生成 / 缓存笔记 PDF |
@@ -73,12 +74,16 @@
 | `mdconvert.mjs` | 转 MD 调度（Python 子进程、页级并行） |
 | `llm.mjs` | 全部 LLM 任务（笔记 / 审计 / 校订 / 知识链…） |
 | `chat.mjs` | 流式对话代理 |
+| `replay.mjs` | 回放抓取（CDP 拦播放器媒体流）+ 抽音轨 + 转写调度 |
 | `notepdf.mjs` | 笔记 PDF（无头 Edge 打印，mtime 缓存） |
 | `kb.mjs` / `cards.mjs` | BM25 知识库检索 / 复习卡（间隔重复） |
 | `config.mjs` / `paths.mjs` / `net.mjs` / `gpu.mjs` | 配置 / 目录 / 网络错误翻译 / 显存探测 |
 
 前端：下载器 `public/index.html + app.js`；复习台 `review.html + review.js`；打印页 `print.html`；桌面壳 `electron/main.cjs`。
-Python：`ppt2md.py`（Pix2Text 转换）、`dedup.py`（帧去重）、`tools/`（显卡检测、图标生成）。
+Python：`ppt2md.py`（Pix2Text 转换）、`dedup.py`（帧去重）、`transcribe.py`（faster-whisper 转写）、`tools/`（显卡检测、图标生成）。
+
+转写用的解释器与 OCR 的 `.venv-p2t` 可能不是一个：`replay.mjs` 会依次探测
+`QINGQU_ASR_PYTHON` → `python` → `python3` → `.venv-p2t`，取第一个能 `import faster_whisper` 的。
 
 ### 任务模型与省 token 设计
 
@@ -99,9 +104,21 @@ Python：`ppt2md.py`（Pix2Text 转换）、`dedup.py`（帧去重）、`tools/`
 
 - **形态**：`content.playback.url` = `https://resource.wqxt.cdut.edu.cn/play/default/YYYY/MM/DD/<hash>_1920_1080.mp4`；
   实测 144 条回放全部同构直链 MP4、**无签名参数**（`file_list` 同址，另附一张封面 jpg）。
-- **防护**：`resource.*` 域名与主站同为瑞数动态防护——curl / Node 直连得到 500 挑战页（含 `$_ts` 混淆脚本）；
-  即便带 cookie、用 Playwright 的 `context.request`（HTTP 客户端、非浏览器栈）也会被拒。
-  **正确姿势：在 resource 域名下用真实浏览器页面栈访问**（与登录、图片同一套会话机制）。
-- **待复核**：抽测的一条录像（`process_type=processing`）过了挑战后源站仍返回 500，疑似尚未转码完成；
-  跨课程复测需再次登录（短时间内连续脚本登录会触发 CAS 验证码，注意限频）。
+- **直连取不到**（2026-10-09 复测，15 条跨 3 门课全复现）：
+  - 不带参数 → **500**（nginx 错误页，非瑞数挑战页）；带随机 `clientUUID` 或原样重放签名 → **403**；
+  - 同域封面 `play/default/Pic/.../*.jpg` 正常 200，不存在的 jpg 正常 404，
+    而不存在的 **mp4 同样 500**——说明是 mp4 这条路径的准入校验，不是文件级 404。
+- **可用姿势**：播放器页（`/coursevideo?id=<课程>&sub_id=<课次>`，会跳到 `/videoroom`）自己会取流，
+  真实请求形如 `.../<hash>_1920_1080.mp4?clientUUID=<uuid>&t=<用户ID>-<时间戳>-<哈希>`，
+  响应 **206 video/mp4**。签名由播放器侧生成且短时有效，不复刻。
+  **实现：CDP `Fetch` 在 Response 阶段拦播放器自己的响应，`takeResponseBodyAsStream` + `IO.read` 落盘**（`server/replay.mjs`）。
+- **踩过的坑**：边收边把字节喂 `ffmpeg -i pipe:0`，到约 700MB 时 ffmpeg 提前退出，
+  stdin 的 EPIPE 以未捕获 `error` 事件把 Node 进程打挂。现改为先落临时 mp4（可 seek），
+  ffmpeg 从文件抽音轨（16kHz 单声道 AAC），抽完删视频；ffmpeg/stdin 的 error 一律接住。
+- **平台自带「语音识别」不可依赖**：`/courseapi/v3/web-socket/search-trans-result?course_id&sub_id`
+  能直接拿到整节课的同传文本（`BeginSec`/`EndSec`/`Text`/`TransText`），但 2026-10-09 抽样
+  144 个课次只有 107 个有（74%）——当学期新录课次仅 4/28（14%），上学期 103/116（89%）。
+  缺失时返回 `code=10002`。故讲稿一律用本地 faster-whisper 生成（默认 large-v3-turbo）。
+- **PPT 页有时间轴**：`pptnote/v1/schedule/search-ppt` 的每项带 `created_sec`（该页出现在视频中的秒数），
+  可与讲稿时间戳对齐，做「按页讲解」。
 - **会话不持久**：问渠的 cookie 是会话级（关浏览器即失效），「记住登录 + 自动重登」是必要能力。

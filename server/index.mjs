@@ -24,6 +24,9 @@ import { publicConfig, saveConfig, loadConfig, loadLogin, saveLogin } from './co
 import { streamChat } from './chat.mjs';
 import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
 import { autoParallel } from './gpu.mjs';
+import {
+  createReplayJob, listReplayJobs, getReplayJob, cancelReplayJob, replayEvents,
+} from './replay.mjs';
 import { renderNotePdf } from './notepdf.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards, mergeCards } from './cards.mjs';
 import {
@@ -325,6 +328,29 @@ app.get('/api/md-jobs/:id', (req, res) => {
 
 app.post('/api/md-jobs/:id/cancel', (req, res) => {
   const job = cancelMdJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  res.json({ job });
+});
+
+// ---------- 回放转写（抓音轨 + 本地语音识别） ----------
+
+app.post('/api/replay-jobs', asyncRoute(async (req, res) => {
+  const { courseId, subId, courseTitle, subTitle, model, force } = req.body || {};
+  if (!courseId || !subId) return res.status(400).json({ error: '缺少 courseId / subId' });
+  const job = createReplayJob({ courseId, subId, courseTitle, subTitle, model, force });
+  res.status(201).json({ job });
+}));
+
+app.get('/api/replay-jobs', (_req, res) => res.json({ jobs: listReplayJobs() }));
+
+app.get('/api/replay-jobs/:id', (req, res) => {
+  const job = getReplayJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  res.json({ job });
+});
+
+app.post('/api/replay-jobs/:id/cancel', (req, res) => {
+  const job = cancelReplayJob(Number(req.params.id));
   if (!job) return res.status(404).json({ error: '任务不存在' });
   res.json({ job });
 });
@@ -665,18 +691,22 @@ app.get('/api/events', (req, res) => {
   res.write('data: ' + JSON.stringify({ type: 'hello', jobs: listJobs() }) + '\n\n');
   res.write('data: ' + JSON.stringify({ type: 'hello-md', jobs: listMdJobs() }) + '\n\n');
   res.write('data: ' + JSON.stringify({ type: 'hello-llm', jobs: listLlmJobs() }) + '\n\n');
+  res.write('data: ' + JSON.stringify({ type: 'hello-replay', jobs: listReplayJobs() }) + '\n\n');
   const onUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'job', job }) + '\n\n');
   const onMdUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'md-job', job }) + '\n\n');
   const onLlmUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'llm-job', job }) + '\n\n');
+  const onReplayUpdate = (job) => res.write('data: ' + JSON.stringify({ type: 'replay-job', job }) + '\n\n');
   events.on('update', onUpdate);
   mdEvents.on('update', onMdUpdate);
   llmEvents.on('update', onLlmUpdate);
+  replayEvents.on('update', onReplayUpdate);
   const keepAlive = setInterval(() => res.write(': ping\n\n'), 15000);
   req.on('close', () => {
     clearInterval(keepAlive);
     events.off('update', onUpdate);
     mdEvents.off('update', onMdUpdate);
     llmEvents.off('update', onLlmUpdate);
+    replayEvents.off('update', onReplayUpdate);
   });
 });
 
@@ -698,6 +728,8 @@ function readTree(dir, depth) {
   return entries
     .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_')
       && !(e.isDirectory() && e.name.endsWith('_assets'))   // 转 MD 的图形素材目录，不算课次
+      // 讲稿音轨（audio/）与抓流临时文件（tmp/）不是课次目录
+      && !(e.isDirectory() && (e.name === 'tmp' || (e.name === 'audio' && path.resolve(dir) === path.resolve(DOWNLOAD_DIR))))
       && !HIDDEN.test(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh') : a.isDirectory() ? -1 : 1))
     .map((e) => {
