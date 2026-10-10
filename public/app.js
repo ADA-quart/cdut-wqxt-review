@@ -505,7 +505,8 @@ function renderReplayJobCard(j) {
   const left = document.createElement('div');
   const title = document.createElement('p');
   title.className = 'job-title';
-  title.textContent = `#${j.id} 转写讲稿 · ${j.courseTitle} — ${j.subTitle}`;
+  // 只抓音轨的任务（下载时勾了「同时抓音轨」）别说成转写——它不跑识别
+  title.textContent = `#${j.id} ${j.audioOnly ? '抓取音轨' : '转写讲稿'} · ${j.courseTitle} — ${j.subTitle}`;
 
   const stats = document.createElement('div');
   stats.className = 'job-stats';
@@ -2124,11 +2125,13 @@ function connectEvents() {
         renderJobs();
         if (msg.job.status === 'done' && msg.job.finishedAt && !notified.has('rp' + msg.job.id)) {
           notified.add('rp' + msg.job.id);
-          toast('✅ 讲稿转写完成 → 打开「讲稿」查看', 'ok');
+          toast(msg.job.audioOnly
+            ? '✅ 音轨已就绪（点「生成笔记」时会自动转写；也可点课次的「转写讲稿」立即转）'
+            : '✅ 讲稿转写完成 → 打开「讲稿」查看', 'ok');
         }
         if (msg.job.status === 'error' && !notified.has('rpe' + msg.job.id)) {
           notified.add('rpe' + msg.job.id);
-          toast('转写失败：' + (msg.job.error || '未知错误'), 'err');
+          toast((msg.job.audioOnly ? '抓音轨失败：' : '转写失败：') + (msg.job.error || '未知错误'), 'err');
         }
       }
     } catch {}
