@@ -26,6 +26,20 @@ export const replayEvents = new EventEmitter();
 
 const jobs = new Map();
 let nextJobId = 1;
+/** 抓流是重活（每节 1GB 中转 + 浏览器标签），一律串行跑 */
+const queue = [];
+let running = null;
+
+function pump() {
+  if (running || queue.length === 0) return;
+  running = queue.shift();
+  runJob(running)
+    .catch(() => { /* runJob 内部已记录错误 */ })
+    .finally(() => {
+      running = null;
+      pump();
+    });
+}
 
 /** 抓流等待上限：播放页打开后多久没等到媒体请求就算失败 */
 const CAPTURE_START_TIMEOUT_MS = 90000;
@@ -71,6 +85,7 @@ function publicJob(j) {
     kind: 'replay',
     status: j.status,              // pending | running | done | error | canceled
     stage: j.stage,                // capture | extract | transcribe | ''
+    audioOnly: j.audioOnly,        // 只抓音轨不转写
     courseId: j.courseId,
     subId: j.subId,
     courseTitle: j.courseTitle,
@@ -136,7 +151,8 @@ export function createReplayJob(opts) {
   );
   if (dup) return { ...publicJob(dup), reused: true };
 
-  if (!opts.force && fs.existsSync(transAbs) && fs.existsSync(audioAbs)) {
+  // 幂等：音轨已在（audioOnly 任务）或笔记所需的转写已在 → 直接跳过
+  if (!opts.force && fs.existsSync(audioAbs) && (opts.audioOnly || fs.existsSync(transAbs))) {
     return { skipped: true, reason: 'already-done', relDir, transRel, audioRel };
   }
 
@@ -152,6 +168,7 @@ export function createReplayJob(opts) {
     audioRel,
     transRel,
     model: opts.model || 'large-v3-turbo',
+    audioOnly: opts.audioOnly === true,   // 只抓音轨不转写（下载时顺手抓、之后单独转写）
     device: '',
     progress: { done: 0, total: 0, unit: 'bytes' },
     bytes: 0,
@@ -167,7 +184,8 @@ export function createReplayJob(opts) {
   };
   jobs.set(job.id, job);
   emit(job);
-  void runJob(job);
+  queue.push(job);
+  pump();
   return publicJob(job);
 }
 
@@ -424,6 +442,15 @@ async function runJob(job) {
         fs.rm(tmpVideo, { force: true }, () => {});   // 视频只是中转，抽完即删
       }
       emit(job);
+    }
+
+    // 只要音轨的任务到此为止（下载时顺手抓），转写留给之后生成笔记或手动触发
+    if (job.audioOnly) {
+      job.status = 'done';
+      job.finishedAt = Date.now();
+      job.log.push('已按需只抓音轨（转写未执行）');
+      emit(job);
+      return;
     }
 
     job.stage = 'transcribe';

@@ -11,6 +11,7 @@ import { EventEmitter } from 'node:events';
 import { DOWNLOAD_DIR, ensureDir, ensureInside, sanitizeName } from './paths.mjs';
 import { listMyCourses, listCourseSubs, listSubPpt } from './wqxt.mjs';
 import { savePageTimes } from './pages.mjs';
+import { createReplayJob } from './replay.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -32,6 +33,8 @@ function publicJob(j) {
     id: j.id,
     status: j.status,           // pending | running | done | canceled | error
     mode: j.mode,               // course | all
+    withAudio: j.withAudio || false,
+    audioQueued: j.audioQueued || 0,
     courseTitles: j.courseTitles,
     createdAt: j.createdAt,
     startedAt: j.startedAt,
@@ -79,7 +82,7 @@ function emit(job) {
  * @param {{mode:'course'|'all'|'sub', courseId?:string, subId?:string, monthsBack?:number, termId?:number|string}} options
  */
 export async function createJob(options) {
-  const { mode = 'course', courseId, subId, monthsBack = 6, termId, force = false } = options;
+  const { mode = 'course', courseId, subId, monthsBack = 6, termId, force = false, withAudio = false } = options;
 
   let courses;
   if (termId != null && termId !== '') {
@@ -108,6 +111,7 @@ export async function createJob(options) {
     status: 'pending',
     mode,
     force: Boolean(force),
+    withAudio: Boolean(withAudio),   // 勾了「同时抓音轨」→ 下完后排队抓音轨（只抓，不转写）
     courseTitles: targets.map((c) => c.title),
     createdAt: Date.now(),
     startedAt: null,
@@ -200,6 +204,31 @@ async function runJob(job) {
   job.status = job.canceled ? 'canceled' : 'done';
   job.finishedAt = Date.now();
   emit(job);
+
+  // 勾了「同时抓音轨」：图片下完后，给每个成功课次排一个「只抓音轨」任务
+  // （replay 内部串行，不会几十节课同时抓 1GB 流；转写留到生成笔记或手动触发）
+  if (job.withAudio && !job.canceled) {
+    let queued = 0;
+    for (const task of job.tasks) {
+      if (task.status !== 'done' || !task.subId || task.subId === '-') continue;
+      try {
+        const r = createReplayJob({
+          courseId: task.courseId,
+          subId: task.subId,
+          courseTitle: task.courseTitle || path.dirname(task.relDir),
+          subTitle: path.basename(task.relDir),
+          audioOnly: true,
+        });
+        if (!r.skipped) queued += 1;
+      } catch { /* 单节课失败不影响下载任务 */ }
+    }
+    if (queued) {
+      job.audioQueued = queued;
+      job.log = job.log || [];
+      job.log.push(`已排队抓 ${queued} 节课的音轨（转写可稍后触发）`);
+      emit(job);
+    }
+  }
 }
 
 async function runTask(job, task) {

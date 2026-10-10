@@ -234,9 +234,21 @@ async function startCourseJob(course, btn) {
 
 // ---------- 课次弹窗 ----------
 
+/** 「同时抓音轨」是个会记住的偏好：勾一次以后每次下载都带上（课次弹窗里可以改） */
+const AUDIO_PREF_KEY = 'wqppt_download_audio';
+
+function audioPref() {
+  return localStorage.getItem(AUDIO_PREF_KEY) === '1';
+}
+
+function setAudioPref(on) {
+  localStorage.setItem(AUDIO_PREF_KEY, on ? '1' : '0');
+}
+
 async function openSubs(course) {
   $('subsTitle').textContent = course.title;
   $('subsList').innerHTML = '<p class="empty">加载中…</p>';
+  $('subsWithAudio').checked = audioPref();   // 恢复上次的选择
   $('subsModal').hidden = false;
   try {
     let subs = state.subsCache.get(course.courseId);
@@ -334,8 +346,10 @@ async function startSubJob(course, sub, btn) {
   btn.textContent = '创建中…';
   try {
     const force = Boolean($('subsForce') && $('subsForce').checked);
-    await api('/jobs', { method: 'POST', body: { mode: 'sub', courseId: course.courseId, subId: sub.subId, termId: state.termId, force } });
-    toast(`已创建任务：${course.title} — ${sub.title}${force ? '（强制重下）' : ''}`, 'ok');
+    const withAudio = Boolean($('subsWithAudio') && $('subsWithAudio').checked);
+    setAudioPref(withAudio);
+    await api('/jobs', { method: 'POST', body: { mode: 'sub', courseId: course.courseId, subId: sub.subId, termId: state.termId, force, withAudio } });
+    toast(`已创建任务：${course.title} — ${sub.title}${force ? '（强制重下）' : ''}${withAudio ? '（含抓音轨）' : ''}`, 'ok');
   } catch (e) {
     toast('创建失败：' + e.message, 'err');
   } finally {
@@ -1877,12 +1891,12 @@ makeRangeMenu($('btnRangeDownload'), async (range) => {
   btn.disabled = true;
   rangeHint(`正在检索「${label}」的课次…`);
   try {
-    const r = await api('/download-range', { method: 'POST', body: { range, termId: state.termId } });
+    const r = await api('/download-range', { method: 'POST', body: { range, termId: state.termId, withAudio: audioPref() } });
     if (!r.matched) {
       rangeHint(`「${label}」没有找到可下载的课次`);
     } else {
       rangeHint(`「${label}」匹配 ${r.matched} 个课次，已加入 ${r.queued} 个下载任务${r.failed?.length ? `（${r.failed.length} 个失败）` : ''}`);
-      if (r.queued) toast(`已加入 ${r.queued} 个下载任务（进度见下方任务列表）`, 'ok');
+      if (r.queued) toast(`已加入 ${r.queued} 个下载任务（进度见下方任务列表）${r.withAudio ? '｜同时抓音轨已开启' : ''}`, 'ok');
     }
   } catch (e) {
     rangeHint('下载失败：' + e.message, 'err');
@@ -2023,12 +2037,13 @@ $('btnDownloadSel').onclick = async () => {
   const old = btn.textContent;
   btn.textContent = '创建中…';
   try {
+    const withAudio = audioPref();
     for (const courseId of ids) {
       const c = state.courses.find((x) => String(x.courseId) === courseId);
       btn.textContent = `创建中… ${c ? c.title : courseId}`;
-      await api('/jobs', { method: 'POST', body: { mode: 'course', courseId } });
+      await api('/jobs', { method: 'POST', body: { mode: 'course', courseId, withAudio } });
     }
-    toast(`已为 ${ids.length} 门课创建下载任务`, 'ok');
+    toast(`已为 ${ids.length} 门课创建下载任务${withAudio ? '（同时抓音轨已开启，可在课次弹窗里关）' : ''}`, 'ok');
     state.selectedCourses = new Set();
     renderCourses();
   } catch (e) {

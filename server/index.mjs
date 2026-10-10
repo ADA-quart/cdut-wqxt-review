@@ -14,7 +14,7 @@ import {
   DOWNLOAD_DIR, DATA_DIR, NOTES_DIR, PUBLIC_DIR, ROOT_DIR,
   ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf, sanitizeName,
 } from './paths.mjs';
-import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
+import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms, resolveLessonIds } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
 import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
@@ -254,10 +254,10 @@ app.get('/api/browser/window', (_req, res) => {
 });
 
 app.post('/api/jobs', asyncRoute(async (req, res) => {
-  const { mode = 'course', courseId, subId, monthsBack = 12, termId, force } = req.body || {};
+  const { mode = 'course', courseId, subId, monthsBack = 12, termId, force, withAudio } = req.body || {};
   if ((mode === 'course' || mode === 'sub') && !courseId) return res.status(400).json({ error: '缺少 courseId' });
   if (mode === 'sub' && !subId) return res.status(400).json({ error: '缺少 subId' });
-  const job = await createJob({ mode, courseId, subId, monthsBack, termId, force });
+  const job = await createJob({ mode, courseId, subId, monthsBack, termId, force, withAudio });
   res.status(201).json({ job });
 }));
 
@@ -281,6 +281,7 @@ app.post('/api/download-range', asyncRoute(async (req, res) => {
   const [fromMs, toMs] = periodRangeMs(range);
   const dryRun = req.body?.dryRun === true;
   const termId = req.body?.termId;
+  const withAudio = req.body?.withAudio === true;
 
   if (!(await ensureLoggedIn())) {
     return res.status(401).json({ error: '未登录：请先登录统一认证（勾选「记住登录状态」后会自动恢复）' });
@@ -308,13 +309,13 @@ app.post('/api/download-range', asyncRoute(async (req, res) => {
   const failed = [];
   for (const m of matched) {
     try {
-      const job = await createJob({ mode: 'sub', courseId: m.courseId, subId: m.subId });
+      const job = await createJob({ mode: 'sub', courseId: m.courseId, subId: m.subId, withAudio });
       jobs.push({ id: job.id, course: m.course, title: m.title });
     } catch (e) {
       failed.push({ ...m, error: e.message });
     }
   }
-  res.json({ range, matched: matched.length, queued: jobs.length, jobs, failed });
+  res.json({ range, matched: matched.length, queued: jobs.length, jobs, failed, withAudio });
 }));
 
 // ---------- PPT → Markdown 转换 ----------
@@ -626,6 +627,29 @@ async function runLessonPipeline(rel, needMd) {
     if (!r || r.status !== 'done') throw new Error(`转 MD ${r ? r.status : '中断'}${r?.error ? '：' + r.error : ''}`);
   }
   if (!llmReady()) return;
+
+  // 生成笔记前补讲稿：没有转写、但课次有回放的，自动跑一次转写（讲稿进笔记后质量明显更好）。
+  // 可以在 config.json 的 automation.transcribeBeforeNote 关掉；失败只记日志，不阻断整条流水线。
+  if (loadConfig().automation?.transcribeBeforeNote !== false) {
+    try {
+      const [course, lesson] = String(rel).split('/');
+      const transAbs = path.join(NOTES_DIR, `${rel}.trans.json`);
+      if (!fs.existsSync(transAbs)) {
+        const ids = await resolveLessonIds(course, lesson);
+        if (ids) {
+          const rj = createReplayJob(ids);
+          if (!rj.skipped) {
+            const r = await waitJobDone(replayEvents, getReplayJob, rj.id);
+            if (r && r.status === 'done') console.log(`[pipeline] ${rel} 讲稿已转写`);
+            else console.warn(`[pipeline] ${rel} 转写未完成：${r ? r.status + (r.error ? ' ' + r.error : '') : '中断'}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[pipeline] ${rel} 转写讲稿失败（继续生成笔记）：`, e.message);
+    }
+  }
+
   const polish = createLlmJob({ op: 'polish', dir: rel });
   const p = await waitJobDone(llmEvents, getLlmJob, polish.id);
   if (!p || p.status !== 'done') throw new Error(`校订 ${p ? p.status : '中断'}${p?.error ? '：' + p.error : ''}`);

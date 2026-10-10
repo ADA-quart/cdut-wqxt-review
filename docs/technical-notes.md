@@ -51,6 +51,24 @@ Electron 壳启动时先探测本地服务在不在跑，没在跑才自己拉�
 开发时建议用 `PORT=3902 npm start`，避免与用户正在用的桌面端抢同一个端口
 （两边的服务都能响应 `/api/system/shutdown`，会互相关掉）。
 
+### 抓音轨的两条触发路径
+
+`server/replay.mjs` 一个任务包含三步：截播放器媒体流（`captureVideo`）→ ffmpeg 抽音轨（`extractAudio`）
+→ 语音识别（`transcribe`）。两条路径共用它，靠参数区分：
+
+- **只抓音轨**（`audioOnly: true`）：跑完前两步就结束，不碰 faster-whisper——所以没装识别环境也能先把音轨存下来。
+  由下载任务在勾了「同时抓音轨」时对每个成功的课次入队（`downloader.mjs` 的 `withAudio`）。
+- **完整转写**（默认）：三步都跑。由课次旁的「转写讲稿」按钮，或笔记流水线在
+  「有回放、但没有 `<课次>.trans.json`」时自动触发（`index.mjs` 的 `runLessonPipeline`，
+  走 `resolveLessonIds()` 按标题反查 `courseId/subId`；可用 `automation.transcribeBeforeNote` 关掉）。
+
+两个必须守住的点：
+
+1. **串行队列**。抓流每节约 1GB 中转 + 一个浏览器标签，几十节课并发会把浏览器和磁盘打爆；
+   `createReplayJob` 现在只入队，`pump()` 逐个跑。
+2. **幂等跳过**。音轨已存在时：只抓音轨的任务直接 done，完整转写任务直接进识别阶段。
+   所以「下载时抓了音轨」之后再点生成笔记或手动转写，都不会重复抓那 1GB。
+
 ### 数据流
 
 ```

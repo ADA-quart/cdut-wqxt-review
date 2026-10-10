@@ -30,7 +30,12 @@ const DEFAULTS = {
   // 转 MD（Pix2Text）并行任务数：1 个任务约 6~7GB 显存，按显卡容量调
   md: { parallel: 'auto' },   // 'auto' = 按显存自动，或 1~4
   // 简化流水线：转 MD 后自动校订；生成笔记后自动复核（质量审计）
-  automation: { polishAfterMd: true, auditAfterNote: true, supplementAfterAudit: true },
+  automation: {
+    polishAfterMd: true,        // 转 MD 完成后自动校订
+    auditAfterNote: true,       // 生成笔记后自动质量审计
+    supplementAfterAudit: true, // 审计后自动补全缺失知识点
+    transcribeBeforeNote: true, // 生成笔记前，对还没有讲稿的课次自动抓音轨 + 转写
+  },
 };
 
 function readFile() {

@@ -341,3 +341,18 @@ export async function pageTimesByTitle(courseTitle, lessonTitle) {
   if (!sub) return null;
   return listSubPpt(course.courseId, sub.subId);
 }
+
+/**
+ * 按标题反查课程 / 课次 id（批量流水线要拿 subId 才能抓音轨）。
+ * 只有该课次确实有回放（status=6）才返回，避免为没有录播的课次白跑一趟。
+ */
+export async function resolveLessonIds(courseTitle, lessonTitle) {
+  const map = await courseByTitle();
+  const course = map.get(String(courseTitle));
+  if (!course || course.delisted) return null;
+  const subs = await listCourseSubs(course.courseId);
+  const sub = subs.find((s) => s.title === String(lessonTitle));
+  if (!sub || !sub.hasPlayback) return null;
+  // 字段名对齐 createReplayJob 的入参（subTitle 不能少，否则音轨会落到「未命名」目录）
+  return { courseId: course.courseId, subId: sub.subId, courseTitle: course.title, subTitle: sub.title };
+}
