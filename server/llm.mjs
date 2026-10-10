@@ -20,7 +20,8 @@ import { loadConfig, getProfile, PROFILE_KEYS } from './config.mjs';
 import { describeFetchError } from './net.mjs';
 import { findMath, findBrokenMath, mathError, applyMathFixes } from './mdmath.mjs';
 import { ensurePageTimes, narrationByPage, readTranscript } from './pages.mjs';
-import { pageTimesByTitle } from './wqxt.mjs';
+import { checkLogin, pageTimesByTitle, resolveLessonIds } from './wqxt.mjs';
+import { createReplayJob, getReplayJob, replayEvents } from './replay.mjs';
 
 export const events = new EventEmitter();
 events.setMaxListeners(50);
@@ -1170,10 +1171,62 @@ ${front}
 }
 
 /**
+ * 生成笔记前确保有讲稿：没有转写、但课次有回放的，先跑一次转写。
+ *
+ * 放在这里（而不是只放在「一键笔记」的流水线里）是因为生成笔记有三个入口——
+ * 课次按钮、课程行「批量生成笔记」、一键笔记；放这儿三条路行为一致。
+ * 失败只记日志，不阻断笔记；`automation.transcribeBeforeNote` 可整体关掉。
+ */
+async function ensureTranscript(job) {
+  if (loadConfig().automation?.transcribeBeforeNote === false) return;
+  const { course, lesson } = courseContext(job);
+  if (!course || !lesson) return;
+  if (fs.existsSync(path.join(NOTES_DIR, course, `${lesson}.trans.json`))) return;
+  try {
+    // 抓音轨要用登录态的播放器页；未登录时直接跳过，别抛「Execution context was destroyed」这种天书
+    const st = await checkLogin().catch(() => null);
+    if (st && st.loggedIn === false) {
+      job.log.push('未登录：跳过转写讲稿（登录后重跑笔记会自动补上）');
+      return;
+    }
+    const ids = await resolveLessonIds(course, lesson);   // 没有回放/已下架 → null
+    if (!ids) return;
+    const r = createReplayJob(ids);
+    if (r.skipped) return;
+    job.log.push(`缺少讲稿，先转写（课次有回放）…`);
+    job.progress.current = '转写讲稿中…';
+    emit(job);
+    const finished = await new Promise((resolve) => {
+      const on = (j) => {
+        if (j.id !== r.id) return;
+        const p = j.progress || {};
+        job.progress.current = p.unit === 'seconds' && p.total
+          ? `转写讲稿中… ${Math.round((p.done / p.total) * 100)}%`
+          : `转写讲稿中…（${j.stage || '准备'}）`;
+        emit(job);
+        if (['done', 'error', 'canceled'].includes(j.status)) {
+          replayEvents.off('update', on);
+          resolve(j);
+        }
+      };
+      replayEvents.on('update', on);
+      const cur = getReplayJob(r.id);           // 可能已经跑完
+      if (cur && ['done', 'error', 'canceled'].includes(cur.status)) on(cur);
+    });
+    job.log.push(finished.status === 'done'
+      ? `讲稿已就绪（${finished.device || '已转写'}）`
+      : `转写未完成（${finished.status}${finished.error ? '：' + finished.error : ''}），先按现有材料生成笔记`);
+  } catch (e) {
+    job.log.push('转写讲稿失败（继续生成笔记）：' + String(e?.message || e).slice(0, 100));
+  }
+}
+
+/**
  * 生成笔记的入口：能用视觉就走视觉链路（省 3/4 token、快 3 倍），否则回落文本链路。
  * 配置 llm.notePipeline：auto（默认）/ vision（强制视觉）/ text（强制文本）。
  */
 async function runNoteAuto(job) {
+  await ensureTranscript(job);
   // 单次任务可用 pipeline 强制（API: {op:'note', dir, pipeline:'text'|'vision'}），否则按配置。
   // 注意别用 mode——前端一直在传 mode=纠错模式（默认 text），会误把视觉链路锁成文本
   const forced = ['text', 'vision'].includes(job.requestedPipeline) ? job.requestedPipeline : '';

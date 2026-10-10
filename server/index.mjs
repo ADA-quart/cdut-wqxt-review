@@ -14,7 +14,7 @@ import {
   DOWNLOAD_DIR, DATA_DIR, NOTES_DIR, PUBLIC_DIR, ROOT_DIR,
   ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf, sanitizeName,
 } from './paths.mjs';
-import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms, resolveLessonIds } from './wqxt.mjs';
+import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
 import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
@@ -644,28 +644,6 @@ async function runLessonPipeline(rel, needMd) {
     if (!r || r.status !== 'done') throw new Error(`转 MD ${r ? r.status : '中断'}${r?.error ? '：' + r.error : ''}`);
   }
   if (!llmReady()) return;
-
-  // 生成笔记前补讲稿：没有转写、但课次有回放的，自动跑一次转写（讲稿进笔记后质量明显更好）。
-  // 可以在 config.json 的 automation.transcribeBeforeNote 关掉；失败只记日志，不阻断整条流水线。
-  if (loadConfig().automation?.transcribeBeforeNote !== false) {
-    try {
-      const [course, lesson] = String(rel).split('/');
-      const transAbs = path.join(NOTES_DIR, `${rel}.trans.json`);
-      if (!fs.existsSync(transAbs)) {
-        const ids = await resolveLessonIds(course, lesson);
-        if (ids) {
-          const rj = createReplayJob(ids);
-          if (!rj.skipped) {
-            const r = await waitJobDone(replayEvents, getReplayJob, rj.id);
-            if (r && r.status === 'done') console.log(`[pipeline] ${rel} 讲稿已转写`);
-            else console.warn(`[pipeline] ${rel} 转写未完成：${r ? r.status + (r.error ? ' ' + r.error : '') : '中断'}`);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn(`[pipeline] ${rel} 转写讲稿失败（继续生成笔记）：`, e.message);
-    }
-  }
 
   const polish = createLlmJob({ op: 'polish', dir: rel });
   const p = await waitJobDone(llmEvents, getLlmJob, polish.id);

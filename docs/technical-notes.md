@@ -69,6 +69,12 @@ Electron 壳启动时先探测本地服务在不在跑，没在跑才自己拉�
 2. **幂等跳过**。音轨已存在时：只抓音轨的任务直接 done，完整转写任务直接进识别阶段。
    所以「下载时抓了音轨」之后再点生成笔记或手动转写，都不会重复抓那 1GB。
 
+**自动转写挂在哪一步**：`llm.mjs` 的 `ensureTranscript()`，由 `runNoteAuto()` 在生成笔记前调用。
+放这里是因为生成笔记有三个入口（课次按钮 / 课程行「批量生成笔记」/ 一键笔记的 `runLessonPipeline`），
+放流水线里只有一条路生效（踩过：同一动作三种行为）。它会先 `checkLogin()`——
+抓音轨要用登录态的播放器页，未登录时直接写日志跳过，避免抛 `Execution context was destroyed`。
+`resolveLessonIds()` 返回 null（无回放/已下架）时同样跳过。开关：`automation.transcribeBeforeNote`。
+
 **依赖自检**：`GET /api/replay-tools` 返回 ffmpeg（抽音轨）与 faster-whisper（识别）的可用状态，
 前端点「转写讲稿」前先查一次，缺依赖直接提示安装命令；任务内部在抓流前也会 `ffmpegStatus()` 复查，
 避免抓完 1GB 才发现抽不了音轨。ffmpeg 探测结果缓存 5 分钟，不会每个任务都 spawn 一次。
