@@ -97,12 +97,15 @@ bash setup-p2t.sh
 
 ### 安装转写环境（转写讲稿用，一次性）
 
-讲稿用 faster-whisper（Python 包），与 OCR 环境相互独立：
+讲稿需要两样东西：**ffmpeg**（抽音轨）和 **faster-whisper**（语音识别）。ffmpeg 是命令行工具，
+faster-whisper 是 Python 包，都与 OCR 环境相互独立：
 
 ```bash
+winget install Gyan.FFmpeg          # Windows 装 ffmpeg（macOS：brew install ffmpeg）
 pip install faster-whisper          # 用哪个 Python 装，清渠就用哪个跑（自动探测）
 ```
 
+界面里点「转写讲稿」前会自检这两样，缺哪个会直接提示装什么（`GET /api/replay-tools` 可查状态）。
 首次转写会自动从 HF 镜像下载 `large-v3-turbo` 模型（约 1.6GB）到 `run/asr/` 之后复用；
 CUDA 可用走 GPU（V100 实测约 26 倍速），否则回落 CPU；多个 Python 环境时用 `QINGQU_ASR_PYTHON` 指定解释器。
 
@@ -254,7 +257,9 @@ App 内置更新检查：启动时静默查询 GitHub Releases，发现新版本
 ## 常见问题
 
 - **没有转换环境能做什么？** 登录、下载、清洗、转写讲稿、导入现成 md 都能用；只有「转 MD」需要一次性安装（约 6GB 模型）。
-- **转写讲稿报「未找到装了 faster-whisper 的 Python」？** 执行 `pip install faster-whisper`；机器上有多个 Python 时，用 `QINGQU_ASR_PYTHON` 指定。
+- **转写讲稿报缺依赖？** 需要 `ffmpeg`（`winget install Gyan.FFmpeg`）和 `faster-whisper`（`pip install faster-whisper`）；
+  机器上有多个 Python 时用 `QINGQU_ASR_PYTHON` 指定解释器。首次转写还会自动下 1.6GB 识别模型到 `run/asr/`，
+  网络不好可以从别的机器直接把整个 `run/asr/` 目录拷过来（模型与机器无关）。
 - **笔记会走哪条链路？** 默认自动：有能读图的档位就走视觉（省 token、快），否则回落文本。可在「LLM 设置 → 笔记生成方式」固定，旁边那行会显示实际结果。
 - **为什么必须弹浏览器？** 问渠学堂登录与页面有动态防护（瑞数式 WAF），普通 HTTP 请求会被拦截；图片服务器无防护，可直下。
 - **端口冲突？** 默认 3901，`PORT=xxxx npm start` 更换。

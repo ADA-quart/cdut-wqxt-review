@@ -30,6 +30,33 @@ let nextJobId = 1;
 const queue = [];
 let running = null;
 
+let ffmpegCache = null;
+
+/**
+ * ffmpeg 是否可用（抽音轨要用）。
+ * 关键：别等到 spawn 报 ENOENT 才让用户看到 `spawn ffmpeg ENOENT` 这种天书，
+ * 这里预先探测一次并给出安装指引（结果缓存 5 分钟）。
+ */
+export async function ffmpegStatus({ fresh = false } = {}) {
+  if (!fresh && ffmpegCache && Date.now() - ffmpegCache.at < 5 * 60 * 1000) return ffmpegCache;
+  const r = await new Promise((resolve) => {
+    try {
+      const p = spawn('ffmpeg', ['-hide_banner', '-version'], { windowsHide: true });
+      let out = '';
+      p.stdout.on('data', (d) => { out += String(d); });
+      p.on('error', () => resolve({ ok: false, version: '' }));
+      p.on('exit', (code) => resolve({ ok: code === 0, version: (out.match(/ffmpeg version (\S+)/) || [])[1] || '' }));
+    } catch {
+      resolve({ ok: false, version: '' });
+    }
+  });
+  ffmpegCache = { ...r, at: Date.now() };
+  return ffmpegCache;
+}
+
+const FFMPEG_HINT = '未找到 ffmpeg（抽音轨要用它）。Windows：winget install Gyan.FFmpeg；'
+  + 'macOS：brew install ffmpeg；Linux：apt install ffmpeg。装完重开清渠再试';
+
 function pump() {
   if (running || queue.length === 0) return;
   running = queue.shift();
@@ -425,6 +452,9 @@ async function runJob(job) {
       job.log.push(`已有音轨 ${(fs.statSync(audioAbs).size / 1048576).toFixed(1)} MB，跳过抓流`);
       emit(job);
     } else {
+      // 抓流前先确认 ffmpeg 在：缺它的话抽音轨必然失败，早点给出安装指引
+      const ff = await ffmpegStatus();
+      if (!ff.ok) throw new Error(FFMPEG_HINT);
       job.stage = 'capture';
       job.log.push('打开播放页，等待播放器取流…');
       emit(job);

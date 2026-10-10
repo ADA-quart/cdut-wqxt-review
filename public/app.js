@@ -363,6 +363,18 @@ async function startReplayJob(course, sub, btn) {
   btn.disabled = true;
   btn.textContent = '创建中…';
   try {
+    // 先看环境：缺 ffmpeg / faster-whisper 时直接说清装什么，别等任务跑一半才报错
+    try {
+      const t = await api('/replay-tools');
+      if (!t.ffmpeg.available) {
+        toast('缺少 ffmpeg（抽音轨要用）：Windows 运行 winget install Gyan.FFmpeg，装完重开清渠', 'err');
+        return;
+      }
+      if (!t.whisper.available) {
+        toast(t.whisper.hint || '缺少 faster-whisper：pip install faster-whisper', 'err');
+        return;
+      }
+    } catch { /* 自检查询失败不拦，交给任务自己报错 */ }
     const force = Boolean($('subsForce') && $('subsForce').checked);
     const { job } = await api('/replay-jobs', {
       method: 'POST',
