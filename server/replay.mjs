@@ -57,6 +57,49 @@ export async function ffmpegStatus({ fresh = false } = {}) {
 const FFMPEG_HINT = '未找到 ffmpeg（抽音轨要用它）。Windows：winget install Gyan.FFmpeg；'
   + 'macOS：brew install ffmpeg；Linux：apt install ffmpeg。装完重开清渠再试';
 
+/** 默认识别模型名（换模型就是换这个字符串，模型按名字分目录存放） */
+export const DEFAULT_ASR_MODEL = 'large-v3-turbo';
+
+/**
+ * 识别模型是否已经下载好。
+ * 模型按 `run/asr/<模型名>/` 存放，判据是 `model.bin` 存在且体积正常——
+ * 用户最常见的疑问就是「它到底下没下」，所以这个状态要能从界面查到。
+ */
+export function modelStatus(model = DEFAULT_ASR_MODEL) {
+  const dir = path.join(MODEL_DIR, model);
+  const bin = path.join(dir, 'model.bin');
+  let bytes = 0;
+  let ready = false;
+  try {
+    if (fs.existsSync(bin)) {
+      bytes = fs.statSync(bin).size;
+      ready = bytes > 100 * 1024 * 1024;   // 正常权重都在百 MB 以上
+    }
+  } catch { /* 读不到就当没下 */ }
+  return { model, dir, ready, bytes, mb: Math.round(bytes / 1048576) };
+}
+
+/** 已抓音轨的统计（几节课、占多大），供界面显示 */
+export function audioStats() {
+  const base = path.join(DATA_DIR, 'audio');
+  let count = 0;
+  let bytes = 0;
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(m4a|mp3|wav|aac)$/i.test(e.name)) {
+        count += 1;
+        try { bytes += fs.statSync(p).size; } catch { /* 忽略 */ }
+      }
+    }
+  };
+  walk(base);
+  return { count, bytes, mb: Math.round(bytes / 1048576), dir: base };
+}
+
 function pump() {
   if (running || queue.length === 0) return;
   running = queue.shift();

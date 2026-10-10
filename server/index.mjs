@@ -26,7 +26,7 @@ import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } 
 import { autoParallel } from './gpu.mjs';
 import {
   createReplayJob, listReplayJobs, getReplayJob, cancelReplayJob, replayEvents,
-  ffmpegStatus, findAsrPython,
+  ffmpegStatus, findAsrPython, modelStatus, audioStats, DEFAULT_ASR_MODEL,
 } from './replay.mjs';
 import { renderNotePdf } from './notepdf.mjs';
 import { listCards, dueCount, addCard, addCards, gradeCard, deleteCard, exportCards, mergeCards } from './cards.mjs';
@@ -357,6 +357,8 @@ app.get('/api/replay-tools', asyncRoute(async (_req, res) => {
       python: python || '',
       hint: python ? null : '未找到装了 faster-whisper 的 Python：pip install faster-whisper（或用环境变量 QINGQU_ASR_PYTHON 指定解释器）',
     },
+    model: modelStatus(DEFAULT_ASR_MODEL),   // 识别模型下没下、多大
+    audio: audioStats(),                     // 已经抓了多少节音轨
   });
 }));
 

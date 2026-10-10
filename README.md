@@ -106,6 +106,9 @@ pip install faster-whisper          # 用哪个 Python 装，清渠就用哪个�
 ```
 
 界面里点「转写讲稿」前会自检这两样，缺哪个会直接提示装什么（`GET /api/replay-tools` 可查状态）。
+**想确认「模型下没下」**：打开任意课程的「课次」弹窗，底部那行会写明
+`ffmpeg ✓ ｜ faster-whisper ✓ ｜ 识别模型 ✓ large-v3-turbo（1543 MB）｜ 已抓音轨 N 节 / M MB`；
+也可以用 `GET /api/replay-tools` 查（返回模型是否就绪、体积、目录，以及已抓音轨的节数与占用）。
 首次转写会自动从 HF 镜像下载 `large-v3-turbo` 模型（约 1.6GB）到 `run/asr/` 之后复用；
 CUDA 可用走 GPU（V100 实测约 26 倍速），否则回落 CPU；多个 Python 环境时用 `QINGQU_ASR_PYTHON` 指定解释器。
 

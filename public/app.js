@@ -249,6 +249,7 @@ async function openSubs(course) {
   $('subsTitle').textContent = course.title;
   $('subsList').innerHTML = '<p class="empty">加载中…</p>';
   $('subsWithAudio').checked = audioPref();   // 恢复上次的选择
+  renderSubsToolsHint();
   $('subsModal').hidden = false;
   try {
     let subs = state.subsCache.get(course.courseId);
@@ -260,6 +261,31 @@ async function openSubs(course) {
     renderSubs(course, subs);
   } catch (e) {
     $('subsList').innerHTML = `<p class="empty">加载失败：${e.message}</p>`;
+  }
+}
+
+/**
+ * 课次弹窗底部那行状态：ffmpeg / faster-whisper / 识别模型 / 已抓音轨。
+ * 「模型下没下」是用户最常问的，所以直接写在能点到「转写讲稿」的地方。
+ */
+async function renderSubsToolsHint() {
+  const el = $('subsToolsHint');
+  if (!el) return;
+  el.textContent = '转写环境检查中…';
+  try {
+    const t = await api('/replay-tools');
+    const parts = [];
+    parts.push(t.ffmpeg.available ? `ffmpeg ✓ ${t.ffmpeg.version || ''}`.trim() : 'ffmpeg ✗（winget install Gyan.FFmpeg）');
+    parts.push(t.whisper.available ? 'faster-whisper ✓' : 'faster-whisper ✗（pip install faster-whisper）');
+    if (!t.model.ready) {
+      parts.push(`识别模型未下载（首次转写自动下 1.6GB，存到 ${t.model.dir}）`);
+    } else {
+      parts.push(`识别模型 ✓ ${t.model.model}（${t.model.mb} MB）`);
+    }
+    parts.push(t.audio.count ? `已抓音轨 ${t.audio.count} 节 / ${t.audio.mb} MB` : '还没有抓过音轨');
+    el.textContent = parts.join(' ｜ ');
+  } catch (e) {
+    el.textContent = '转写环境检查失败：' + e.message;
   }
 }
 
