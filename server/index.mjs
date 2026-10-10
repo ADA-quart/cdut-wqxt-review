@@ -305,7 +305,7 @@ app.post('/api/download-range', asyncRoute(async (req, res) => {
   }
   matched.sort((a, b) => a.startAt - b.startAt);
 
-  if (dryRun) return res.json({ range, from: fromMs, to: toMs, matched });
+  if (dryRun) return res.json({ range, from: fromMs, to: toMs, matched, withAudio });
   const jobs = [];
   const failed = [];
   for (const m of matched) {

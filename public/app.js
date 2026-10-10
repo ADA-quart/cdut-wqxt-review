@@ -243,12 +243,22 @@ function audioPref() {
 
 function setAudioPref(on) {
   localStorage.setItem(AUDIO_PREF_KEY, on ? '1' : '0');
+  // 两处开关（课程区工具栏 / 课次弹窗）保持同步
+  const a = $('toolbarWithAudio');
+  const b = $('subsWithAudio');
+  if (a) a.checked = !!on;
+  if (b) b.checked = !!on;
 }
+
+// 勾选即生效：以前只在点「下载此课次」时才保存，导致「勾完直接批量下载」丢设置
+$('toolbarWithAudio').onchange = (e) => setAudioPref(e.target.checked);
+$('subsWithAudio').onchange = (e) => setAudioPref(e.target.checked);
+$('toolbarWithAudio').checked = audioPref();   // 打开页面就显示上次的选择
 
 async function openSubs(course) {
   $('subsTitle').textContent = course.title;
   $('subsList').innerHTML = '<p class="empty">加载中…</p>';
-  $('subsWithAudio').checked = audioPref();   // 恢复上次的选择
+  $('subsWithAudio').checked = audioPref();   // 恢复上次的选择（与工具栏那个同步）
   renderSubsToolsHint();
   $('subsModal').hidden = false;
   try {
