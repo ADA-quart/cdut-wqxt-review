@@ -759,6 +759,17 @@ function extractBlock(text, marker) {
 
 /** 替换/插入带标记的块；block 为 null 时移除 */
 /**
+ * 把顶部提炼块拆成两半：front = 事务通知 + 本课脉络（放笔记最前），
+ * must = 课末必记（放课程内容之后、自动补漏小节之前）。
+ */
+export function splitDigest(digest) {
+  const text = String(digest || '').trim();
+  const m = /^##\s*🎯\s*课末必记/m.exec(text);
+  if (!m) return { front: text, must: '' };
+  return { front: text.slice(0, m.index).trim(), must: text.slice(m.index).trim() };
+}
+
+/**
  * 事务通知块可能为空：模型有时仍会写出「（无）」的标题，
  * 这里剥掉整块，免得笔记顶上挂一个空标题。
  */
@@ -1017,6 +1028,7 @@ async function runNoteVision(job) {
   );
   addUsage(job, wUsage);
   let note = String(noteRaw || '').trim();
+  const autoPatches = [];   // 自动补出来的小节：要排在「课末必记」之后
   job.progress.done += 1;
   emit(job);
 
@@ -1048,7 +1060,7 @@ async function runNoteVision(job) {
         { profile: job.noteProfile, temperature: 0.2, maxTokens: 2500, thinking: 'off' },
       );
       addUsage(job, usage);
-      note = `${note}\n\n${String(patch || '').trim()}`;
+      autoPatches.push(String(patch || '').trim());
       job.log.push(`覆盖补漏：为未引用的 ${missing.length} 页补写要点（${missing.map((p) => p.n).join('、')}）`);
     } catch (e) {
       job.log.push('补漏失败：' + String(e?.message || e).slice(0, 80));
@@ -1110,19 +1122,24 @@ async function runNoteVision(job) {
     top.sort((a, b) => a.n - b.n);
     if (top.length) {
       const lines = top.map((p) => `- 第 ${p.n} 页（点角标可回课件核对）[[${lessonName}.pdf#page=${p.n}|${p.n}]]\n\n![第 ${p.n} 页图](${p.rel})`);
-      note = `${note}\n\n### 📎 关键图（自动附上）\n\n${lines.join('\n\n')}`;
+      autoPatches.push(`### 📎 关键图（自动附上）\n\n${lines.join('\n\n')}`);
       job.log.push(`模型没贴图，已自动附上 ${top.length} 张关键图`);
     }
   }
 
-  // ⑤ 落盘（清理空小节 / 无效图；备份旧笔记）
-  const body = dropBrokenImages(stripPlaceholderSections(note), ctx.course);
+  // ⑤ 落盘：结构 = 标题/说明 + 【通知 + 脉络】 + 课程内容 + 【课末必记】 + 自动小节
+  //（必记放在课程内容之后、自动补漏小节之前——用户要求的阅读顺序）
+  const { front, must } = splitDigest(digest);
+  const body = dropBrokenImages(
+    stripPlaceholderSections([note, must, ...autoPatches].filter(Boolean).join('\n\n')),
+    ctx.course,
+  );
   if (body.dropped) job.log.push(`丢掉 ${body.dropped} 个指向不存在文件的图片引用`);
   const head = `# ${lessonName} · 深度复习笔记
 
 > 由 AI 通读课件截图与课堂讲解后整理：带角标的条目可跳到课件对应页核对，💭 是讲解与补充（AI 生成，注意甄别），折叠框里是习题参考答案（先自己想再点开）。
 
-${digest.trim()}
+${front}
 
 `;
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
@@ -1186,6 +1203,7 @@ async function runNote(job) {
   const mdPath = job.mdPath;
   const original = fs.readFileSync(mdPath, 'utf8');
   const ctx = courseContext(job);
+  const autoPatches = [];   // 自动补出来的小节：排在「课末必记」之后
   if (ctx.course) job.log.push('提示词上下文：《' + ctx.course + '》');
 
   // 按页切分原文（文件名要留着：讲稿按页对齐时靠它查这页出现在第几秒）
@@ -1434,7 +1452,7 @@ ${p.text}`).join('\n\n').slice(0, 12000);
       job.progress.current = `补漏 ${missing.length} 页`;
       emit(job);
       job.log.push(`覆盖补漏：为未覆盖的 ${missing.length} 页补写要点（${missing.map((p) => p.n).join('、')}）`);
-      note = note + '\n\n' + patch.trim();
+      autoPatches.push(patch.trim());   // 自动补漏小节 → 排在「课末必记」之后
     }
   }
 
@@ -1495,15 +1513,18 @@ ${p.text}`).join('\n\n').slice(0, 12000);
     valid.has(String(Number(n))) ? m : label);
   note = fix(note);
 
+  // 结构：标题/说明 + 【通知 + 脉络】 + 课程内容 + 【课末必记】 + 自动补漏小节
+  const { front, must } = splitDigest(digest);
   const head = `# ${lessonName} · 深度复习笔记
 
 > 由 AI 通读课件后整理：带角标的条目来自课件原文（点角标可跳到对应页核对），💭 是讲解与补充（AI 生成，注意甄别），折叠框里是习题参考答案（先自己想再点开）。
 
-${digest.trim()}
+${front}
 
 `;
-  const body = stripPlaceholderSections(note);
-  if (body !== note.trim()) job.log.push('已清掉正文里的空小节 / 占位说明');
+  const withMust = [note, must, ...autoPatches].filter(Boolean).join('\n\n');
+  const body = stripPlaceholderSections(withMust);
+  if (body !== withMust.trim()) job.log.push('已清掉正文里的空小节 / 占位说明');
   const imgFix = dropBrokenImages(body, ctx.course);
   if (imgFix.dropped) job.log.push(`丢掉 ${imgFix.dropped} 个指向不存在文件的图片引用`);
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
