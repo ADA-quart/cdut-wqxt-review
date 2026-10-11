@@ -20,7 +20,7 @@ import { loadConfig, getProfile, PROFILE_KEYS } from './config.mjs';
 import { describeFetchError } from './net.mjs';
 import { findMath, findBrokenMath, mathError, applyMathFixes } from './mdmath.mjs';
 import { ensurePageTimes, narrationByPage, readTranscript } from './pages.mjs';
-import { checkLogin, pageTimesByTitle, resolveLessonIds } from './wqxt.mjs';
+import { checkLogin, pageTimesByTitle, resolveLessonIds, resolveLessonIdsMany } from './wqxt.mjs';
 import { mergeNoteDuplicates } from './notemerge.mjs';
 import { createReplayJob, getReplayJob, replayEvents } from './replay.mjs';
 
@@ -1187,26 +1187,41 @@ ${front}
  * 转写走 GPU、笔记走远程 LLM，两条跑道互不抢资源——把等待时间用起来。
  */
 async function prequeueBatchTranscriptions(currentJob) {
-  const pending = [...llmJobs.values()].filter((j) => j !== currentJob
-    && j.op === 'note' && (j.status === 'pending' || j.status === 'running'));
-  if (!pending.length) return;
-  const st = await checkLogin().catch(() => null);
-  if (st && st.loggedIn === false) return;
-  let queued = 0;
-  for (const j of pending.slice(0, 12)) {
+  // 先挑「缺讲稿的待生成课次」（纯本地文件检查，便宜）；一个都没有就直接返回，连登录都不查
+  const byCourse = new Map();   // course -> Map(lesson -> 该课次的笔记任务)
+  for (const j of [...llmJobs.values()]) {
+    if (j === currentJob || j.op !== 'note') continue;
+    if (j.status !== 'pending' && j.status !== 'running') continue;
     const { course, lesson } = courseContext(j);
     if (!course || !lesson) continue;
     if (fs.existsSync(path.join(NOTES_DIR, course, `${lesson}.trans.json`))) continue;
-    try {
-      const ids = await resolveLessonIds(course, lesson);
-      if (!ids) continue;
-      const r = createReplayJob(ids);
-      if (!r.skipped) {
-        queued += 1;
-        j.log.push('讲稿转写已提前排队（批量并行：与前面课次的笔记生成同时跑）');
-        emit(j);
-      }
-    } catch { /* 单节失败不影响批量 */ }
+    if (!byCourse.has(course)) byCourse.set(course, new Map());
+    byCourse.get(course).set(lesson, j);
+  }
+  if (!byCourse.size) return;
+  const st = await checkLogin().catch(() => null);
+  if (st && st.loggedIn === false) return;
+  let queued = 0;
+  let checked = 0;
+  for (const [course, lessonMap] of byCourse) {
+    if (checked >= 12) break;   // 一次最多预排 12 节，后面的笔记任务各自会再扫
+    let ids = null;
+    try { ids = await resolveLessonIdsMany(course, [...lessonMap.keys()]); } catch { ids = null; }
+    if (!ids) continue;
+    for (const [lesson, sibling] of lessonMap) {
+      if (checked >= 12) break;
+      const id = ids.get(lesson);
+      if (!id) continue;
+      checked += 1;
+      try {
+        const r = createReplayJob(id);   // 已在队列里的会 reuse（reused=true），不重复排队
+        if (!r.skipped && !r.reused) {
+          queued += 1;
+          sibling.log.push('讲稿转写已提前排队（批量并行：与前面课次的笔记生成同时跑）');
+          emit(sibling);
+        }
+      } catch { /* 单节失败不影响批量 */ }
+    }
   }
   if (queued) currentJob.log.push(`已为 ${queued} 个待生成笔记的课次提前排队转写（与笔记生成并行）`);
 }
@@ -1215,7 +1230,11 @@ async function ensureTranscript(job) {
   if (loadConfig().automation?.transcribeBeforeNote === false) return;
   const { course, lesson } = courseContext(job);
   if (!course || !lesson) return;
-  if (fs.existsSync(path.join(NOTES_DIR, course, `${lesson}.trans.json`))) return;
+  if (fs.existsSync(path.join(NOTES_DIR, course, `${lesson}.trans.json`))) {
+    // 本节已有讲稿：顺手替同批还没开跑的课次预排队转写（非阻塞；都已有讲稿时只是一次本地检查）
+    void prequeueBatchTranscriptions(job).catch(() => {});
+    return;
+  }
   try {
     // 抓音轨要用登录态的播放器页；未登录时直接跳过，别抛「Execution context was destroyed」这种天书
     const st = await checkLogin().catch(() => null);

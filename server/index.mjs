@@ -14,7 +14,7 @@ import {
   DOWNLOAD_DIR, DATA_DIR, NOTES_DIR, PUBLIC_DIR, ROOT_DIR,
   ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf, sanitizeName,
 } from './paths.mjs';
-import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms, resolveLessonIds } from './wqxt.mjs';
+import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms, resolveLessonIds, resolveLessonIdsMany } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
 import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
@@ -664,20 +664,29 @@ async function runLessonPipeline(rel, needMd) {
  */
 async function prequeuePipelineTranscriptions(items) {
   if (!llmReady()) return 0;
-  const st = await checkLogin().catch(() => null);
-  if (st && st.loggedIn === false) return 0;
-  let queued = 0;
+  // 先挑缺讲稿的（纯本地检查），再登录/解析 id——都没有缺的就不用碰网络
+  const byCourse = new Map();   // course -> Set(lesson)
   for (const item of items) {
     const parts = String(item.rel || '').split('/').filter(Boolean);
     const [course, lesson] = [parts[0], parts[1]];
     if (!course || !lesson) continue;
     if (fs.existsSync(path.join(NOTES_DIR, course, `${lesson}.trans.json`))) continue;
-    try {
-      const ids = await resolveLessonIds(course, lesson).catch(() => null);
-      if (!ids) continue;
-      const r = createReplayJob(ids);
-      if (!r.skipped) queued += 1;
-    } catch { /* 单节失败不影响批量 */ }
+    if (!byCourse.has(course)) byCourse.set(course, new Set());
+    byCourse.get(course).add(lesson);
+  }
+  if (!byCourse.size) return 0;
+  const st = await checkLogin().catch(() => null);
+  if (st && st.loggedIn === false) return 0;
+  let queued = 0;
+  for (const [course, lessons] of byCourse) {
+    const ids = await resolveLessonIdsMany(course, [...lessons]).catch(() => null);
+    if (!ids) continue;
+    for (const [, id] of ids) {
+      try {
+        const r = createReplayJob(id);
+        if (!r.skipped && !r.reused) queued += 1;
+      } catch { /* 单节失败不影响批量 */ }
+    }
   }
   if (queued) console.log(`[pipeline] 已提前排队 ${queued} 节课的讲稿转写（与笔记生成并行推进）`);
   return queued;

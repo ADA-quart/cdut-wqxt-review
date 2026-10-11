@@ -356,3 +356,23 @@ export async function resolveLessonIds(courseTitle, lessonTitle) {
   // 字段名对齐 createReplayJob 的入参（subTitle 不能少，否则音轨会落到「未命名」目录）
   return { courseId: course.courseId, subId: sub.subId, courseTitle: course.title, subTitle: sub.title };
 }
+
+/**
+ * 批量解析同一门课多个课次的 id：子课列表只拉一次（resolveLessonIds 每节都会请求一次，
+ * 批量预排队转写时会浪费 N-1 次）。课次标题 → ids；无回放的课次不在结果里。
+ */
+export async function resolveLessonIdsMany(courseTitle, lessonTitles) {
+  const out = new Map();
+  const map = await courseByTitle();
+  const course = map.get(String(courseTitle));
+  if (!course || course.delisted) return out;
+  const subs = await listCourseSubs(course.courseId);
+  for (const title of lessonTitles) {
+    const t = String(title);
+    const sub = subs.find((s) => s.title === t);
+    if (sub?.hasPlayback) {
+      out.set(t, { courseId: course.courseId, subId: sub.subId, courseTitle: course.title, subTitle: sub.title });
+    }
+  }
+  return out;
+}
