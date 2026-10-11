@@ -1623,6 +1623,9 @@ ${front}
  *  ① 覆盖检查（本地、不花 token）：哪些页有内容但一条笔记都没引用；
  *  ② 忠实度核对（LLM）：把笔记条目按页和课件原文逐条比对，判定
  *     ok / partial / unsupported / figure（依赖图片，需人工看图）。
+ *     材料原则（2026-10-12 修订）：课件原文 + 该页与相邻页的讲稿；
+ *     纯图/OCR 乱码页把截图一起递给能读图的档位核对，没有图可递时最多标「需看图」，
+ *     不判「不支持」，也不按空材料自动改笔记。
  * 结果写 <课次>.audit.json（复习页读它画标记）+ <课次>.audit.md（人读报告）。
  */
 /**
@@ -1738,6 +1741,14 @@ async function runAudit(job) {
 
   // ② 忠实度核对：笔记里带页码角标的条目，按「首引用页」分组
   const pageMap = new Map(pages.map((p) => [Number(p.n), stripForSummary(p.body)]));
+  // 纯图页 / OCR 乱码页：文本材料天然对不上（实测某页 OCR 全是「±.1 1 ÷」，
+  // 笔记却从截图里读对了公式和参数——审计只看文本就会把对的判成「不支持」）。
+  // 有能读图的档位时，把这类页的截图一并递给审计模型；没有就只标「需看图」，不判「不支持」。
+  const pageImg = new Map(pages.map((p) => [Number(p.n), path.join(DATA_DIR, ctx.course, ctx.lesson, p.name)]));
+  const textBlind = (n) => String(pageMap.get(n) || '').trim().length < 60;
+  let visionKey = '';
+  try { visionKey = (await pickVisionProfileQuiet(job)) || ''; } catch { visionKey = ''; }
+  if (visionKey) job.log.push('审计可看图：读不出文字、又没有讲解的页会连截图一起核对');
   const items = [];
   let noRef = 0;
   const noteLinesArr = noteText.split('\n');
@@ -1775,12 +1786,31 @@ async function runAudit(job) {
     const src = cited
       .map((n) => `【第 ${n} 页课件原文】\n${String(pageMap.get(n) || '').slice(0, 1800)}`)
       .join('\n\n');
-    const talk = cited
-      .filter((n) => narration.get(n))
-      .map((n) => `【第 ${n} 页老师讲解·语音转写】\n${String(narration.get(n)).slice(0, 1100)}`)
+    // 讲稿按页切时间窗：老师常跨页讲同一个点，支持句落在「隔壁页」的窗里很常见，
+    // 只查引用页会把对的判成「不支持」（实测「重叠以后可以判断成干层和气层」被漏掉）。
+    // 所以把引用页前后各一页的讲解也带上（标注「相邻页」），总量截断。
+    const talkPages = new Map();
+    for (const n of cited) if (narration.get(n)) talkPages.set(n, '');
+    for (const n of cited) for (const m of [n - 1, n + 1]) if (narration.get(m) && !talkPages.has(m)) talkPages.set(m, '相邻页');
+    const talk = [...talkPages.entries()].slice(0, 4)
+      .map(([n, tag]) => `【第 ${n} 页老师讲解·语音转写${tag ? `（${tag}）` : ''}】\n${String(narration.get(n)).slice(0, 1000)}`)
       .join('\n\n');
+    // 「读不出文字 + 没有讲解」的页：文本上无从核对，附上截图（最多 2 张，只有这类页花图片 token）
+    const blindImgs = cited
+      .filter((n) => visionKey && textBlind(n) && !narration.get(n) && fs.existsSync(pageImg.get(n) || ''))
+      .slice(0, 2)
+      .map((n) => ({ n, img: pageImg.get(n) }));
     const list = g.items.map((it, k) => `${k + 1}. ${it.text}`).join('\n');
     try {
+      const userParts = [{
+        type: 'text',
+        text: `${src}\n` + (talk ? `\n${talk}\n` : '')
+          + `\n【待核对的笔记条目】\n${list}`,
+      }];
+      for (const b of blindImgs) {
+        userParts.push({ type: 'text', text: `【第 ${b.n} 页课件截图】（该页 OCR 文本几乎不可辨认，以这张截图为准）` });
+        userParts.push({ type: 'image_url', image_url: { url: toImageDataUrl(b.img) } });
+      }
       const { content, usage } = await chatRetry(
         [
           {
@@ -1788,6 +1818,8 @@ async function runAudit(job) {
             content: `你是严谨的课件笔记审计员。逐条核对「笔记条目」是否被材料支持。材料有两部分：
 【课件原文】= 课件 OCR 文本；【老师讲解】= 课堂录音的语音转写（可能缺字、同音错字、口语）。
 **只要其中之一支持就算被支持**；两者都不支持才是不支持。讲解里的错字不算「不符」，按语义判断即可。
+标注「（相邻页）」的讲解只是参考——老师跨页讲同一个点很常见，相邻页讲解支持该条时按支持判定。
+如果材料里附了【第 N 页课件截图】：该页以截图为准（可用它核对图表、公式、纯图页）；依据截图能确认的按 ok 或 partial 判，截图也看不清的判 figure。
 判定等级（只能四选一）：
 - ok：课件原文或老师讲解完全支持（允许同义改写；数字、公式、术语一致）
 - partial：部分支持——有材料里没有的细节、过度推测、或丢了关键限定条件
@@ -1797,22 +1829,26 @@ async function runAudit(job) {
 对 partial / unsupported 的条目：如果与材料不符的部分能依据材料改对（错字、公式、数字、术语、丢掉的限定条件），在 fix 里给出「修正后的完整条目正文」——保留条目里属于 AI 自己的补充内容，只把与材料不符/矛盾的部分改对；**依据只来自老师讲解、且不是明显错字的，不要改动它**；不要新增知识、不要删掉补充、不要带页码角标。无法确定或整条主要是 AI 补充时省略 fix。
 只输出 JSON：{"items":[{"i":1,"verdict":"ok","reason":"...","fix":"..."}]}，i 是条目序号，fix 可选。`,
           },
-          {
-            role: 'user',
-            content: `${src}\n` + (talk ? `\n${talk}\n` : '') + `\n【待核对的笔记条目】\n${list}`,
-          },
+          { role: 'user', content: userParts },
         ],
-        { profile: 'text', temperature: 0.1, maxTokens: 1500 },
+        { profile: blindImgs.length ? visionKey : 'text', temperature: 0.1, maxTokens: 1500 },
       );
       addUsage(job, usage);
       let ilist2;
       try { ilist2 = parseJsonLoose(content).items || []; } catch { ilist2 = salvageVerdicts(content); }
       const by = new Map(ilist2.map((x) => [Number(x.i), x]));
+      // 全部引用页都是「文本盲」且没讲解、又没递图（没有可读图档位）：对错根本没法判——
+      // 标「需看图」而不是「不支持」，也禁止按空材料去自动改笔记
+      const blindOnly = cited.every(textBlind) && !cited.some((n) => narration.get(n));
       g.items.forEach((it, k) => {
         const r = by.get(k + 1) || {};
         it.verdict = ['ok', 'partial', 'unsupported', 'figure'].includes(r.verdict) ? r.verdict : 'figure';
         it.reason = String(r.reason || '').slice(0, 60);
         it.fix = typeof r.fix === 'string' ? r.fix.trim().slice(0, 600) : '';
+        if (blindOnly && !blindImgs.length) {
+          it.fix = '';
+          if (it.verdict === 'unsupported') { it.verdict = 'figure'; it.reason = 'OCR 无法辨认的图片页，需看图核实'; }
+        }
       });
     } catch (e) {
       job.log.push(`第 ${g.page} 页核对失败：` + String(e?.message || e).slice(0, 60));
