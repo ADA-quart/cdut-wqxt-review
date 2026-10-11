@@ -1745,7 +1745,13 @@ async function runAudit(job) {
   // 笔记却从截图里读对了公式和参数——审计只看文本就会把对的判成「不支持」）。
   // 有能读图的档位时，把这类页的截图一并递给审计模型；没有就只标「需看图」，不判「不支持」。
   const pageImg = new Map(pages.map((p) => [Number(p.n), path.join(DATA_DIR, ctx.course, ctx.lesson, p.name)]));
-  const textBlind = (n) => String(pageMap.get(n) || '').trim().length < 60;
+  // 「文本盲」= 字太少，或几乎没有中文（实测某页 75 个字符全是 `±.1 1 \div…` 乱码，
+  // 只按长度判断会漏掉，必须再看中文字数）
+  const textBlind = (n) => {
+    const t = String(pageMap.get(n) || '').trim();
+    const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+    return t.length < 60 || cjk < 10;
+  };
   let visionKey = '';
   try { visionKey = (await pickVisionProfileQuiet(job)) || ''; } catch { visionKey = ''; }
   if (visionKey) job.log.push('审计可看图：读不出文字、又没有讲解的页会连截图一起核对');
@@ -1756,6 +1762,7 @@ async function runAudit(job) {
     const line = noteLinesArr[ln];
     const t = line.trim();
     if (!t.startsWith('- ')) continue;
+    if (/^- 第\s*\d+\s*页（点角标可回课件核对）/.test(t)) continue;   // 关键图的图注，不是知识条目，别拿去核对
     const refs = [...t.matchAll(/#page=(\d+)/g)].map((m) => Number(m[1]));
     if (!refs.length) { noRef += 1; continue; }
     items.push({ text: t.slice(2).replace(/\[\[[^\]]*\]\]/g, '').trim(), pages: refs, lineNo: ln });
@@ -2062,7 +2069,11 @@ async function runAudit(job) {
   // 修正后的笔记落盘（先备份原文件；AI 补充内容原样保留）
   if (fixedCount) {
     try {
-      fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md'));
+      // 备份策略：`.note-backup.md` 只在没有时写（保住「生成后的初版」——反复审计不再把它覆盖掉，
+      // 试点时踩到过）；每次修正前的当前状态另存 `.note-backup.audit.md`，可撤销最近一轮
+      const bak = mdPath.replace(/\.md$/i, '.note-backup.md');
+      if (!fs.existsSync(bak)) fs.copyFileSync(notePath, bak);
+      fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.audit.md'));
       fs.writeFileSync(notePath, noteText2, 'utf8');
     } catch (e) {
       job.log.push('修正落盘失败：' + String(e?.message || e).slice(0, 60));
@@ -2100,12 +2111,16 @@ async function runAudit(job) {
     // 结构化清单：下次审计直接读取，不再重复调用 LLM 提取
     let knownMtime = 0;
     try { knownMtime = fs.statSync(mdPath).mtimeMs; } catch { /* 忽略 */ }
+    // 缓存判据记录「提取时已覆盖的材料时间」。讲稿常常晚于原文 md 写成，
+    // 只存 md 时间会让 transMtime 校验永远不过、每次审计都重提（实测白烧一趟）。
+    // 注意：这里用「提取发生在讲稿之后」来判定其有效性，所以写 max(两者)。
+    const sourceMtime = Math.max(knownMtime, transMtime);
     try {
       fs.writeFileSync(pointsJsonPath, JSON.stringify({
         v: pointsVersion,
         generatedAt: Date.now(),
         lesson: lessonName,
-        sourceMtimeMs: knownMtime,
+        sourceMtimeMs: sourceMtime,
         items: knowledge.items.map((p) => ({ point: p.point, page: p.page })),
       }, null, 2), 'utf8');
     } catch { /* 写不进去不影响审计结果 */ }
