@@ -1181,6 +1181,36 @@ ${front}
  * 课次按钮、课程行「批量生成笔记」、一键笔记；放这儿三条路行为一致。
  * 失败只记日志，不阻断笔记；`automation.transcribeBeforeNote` 可整体关掉。
  */
+/**
+ * 批量加速：当前笔记任务在等自己的讲稿转写时，顺带把队列里其他「还没开跑」的笔记任务、
+ * 且缺讲稿的课次也排进转写队列（内部按 subId 去重，重跑无害）。
+ * 转写走 GPU、笔记走远程 LLM，两条跑道互不抢资源——把等待时间用起来。
+ */
+async function prequeueBatchTranscriptions(currentJob) {
+  const pending = [...llmJobs.values()].filter((j) => j !== currentJob
+    && j.op === 'note' && (j.status === 'pending' || j.status === 'running'));
+  if (!pending.length) return;
+  const st = await checkLogin().catch(() => null);
+  if (st && st.loggedIn === false) return;
+  let queued = 0;
+  for (const j of pending.slice(0, 12)) {
+    const { course, lesson } = courseContext(j);
+    if (!course || !lesson) continue;
+    if (fs.existsSync(path.join(NOTES_DIR, course, `${lesson}.trans.json`))) continue;
+    try {
+      const ids = await resolveLessonIds(course, lesson);
+      if (!ids) continue;
+      const r = createReplayJob(ids);
+      if (!r.skipped) {
+        queued += 1;
+        j.log.push('讲稿转写已提前排队（批量并行：与前面课次的笔记生成同时跑）');
+        emit(j);
+      }
+    } catch { /* 单节失败不影响批量 */ }
+  }
+  if (queued) currentJob.log.push(`已为 ${queued} 个待生成笔记的课次提前排队转写（与笔记生成并行）`);
+}
+
 async function ensureTranscript(job) {
   if (loadConfig().automation?.transcribeBeforeNote === false) return;
   const { course, lesson } = courseContext(job);
@@ -1203,6 +1233,8 @@ async function ensureTranscript(job) {
     job.log.push(`缺少讲稿，先转写（课次有回放）…`);
     job.progress.current = '转写讲稿中…';
     emit(job);
+    // 同一批里其他待生成笔记的课次：转写也先排上（尽力而为，错了不影响本节）
+    try { await prequeueBatchTranscriptions(job); } catch { /* 忽略 */ }
     const finished = await new Promise((resolve) => {
       const on = (j) => {
         if (j.id !== r.id) return;

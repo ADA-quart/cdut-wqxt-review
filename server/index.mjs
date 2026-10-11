@@ -14,7 +14,7 @@ import {
   DOWNLOAD_DIR, DATA_DIR, NOTES_DIR, PUBLIC_DIR, ROOT_DIR,
   ensureDir, ensureInside, getPaths, applyPathSettings, mdPathOf, sanitizeName,
 } from './paths.mjs';
-import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms } from './wqxt.mjs';
+import { checkLogin, login, logout, listMyCourses, listCourseSubs, listSubPpt, listTerms, resolveLessonIds } from './wqxt.mjs';
 import { createJob, listJobs, getJob, cancelJob, events } from './downloader.mjs';
 import {
   createMdJob, listMdJobs, getMdJob, cancelMdJob, mdToolStatus,
@@ -656,21 +656,65 @@ async function runLessonPipeline(rel, needMd) {
   if (!a || a.status !== 'done') throw new Error(`复核 ${a ? a.status : '中断'}${a?.error ? '：' + a.error : ''}`);
 }
 
+/**
+ * 一键笔记的转写预排队：缺讲稿的课次全部先排进转写队列（GPU 串行、后台跑）。
+ * 之后逐课次跑 LLM 步骤（校订/笔记/复核）时，笔记在等自己那节讲稿的空档里，
+ * 后面几节的转写已经在同时推进——GPU 与远程 LLM 两条跑道并行。
+ * 注意：必须在转 MD 全部完成之后调用（pix2text 与 whisper 都吃显存，不能互相抢）。
+ */
+async function prequeuePipelineTranscriptions(items) {
+  if (!llmReady()) return 0;
+  const st = await checkLogin().catch(() => null);
+  if (st && st.loggedIn === false) return 0;
+  let queued = 0;
+  for (const item of items) {
+    const parts = String(item.rel || '').split('/').filter(Boolean);
+    const [course, lesson] = [parts[0], parts[1]];
+    if (!course || !lesson) continue;
+    if (fs.existsSync(path.join(NOTES_DIR, course, `${lesson}.trans.json`))) continue;
+    try {
+      const ids = await resolveLessonIds(course, lesson).catch(() => null);
+      if (!ids) continue;
+      const r = createReplayJob(ids);
+      if (!r.skipped) queued += 1;
+    } catch { /* 单节失败不影响批量 */ }
+  }
+  if (queued) console.log(`[pipeline] 已提前排队 ${queued} 节课的讲稿转写（与笔记生成并行推进）`);
+  return queued;
+}
+
 async function pumpNotePipeline() {
   if (notePipelineRunning) return;
   notePipelineRunning = true;
   try {
-    while (notePipelineQueue.length) {
-      const item = notePipelineQueue.shift();
+    const items = notePipelineQueue.splice(0);
+    // ① 先把所有要转 MD 的课次做完（GPU 串行；与转写错开，避免显存互相抢）
+    for (const item of items) {
+      if (!item.needMd) continue;
       try {
-        console.log(`[pipeline] 处理：${item.rel}${item.needMd ? '（含转 MD）' : ''}`);
-        await runLessonPipeline(item.rel, item.needMd);
+        const md = createMdJob({ dir: item.rel });
+        const r = await waitJobDone(mdEvents, getMdJob, md.id);
+        if (!r || r.status !== 'done') throw new Error(`转 MD ${r ? r.status : '中断'}${r?.error ? '：' + r.error : ''}`);
+      } catch (e) {
+        item.failed = String(e?.message || e);
+        console.warn(`[pipeline] 转 MD ${item.rel} 失败：`, item.failed);
+      }
+    }
+    // ② 缺讲稿的转写全部先排队（后台跑；随后的笔记生成与它并行）
+    await prequeuePipelineTranscriptions(items.filter((it) => !it.failed)).catch(() => {});
+    // ③ 逐课次：校订 → 生成笔记 → 复核（笔记内部会等自己那节的讲稿，通常已转好或快转好）
+    for (const item of items) {
+      if (item.failed) continue;
+      try {
+        console.log(`[pipeline] 处理：${item.rel}`);
+        await runLessonPipeline(item.rel, false);
       } catch (e) {
         console.warn(`[pipeline] ${item.rel} 失败：`, e.message);
       }
     }
   } finally {
     notePipelineRunning = false;
+    if (notePipelineQueue.length) pumpNotePipeline();   // 处理期间又有新任务排进来
   }
 }
 

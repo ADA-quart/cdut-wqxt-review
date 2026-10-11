@@ -26,9 +26,15 @@ export const replayEvents = new EventEmitter();
 
 const jobs = new Map();
 let nextJobId = 1;
-/** 抓流是重活（每节 1GB 中转 + 浏览器标签），一律串行跑 */
-const queue = [];
-let running = null;
+/**
+ * 两级流水线：抓流（浏览器 + 网络，串行）→ 转写（faster-whisper，GPU，串行）。
+ * 拆开的原因：抓下一节（网络/磁盘）可以与上一节的语音识别（GPU）并行，两条跑道互不抢资源；
+ * 放在同一条队列里做的话，转写期间整条流水线都在空等。
+ */
+const captureQueue = [];
+const transcribeQueue = [];
+let captureRunning = false;
+let transcribeRunning = false;
 
 let ffmpegCache = null;
 
@@ -100,15 +106,22 @@ export function audioStats() {
   return { count, bytes, mb: Math.round(bytes / 1048576), dir: base };
 }
 
-function pump() {
-  if (running || queue.length === 0) return;
-  running = queue.shift();
-  runJob(running)
-    .catch(() => { /* runJob 内部已记录错误 */ })
-    .finally(() => {
-      running = null;
-      pump();
-    });
+function pumpCapture() {
+  if (captureRunning || captureQueue.length === 0) return;
+  captureRunning = true;
+  const job = captureQueue.shift();
+  runCaptureStage(job)
+    .catch(() => { /* 内部已记录错误 */ })
+    .finally(() => { captureRunning = false; pumpCapture(); });
+}
+
+function pumpTranscribe() {
+  if (transcribeRunning || transcribeQueue.length === 0) return;
+  transcribeRunning = true;
+  const item = transcribeQueue.shift();
+  runTranscribeStage(item)
+    .catch(() => { /* 内部已记录错误 */ })
+    .finally(() => { transcribeRunning = false; pumpTranscribe(); });
 }
 
 /** 抓流等待上限：播放页打开后多久没等到媒体请求就算失败 */
@@ -270,8 +283,8 @@ export function createReplayJob(opts) {
   };
   jobs.set(job.id, job);
   emit(job);
-  queue.push(job);
-  pump();
+  captureQueue.push(job);
+  pumpCapture();
   return publicJob(job);
 }
 
@@ -570,11 +583,14 @@ function transcribe(job, audioAbs, transAbs) {
   });
 }
 
-async function runJob(job) {
+/**
+ * 抓流阶段（占用抓流槽）：音轨已在就跳过；随后把转写移交给转写队列，立刻释放抓流槽——
+ * 下一节课的抓流因此能与这节课的识别并行。
+ */
+async function runCaptureStage(job) {
   job.status = 'running';
   job.startedAt = Date.now();
   const audioAbs = path.join(DATA_DIR, job.audioRel);
-  const transAbs = path.join(NOTES_DIR, job.transRel);
   try {
     // 音轨已在就直接转写：换模型重跑、转写失败重试都不必再抓一遍一 GB 的流
     if (fs.existsSync(audioAbs) && fs.statSync(audioAbs).size > 1024 * 1024) {
@@ -613,15 +629,6 @@ async function runJob(job) {
       emit(job);
       return;
     }
-
-    job.stage = 'transcribe';
-    job.progress = { done: 0, total: 0, unit: 'seconds' };
-    emit(job);
-    await transcribe(job, audioAbs, transAbs);
-
-    job.status = 'done';
-    job.finishedAt = Date.now();
-    emit(job);
   } catch (e) {
     // 「无音轨」不是失败而是结论：写标记，之后 createReplayJob 直接跳过（勾「强制重新下载」可覆盖）
     if (e?.noAudio) {
@@ -636,6 +643,36 @@ async function runJob(job) {
         job.log.push(`已记录无音轨标记：${path.relative(DATA_DIR, mark).split(path.sep).join('/')}（勾「强制重新下载」可忽略重试）`);
       } catch { /* 标记写不进去也不影响本次报错 */ }
     }
+    job.status = job.canceled ? 'canceled' : 'error';
+    job.error = String(e?.message || e);
+    job.finishedAt = Date.now();
+    emit(job);
+    return;
+  }
+  // 移交给转写队列：抓流槽在这里就空出来，下一节可以同时开始抓流
+  job.stage = 'transcribe';
+  transcribeQueue.push({ job, audioAbs, transAbs: path.join(NOTES_DIR, job.transRel) });
+  pumpTranscribe();
+}
+
+/** 转写阶段（占用转写槽）：与后续课次的抓流并行；状态/错误都在这里落定 */
+async function runTranscribeStage(item) {
+  const { job, audioAbs, transAbs } = item;
+  try {
+    if (job.canceled) {
+      job.status = 'canceled';
+      job.finishedAt = Date.now();
+      emit(job);
+      return;
+    }
+    job.stage = 'transcribe';
+    job.progress = { done: 0, total: 0, unit: 'seconds' };
+    emit(job);
+    await transcribe(job, audioAbs, transAbs);
+    job.status = 'done';
+    job.finishedAt = Date.now();
+    emit(job);
+  } catch (e) {
     job.status = job.canceled ? 'canceled' : 'error';
     job.error = String(e?.message || e);
     job.finishedAt = Date.now();
