@@ -21,6 +21,7 @@ import { describeFetchError } from './net.mjs';
 import { findMath, findBrokenMath, mathError, applyMathFixes } from './mdmath.mjs';
 import { ensurePageTimes, narrationByPage, readTranscript } from './pages.mjs';
 import { checkLogin, pageTimesByTitle, resolveLessonIds } from './wqxt.mjs';
+import { mergeNoteDuplicates } from './notemerge.mjs';
 import { createReplayJob, getReplayJob, replayEvents } from './replay.mjs';
 
 export const events = new EventEmitter();
@@ -1147,7 +1148,10 @@ ${front}
   if (fs.existsSync(notePath)) {
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
-  fs.writeFileSync(notePath, head + body.out + '\n', 'utf8');
+  // 合并 PPT 分步动画造成的近似条目（同小节内、角标取并集），避免「应用包括…/应用之一…」这类重复
+  const mergeRes = mergeNoteDuplicates(body.out, lessonName);
+  if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
+  fs.writeFileSync(notePath, head + mergeRes.text + '\n', 'utf8');
 
   // 同步摘要块到原文顶部（与文本链路一致，便于复习页顶部显示重点）
   try {
@@ -1587,7 +1591,10 @@ ${front}
   if (fs.existsSync(notePath)) {
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
-  fs.writeFileSync(notePath, head + imgFix.out + '\n', 'utf8');
+  // 同视觉链路：落盘前合并 PPT 分步动画造成的近似条目
+  const mergeRes = mergeNoteDuplicates(imgFix.out, lessonName);
+  if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
+  fs.writeFileSync(notePath, head + mergeRes.text + '\n', 'utf8');
 
   // 把「本课脉络 + 课末必记」同步回原文 md 顶部（upsert llm-summary 块），两处重点保持一致
   try {
