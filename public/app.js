@@ -422,9 +422,13 @@ async function startReplayJob(course, sub, btn) {
         force,
       },
     });
-    toast(job?.skipped
-      ? `该课次已有讲稿：${job.transRel}`
-      : `已创建转写任务：${course.title} — ${sub.title}`, 'ok');
+    if (job?.skipped && job.reason === 'no-audio') {
+      toast('该课次回放没有音轨（学校只录了画面），已记录跳过；若学校更换了回放，勾「强制重新下载」再试', 'err');
+    } else {
+      toast(job?.skipped
+        ? `该课次已有讲稿：${job.transRel}`
+        : `已创建转写任务：${course.title} — ${sub.title}`, 'ok');
+    }
   } catch (e) {
     toast('创建失败：' + e.message, 'err');
   } finally {

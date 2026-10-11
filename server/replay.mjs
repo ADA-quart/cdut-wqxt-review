@@ -17,7 +17,7 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { ensureBrowser, WQ_BASE } from './browser.mjs';
 import { DATA_DIR, NOTES_DIR, ROOT_DIR, ensureDir, sanitizeName } from './paths.mjs';
 import { findPython } from './mdconvert.mjs';
@@ -115,6 +115,17 @@ function pump() {
 const CAPTURE_START_TIMEOUT_MS = 90000;
 /** 单次抓流上限（含网络卡死的情况），94 分钟课次约 1 GB，给足余量 */
 const CAPTURE_MAX_MS = 60 * 60 * 1000;
+
+/** 抓流中途做「有没有音轨」前缀探测的字节节点：前 4 MB 一般已含 moov，读不到再等到 32 MB */
+const PROBE_AT_BYTES = [4 * 1024 * 1024, 32 * 1024 * 1024];
+
+/**
+ * 实测（2026-10-11）：电法勘探 09-14 这节的回放流只有画面（学校录的教师机位没接麦克风），
+ * 老流程要抓完 741 MB 才在 ffmpeg 抽音轨时报「Output file does not contain any stream」。
+ * 这不是抓取失败，而是一个结论——报错文案要让用户看得懂，并说明怎么重试。
+ */
+const NO_AUDIO_MSG = '该课次回放没有音轨——学校上传的这路流只有画面，不是抓取出错。'
+  + '已记录，之后会直接跳过；若学校更换了回放，勾选「强制重新下载」可重试';
 
 const MODEL_DIR = path.join(ROOT_DIR, 'run', 'asr');
 
@@ -226,6 +237,11 @@ export function createReplayJob(opts) {
     return { skipped: true, reason: 'already-done', relDir, transRel, audioRel };
   }
 
+  // 已确认过「回放无音轨」的课次直接跳过（除非强制重试）：学校只录了画面，重试也是白抓
+  if (!opts.force && fs.existsSync(noAudioMarkPath(course, lesson))) {
+    return { skipped: true, reason: 'no-audio', relDir, transRel, audioRel };
+  }
+
   const job = {
     id: nextJobId++,
     status: 'pending',
@@ -263,6 +279,30 @@ export function createReplayJob(opts) {
 function playerUrl(courseId, subId) {
   const q = new URLSearchParams({ tenant_code: '21', id: String(courseId), sub_id: String(subId) });
   return `${WQ_BASE}/coursevideo?${q}`;
+}
+
+/** 「该课次回放无音轨」标记文件：audio/<课程>/<课次>.noaudio.json（和音轨同目录，便于一起管理） */
+function noAudioMarkPath(course, lesson) {
+  return path.join(DATA_DIR, 'audio', course, `${lesson}.noaudio.json`);
+}
+
+/**
+ * 用已抓到的流前缀判断有没有音轨（ffprobe 读 moov 里的轨道清单）。
+ * 返回 'audio' | 'no-audio' | 'unknown'。unknown（ffprobe 不可用、非 faststart 还没读到 moov 等）
+ * 一律不判定，按原流程继续抓，宁可慢也不误杀。
+ */
+function probePrefixAudio(file) {
+  try {
+    const r = spawnSync('ffprobe', [
+      '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', file,
+    ], { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+    if (r.error || r.status !== 0) return 'unknown';
+    const types = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (types.length === 0) return 'unknown';
+    return types.includes('audio') ? 'audio' : 'no-audio';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**
@@ -321,19 +361,45 @@ async function captureVideo(job, tmpPath) {
       const { stream } = await cdp.send('Fetch.takeResponseBodyAsStream', { requestId: ev.requestId });
       if (totalBytes) job.progress = { done: 0, total: totalBytes, unit: 'bytes' };
       let bytes = 0;
+      let probeIdx = 0;
+      let probeDone = false;
       for (;;) {
         if (job.canceled) throw new Error('已取消');
         const r = await cdp.send('IO.read', { handle: stream, size: 2 * 1024 * 1024 });
         if (r.data) {
           const buf = Buffer.from(r.data, r.base64Encoded ? 'base64' : 'utf8');
-          // 背压：磁盘写不动就等 drain，避免把内存撑爆
-          if (!out.write(buf)) {
+          const crossing = !probeDone && probeIdx < PROBE_AT_BYTES.length
+            && bytes + buf.length >= PROBE_AT_BYTES[probeIdx];
+          if (crossing) {
+            // 这一块会跨过探测点：等它真正落盘再让 ffprobe 读，别读到缺尾巴的前缀
+            await new Promise((res, rej) => out.write(buf, (err) => (err ? rej(err) : res())));
+          } else if (!out.write(buf)) {
+            // 背压：磁盘写不动就等 drain，避免把内存撑爆
             await new Promise((res) => out.once('drain', res));
           }
           bytes += buf.length;
           job.bytes = bytes;
           job.progress = { done: bytes, total: totalBytes || job.progress.total, unit: 'bytes' };
           if (bytes % (16 * 1024 * 1024) < buf.length) emit(job);
+
+          // 前缀探测：读到 moov 就能知道流里有没有音轨。有的课次学校只录了画面，
+          // 老流程抓完近 1 GB 才报错；这里秒级定性，没音轨立刻中止。
+          while (!probeDone && probeIdx < PROBE_AT_BYTES.length && bytes >= PROBE_AT_BYTES[probeIdx]) {
+            probeIdx += 1;
+            const verdict = probePrefixAudio(tmpPath);
+            if (verdict === 'audio') {
+              probeDone = true;
+              job.log.push('前缀探测：流里有音轨，继续抓取…');
+              emit(job);
+            } else if (verdict === 'no-audio') {
+              job.log.push(`前缀探测（已读 ${(bytes / 1048576).toFixed(1)} MB）：没有音轨，提前中止，不再抓完整个视频`);
+              emit(job);
+              const err = new Error(NO_AUDIO_MSG);
+              err.noAudio = true;
+              throw err;
+            }
+            // unknown：moov 还没读到 / ffprobe 不可用 —— 到下一个探测点再试，或按原流程继续
+          }
         }
         if (r.eof) break;
       }
@@ -385,7 +451,27 @@ function extractAudio(job, videoPath, audioAbs) {
     ffmpeg.on('exit', (code) => {
       job.ffmpeg = null;
       if (job.canceled) return reject(new Error('已取消'));
-      if (code !== 0) return reject(new Error(`抽音轨失败（ffmpeg ${code}）：${err.trim().split('\n').slice(-1)[0]?.slice(0, 200) || ''}`));
+      if (code !== 0) {
+        // 兜底（前缀探测没判出来时）：ffmpeg 说输出里没有任何流 = 输入里根本没有音轨
+        if (/does not contain any stream/i.test(err)) {
+          const e = new Error(NO_AUDIO_MSG);
+          e.noAudio = true;
+          return reject(e);
+        }
+        // 只留最后一行往往看不出问题（实测碰到过一句「Error opening output files: Invalid argument」），
+        // 所以把 ffmpeg 全部输出 + 输入输出的实际状态一起带上
+        let size = '不存在';
+        try { size = `${(fs.statSync(videoPath).size / 1048576).toFixed(1)} MB`; } catch { /* 无 */ }
+        let outDir = '未知';
+        try { outDir = fs.existsSync(path.dirname(audioAbs)) ? '在' : '不存在'; } catch { /* 无 */ }
+        const tail = err.trim().split('\n').slice(-6).join(' / ').slice(0, 500);
+        return reject(new Error(
+          `抽音轨失败（ffmpeg ${code}）：${tail || '（ffmpeg 没有输出）'}`
+          + `｜视频中转文件：${size}（${videoPath}）`
+          + `｜输出目录：${outDir}（${path.dirname(audioAbs)}）`
+          + `｜输出文件：${path.basename(audioAbs)}`,
+        ));
+      }
       if (!fs.existsSync(audioAbs) || fs.statSync(audioAbs).size < 1024) return reject(new Error('抽音轨失败：音频文件为空'));
       resolve();
     });
@@ -502,17 +588,19 @@ async function runJob(job) {
       job.log.push('打开播放页，等待播放器取流…');
       emit(job);
       const tmpVideo = path.join(DATA_DIR, 'tmp', `${job.courseTitle}-${job.subTitle}.mp4`);
-      const bytes = await captureVideo(job, tmpVideo);
-      job.log.push(`抓到 ${(bytes / 1048576).toFixed(0)} MB 视频流，开始抽音轨…`);
-      emit(job);
-
-      job.stage = 'extract';
-      emit(job);
       try {
+        const bytes = await captureVideo(job, tmpVideo);
+        job.log.push(`抓到 ${(bytes / 1048576).toFixed(0)} MB 视频流，开始抽音轨…`);
+        emit(job);
+
+        job.stage = 'extract';
+        emit(job);
         await extractAudio(job, tmpVideo, audioAbs);
         job.log.push(`音轨已存：${(fs.statSync(audioAbs).size / 1048576).toFixed(1)} MB`);
+        // 之前若记过「无音轨」，这次抓到了就作废标记（学校换回放了）
+        fs.rm(noAudioMarkPath(job.courseTitle, job.subTitle), { force: true }, () => {});
       } finally {
-        fs.rm(tmpVideo, { force: true }, () => {});   // 视频只是中转，抽完即删
+        fs.rm(tmpVideo, { force: true }, () => {});   // 视频只是中转，抽完/失败/提前中止都要删
       }
       emit(job);
     }
@@ -535,6 +623,19 @@ async function runJob(job) {
     job.finishedAt = Date.now();
     emit(job);
   } catch (e) {
+    // 「无音轨」不是失败而是结论：写标记，之后 createReplayJob 直接跳过（勾「强制重新下载」可覆盖）
+    if (e?.noAudio) {
+      try {
+        const mark = noAudioMarkPath(job.courseTitle, job.subTitle);
+        ensureDir(path.dirname(mark));
+        fs.writeFileSync(mark, JSON.stringify({
+          reason: 'no-audio',
+          note: NO_AUDIO_MSG,
+          at: new Date().toISOString(),
+        }, null, 2));
+        job.log.push(`已记录无音轨标记：${path.relative(DATA_DIR, mark).split(path.sep).join('/')}（勾「强制重新下载」可忽略重试）`);
+      } catch { /* 标记写不进去也不影响本次报错 */ }
+    }
     job.status = job.canceled ? 'canceled' : 'error';
     job.error = String(e?.message || e);
     job.finishedAt = Date.now();

@@ -209,6 +209,7 @@ async function runJob(job) {
   // （replay 内部串行，不会几十节课同时抓 1GB 流；转写留到生成笔记或手动触发）
   if (job.withAudio && !job.canceled) {
     let queued = 0;
+    let noAudio = 0;
     for (const task of job.tasks) {
       if (task.status !== 'done' || !task.subId || task.subId === '-') continue;
       try {
@@ -219,13 +220,20 @@ async function runJob(job) {
           subTitle: path.basename(task.relDir),
           audioOnly: true,
         });
-        if (!r.skipped) queued += 1;
+        if (r.skipped) {
+          if (r.reason === 'no-audio') noAudio += 1;
+        } else queued += 1;
       } catch { /* 单节课失败不影响下载任务 */ }
     }
     if (queued) {
       job.audioQueued = queued;
       job.log = job.log || [];
       job.log.push(`已排队抓 ${queued} 节课的音轨（转写可稍后触发）`);
+      emit(job);
+    }
+    if (noAudio) {
+      job.log = job.log || [];
+      job.log.push(`${noAudio} 节课次回放无音轨（学校只录了画面），已跳过抓取`);
       emit(job);
     }
   }

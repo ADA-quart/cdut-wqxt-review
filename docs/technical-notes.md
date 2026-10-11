@@ -273,6 +273,12 @@ Python：`ppt2md.py`（Pix2Text 转换）、`dedup.py`（帧去重）、`transcr
 - **踩过的坑**：边收边把字节喂 `ffmpeg -i pipe:0`，到约 700MB 时 ffmpeg 提前退出，
   stdin 的 EPIPE 以未捕获 `error` 事件把 Node 进程打挂。现改为先落临时 mp4（可 seek），
   ffmpeg 从文件抽音轨（16kHz 单声道 AAC），抽完删视频；ffmpeg/stdin 的 error 一律接住。
+- **个别课次回放无音轨**：2026-10-11 实测电法勘探 2026-09-14第3-4节，741 MB 的流只有一条 h264 视频轨
+  （同课其它课次是 student/default 机位，都有音轨）。老流程抓完整段才在 ffmpeg 报
+  `Output file does not contain any stream` + `Error opening output files: Invalid argument`。
+  现在 `captureVideo` 读到 4 MB（不够再到 32 MB）就用 ffprobe 读 moov 的轨道清单：没有音频轨 → 立即中止并写
+  `audio/<课程>/<课次>.noaudio.json` 标记，之后的任务直接按 `reason: 'no-audio'` 跳过；勾「强制重新下载」可覆盖标记重试，
+  抓到音轨后标记自动作废。ffprobe 不可用或前缀里还没有 moov（非 faststart）时按原流程继续抓，不误杀。
 - **平台自带「语音识别」不可依赖**：`/courseapi/v3/web-socket/search-trans-result?course_id&sub_id`
   能直接拿到整节课的同传文本（`BeginSec`/`EndSec`/`Text`/`TransText`），但 2026-10-09 抽样
   144 个课次只有 107 个有（74%）——当学期新录课次仅 4/28（14%），上学期 103/116（89%）。

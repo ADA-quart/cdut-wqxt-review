@@ -1192,7 +1192,10 @@ async function ensureTranscript(job) {
     const ids = await resolveLessonIds(course, lesson);   // 没有回放/已下架 → null
     if (!ids) return;
     const r = createReplayJob(ids);
-    if (r.skipped) return;
+    if (r.skipped) {
+      if (r.reason === 'no-audio') job.log.push('该课次回放没有音轨（学校只录了画面），跳过转写');
+      return;
+    }
     job.log.push(`缺少讲稿，先转写（课次有回放）…`);
     job.progress.current = '转写讲稿中…';
     emit(job);
