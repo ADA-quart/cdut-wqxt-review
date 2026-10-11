@@ -23,6 +23,7 @@ import { ensurePageTimes, narrationByPage, readTranscript } from './pages.mjs';
 import { checkLogin, pageTimesByTitle, resolveLessonIds, resolveLessonIdsMany } from './wqxt.mjs';
 import { mergeNoteDuplicates } from './notemerge.mjs';
 import { resolveFigureRefs } from './figurerefs.mjs';
+import { attachTeacherQuotes } from './talkquotes.mjs';
 import { createReplayJob, getReplayJob, replayEvents } from './replay.mjs';
 
 export const events = new EventEmitter();
@@ -1147,7 +1148,7 @@ async function runNoteVision(job) {
   }
   const head = `# ${lessonName} · 深度复习笔记
 
-> 由 AI 通读课件截图与课堂讲解后整理：带角标的条目可跳到课件对应页核对，💭 是讲解与补充（AI 生成，注意甄别），折叠框里是习题参考答案（先自己想再点开）。
+> 由 AI 通读课件截图与课堂讲解后整理：带角标的条目可跳到课件对应页核对，💭 是讲解与补充（AI 生成，注意甄别），🎙 折叠块里是该小节的老师讲解原话（语音转写，可能有同音错字），折叠框里是习题参考答案（先自己想再点开）。
 
 ${front}
 
@@ -1159,7 +1160,10 @@ ${front}
   // 合并 PPT 分步动画造成的近似条目（同小节内、角标取并集），避免「应用包括…/应用之一…」这类重复
   const mergeRes = mergeNoteDuplicates(figFix.text, lessonName);
   if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
-  fs.writeFileSync(notePath, head + mergeRes.text + '\n', 'utf8');
+  // 每个小节后面附折叠的「🎙 老师讲解」原话（只附有讲解的页，幂等）
+  const talkRes = attachTeacherQuotes(mergeRes.text, { course: ctx.course, lesson: lessonName });
+  if (talkRes.sections) job.log.push(`老师讲解附注：${talkRes.sections} 个小节、共 ${talkRes.pages} 页原话（折叠）`);
+  fs.writeFileSync(notePath, head + talkRes.text + '\n', 'utf8');
 
   // 同步摘要块到原文顶部（与文本链路一致，便于复习页顶部显示重点）
   try {
@@ -1636,7 +1640,7 @@ ${p.text}`).join('\n\n').slice(0, 12000);
   const { front, must } = splitDigest(digest);
   const head = `# ${lessonName} · 深度复习笔记
 
-> 由 AI 通读课件后整理：带角标的条目来自课件原文（点角标可跳到对应页核对），💭 是讲解与补充（AI 生成，注意甄别），折叠框里是习题参考答案（先自己想再点开）。
+> 由 AI 通读课件后整理：带角标的条目来自课件原文（点角标可跳到对应页核对），💭 是讲解与补充（AI 生成，注意甄别），🎙 折叠块里是该小节的老师讲解原话（语音转写，可能有同音错字），折叠框里是习题参考答案（先自己想再点开）。
 
 ${front}
 
@@ -1657,7 +1661,9 @@ ${front}
   // 同视觉链路：落盘前合并 PPT 分步动画造成的近似条目
   const mergeRes = mergeNoteDuplicates(figFix.text, lessonName);
   if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
-  fs.writeFileSync(notePath, head + mergeRes.text + '\n', 'utf8');
+  const talkRes = attachTeacherQuotes(mergeRes.text, { course: ctx.course, lesson: lessonName });
+  if (talkRes.sections) job.log.push(`老师讲解附注：${talkRes.sections} 个小节、共 ${talkRes.pages} 页原话（折叠）`);
+  fs.writeFileSync(notePath, head + talkRes.text + '\n', 'utf8');
 
   // 把「本课脉络 + 课末必记」同步回原文 md 顶部（upsert llm-summary 块），两处重点保持一致
   try {
