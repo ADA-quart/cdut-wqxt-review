@@ -22,6 +22,7 @@ import { findMath, findBrokenMath, mathError, applyMathFixes } from './mdmath.mj
 import { ensurePageTimes, narrationByPage, readTranscript } from './pages.mjs';
 import { checkLogin, pageTimesByTitle, resolveLessonIds, resolveLessonIdsMany } from './wqxt.mjs';
 import { mergeNoteDuplicates } from './notemerge.mjs';
+import { resolveFigureRefs } from './figurerefs.mjs';
 import { createReplayJob, getReplayJob, replayEvents } from './replay.mjs';
 
 export const events = new EventEmitter();
@@ -1020,7 +1021,8 @@ async function runNoteVision(job) {
 4) 整理稿里标了【题目】的：**每道题都要**先给题干，再跟 <details><summary>先自己想，点开看答案</summary>…</details>，
    折叠里必须有三段：① 思路（考什么、为什么用这个公式）② 计算（完整代入与结果）③ 易错点与自查；
 5) 整理稿里标了【通知】的，用一个独立小节原样收进来（数字、日期、地点不许改写）；
-6) 整理稿里标了【图】的，在相关要点下贴出来（原样保留路径）；
+6) 整理稿里标了【图】的：把它转成一张 Markdown 图片（感叹号+方括号，里面写「第 N 页图」；圆括号里逐字照抄原路径），放在该小节相关要点下面
+   （路径原样照抄、同一页只贴一次、纯装饰图不要贴）；**不要保留「【图】」字样、不要只写路径**；
 7) 公式用 LaTeX；不要代码块、不要前言；不要编造整理稿之外的内容。
 直接输出正文（从 ### 开始），不要写全课总结（后面统一写）。`,
       },
@@ -1137,6 +1139,12 @@ async function runNoteVision(job) {
     ctx.course,
   );
   if (body.dropped) job.log.push(`丢掉 ${body.dropped} 个指向不存在文件的图片引用`);
+  // 「【图】路径」是整理稿的标记，模型常把它原样贴进成稿（复习页/Obsidian 里成死引用）——
+  // 兜底转成真正的 Markdown 图片；解析不到的直接删
+  const figFix = resolveFigureRefs(body.out, { course: ctx.course });
+  if (figFix.converted || figFix.dropped) {
+    job.log.push(`图片引用：${figFix.converted} 张【图】转成可显示图片${figFix.dropped ? `，清掉 ${figFix.dropped} 条无效引用` : ''}`);
+  }
   const head = `# ${lessonName} · 深度复习笔记
 
 > 由 AI 通读课件截图与课堂讲解后整理：带角标的条目可跳到课件对应页核对，💭 是讲解与补充（AI 生成，注意甄别），折叠框里是习题参考答案（先自己想再点开）。
@@ -1149,7 +1157,7 @@ ${front}
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
   // 合并 PPT 分步动画造成的近似条目（同小节内、角标取并集），避免「应用包括…/应用之一…」这类重复
-  const mergeRes = mergeNoteDuplicates(body.out, lessonName);
+  const mergeRes = mergeNoteDuplicates(figFix.text, lessonName);
   if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
   fs.writeFileSync(notePath, head + mergeRes.text + '\n', 'utf8');
 
@@ -1638,12 +1646,16 @@ ${front}
   if (body !== withMust.trim()) job.log.push('已清掉正文里的空小节 / 占位说明');
   const imgFix = dropBrokenImages(body, ctx.course);
   if (imgFix.dropped) job.log.push(`丢掉 ${imgFix.dropped} 个指向不存在文件的图片引用`);
+  const figFix = resolveFigureRefs(imgFix.out, { course: ctx.course });
+  if (figFix.converted || figFix.dropped) {
+    job.log.push(`图片引用：${figFix.converted} 张【图】转成可显示图片${figFix.dropped ? `，清掉 ${figFix.dropped} 条无效引用` : ''}`);
+  }
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
   if (fs.existsSync(notePath)) {
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
   // 同视觉链路：落盘前合并 PPT 分步动画造成的近似条目
-  const mergeRes = mergeNoteDuplicates(imgFix.out, lessonName);
+  const mergeRes = mergeNoteDuplicates(figFix.text, lessonName);
   if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
   fs.writeFileSync(notePath, head + mergeRes.text + '\n', 'utf8');
 
@@ -1857,8 +1869,10 @@ async function runAudit(job) {
     const talkPages = new Map();
     for (const n of cited) if (narration.get(n)) talkPages.set(n, '');
     for (const n of cited) for (const m of [n - 1, n + 1]) if (narration.get(m) && !talkPages.has(m)) talkPages.set(m, '相邻页');
+    // 切片上限：引用页给足 2000 字（实测关键句在 1186~1628 字处，1000 字截会把对的判成「不支持」）；
+    // 相邻页 1500 字（实测 1294 字的支持句正好在邻居窗里，1200 还差点）
     const talk = [...talkPages.entries()].slice(0, 4)
-      .map(([n, tag]) => `【第 ${n} 页老师讲解·语音转写${tag ? `（${tag}）` : ''}】\n${String(narration.get(n)).slice(0, 1000)}`)
+      .map(([n, tag]) => `【第 ${n} 页老师讲解·语音转写${tag ? `（${tag}）` : ''}】\n${String(narration.get(n)).slice(0, tag ? 1500 : 2000)}`)
       .join('\n\n');
     // 「读不出文字 + 没有讲解」的页：文本上无从核对，附上截图（最多 2 张，只有这类页花图片 token）
     const blindImgs = cited
@@ -1885,6 +1899,7 @@ async function runAudit(job) {
 **只要其中之一支持就算被支持**；两者都不支持才是不支持。讲解里的错字不算「不符」，按语义判断即可。
 标注「（相邻页）」的讲解只是参考——老师跨页讲同一个点很常见，相邻页讲解支持该条时按支持判定。
 如果材料里附了【第 N 页课件截图】：该页以截图为准（可用它核对图表、公式、纯图页）；依据截图能确认的按 ok 或 partial 判，截图也看不清的判 figure。
+条目里的专有名词（书名、地名、井名、人名、术语）只要已出现在材料中，就按 ok 或 partial 判定；不要因为该页是图片页就保守地判 figure——figure 只用于「确实必须看图才能确认」的条目，而且也要给出 reason。
 判定等级（只能四选一）：
 - ok：课件原文或老师讲解完全支持（允许同义改写；数字、公式、术语一致）
 - partial：部分支持——有材料里没有的细节、过度推测、或丢了关键限定条件
@@ -1909,6 +1924,7 @@ async function runAudit(job) {
         const r = by.get(k + 1) || {};
         it.verdict = ['ok', 'partial', 'unsupported', 'figure'].includes(r.verdict) ? r.verdict : 'figure';
         it.reason = String(r.reason || '').slice(0, 60);
+        if (!it.reason) it.reason = by.has(k + 1) ? '（模型没写理由）' : '模型漏判本条，建议人工看一眼';
         it.fix = typeof r.fix === 'string' ? r.fix.trim().slice(0, 600) : '';
         if (blindOnly && !blindImgs.length) {
           it.fix = '';
