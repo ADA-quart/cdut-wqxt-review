@@ -537,6 +537,23 @@
   // ---------- 导入 zip ----------
   var BIN_RE = /\.(jpe?g|png|webp|gif|bmp|pdf|woff2?|ttf|otf|ico)$/i;
 
+  // 课次名 → 辅助产物（整理稿 / 各版本备份 / 讲稿等）判断。
+  // 旧版电脑端导出把同节课的中间产物当成独立"课次"写进了 manifest（如 "…第3-4节.note.work.vision"），
+  // 导入后首页课次列表与复习页「下一节」会走到这些假课次上。电脑端已修；这里双层兜底：
+  // 导入时不再收录、读取时再过滤一遍（已导入的脏目录也会自动干净，无需重装重导）。
+  var AUX_LESSON_NAME = /\.(note|note\..+|note-backup.*|audit|points|ocr-backup|math-backup|trans)$/;
+  function isAuxLessonName(name) { return AUX_LESSON_NAME.test(String(name || '')); }
+  function cleanCatalog(cat) {
+    if (!cat || !cat.courses) return cat;
+    return Object.assign({}, cat, {
+      courses: cat.courses.map(function (c) {
+        return Object.assign({}, c, {
+          lessons: (c.lessons || []).filter(function (l) { return !isAuxLessonName(l && l.name); }),
+        });
+      }),
+    });
+  }
+
   async function importZip(arrayBuffer, pkgName) {
     var zip = await JSZip.loadAsync(arrayBuffer);
     var entries = Object.keys(zip.files).map(function (k) { return zip.files[k]; }).filter(function (e) { return !e.dir; });
@@ -575,6 +592,7 @@
         var pc = catalog.courses.find(function (x) { return x.name === c.name; });
         if (!pc) { pc = { name: c.name, lessons: [] }; catalog.courses.push(pc); }
         (c.lessons || []).forEach(function (l) {
+          if (isAuxLessonName(l && l.name)) return;   // 中间产物不算课次
           var ex = pc.lessons.find(function (x) { return x.name === l.name; });
           if (!ex) {
             ex = { name: l.name, pages: 0, note: false, images: 0 };
@@ -842,7 +860,7 @@
 
       // 课次树（课次切换下拉）
       if (p === '/api/courses-tree') {
-        var cat = await getMeta('catalog');
+        var cat = cleanCatalog(await getMeta('catalog'));
         var tree = ((cat && cat.courses) || []).map(function (c) {
           return { name: c.name, lessons: (c.lessons || []).map(function (l) { return l.name; }) };
         });
@@ -939,7 +957,7 @@
     importZip: importZip,
     openAiSettings: showAiSettings,
     aiConfigured: function () { return !!getAiConfig(); },
-    getCatalog: function () { return getMeta('catalog'); },
+    getCatalog: function () { return getMeta('catalog').then(cleanCatalog); },
     getMeta: getMeta,
     listFiles: listFiles,
     clearAll: async function () {
