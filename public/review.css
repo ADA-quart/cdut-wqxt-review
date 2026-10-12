@@ -688,6 +688,7 @@ li.audit-figure { border-left: 3px solid #4091e6; background: rgba(64, 145, 230,
 .audit-item-text { color: var(--ink-2); line-height: 1.6; }
 .audit-item-reason { color: var(--warn); margin-top: 4px; font-size: 12px; }
 .audit-note { font-size: 12px; margin-top: 10px; }
+.audit-legend { font-size: 12px; line-height: 1.9; margin: 2px 0 10px; padding: 8px 10px; background: var(--bg-soft, rgba(127,127,127,.06)); border-radius: 8px; }
 
 /* ---------- 笔记多色标记（荧光笔） ---------- */
 #mdContent li { position: relative; }
