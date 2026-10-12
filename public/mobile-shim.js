@@ -26,9 +26,10 @@
       + '.qz-sheet-head{padding:12px 16px;font-weight:600;border-bottom:1px solid var(--line,#e3e6ea);display:flex;justify-content:space-between;align-items:center;gap:10px}'
       + '.qz-sheet-body{padding:14px 16px;overflow:auto;font-size:13.5px;line-height:1.7;word-break:break-all}'
       + '.qz-sheet-body pre{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.7;margin:0}'
-      + '.qz-sheet-acts{padding:10px 16px;border-top:1px solid var(--line,#e3e6ea);display:flex;justify-content:flex-end;gap:8px}'
+      + '.qz-sheet-acts{padding:10px 16px;border-top:1px solid var(--line,#e3e6ea);display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}'
       + '.qz-sheet .btn{border:1px solid var(--line,#d8dce1);background:var(--panel,#fff);color:var(--ink,#222);border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer}'
-      + '.qz-sheet .btn.primary{background:var(--brand,#2f6bff);border-color:var(--brand,#2f6bff);color:#fff}';
+      + '.qz-sheet .btn.primary{background:var(--brand,#2f6bff);border-color:var(--brand,#2f6bff);color:#fff}'
+      + '.qz-sheet .btn.danger{background:#b3261e;border-color:#b3261e;color:#fff}';
     var st = document.createElement('style');
     st.id = 'qzSheetStyle';
     st.textContent = css;
@@ -63,7 +64,7 @@
     mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
     (actions || []).forEach(function (a) {
       var b = document.createElement('button');
-      b.className = 'btn' + (a.primary ? ' primary' : '');
+      b.className = 'btn' + (a.primary ? ' primary' : '') + (a.danger ? ' danger' : '');
       b.textContent = a.text;
       b.onclick = function () { a.onClick ? a.onClick(close) : close(); };
       acts.appendChild(b);
@@ -659,6 +660,121 @@
     },
   };
 
+  // ---------- 数据管理（删除课程 / 占用统计 / 清空全部） ----------
+  // 存储前缀约定（与电脑端导出的包结构一致）：
+  //   课程内容：notes/<课程>/（原文、笔记、标记）、images/<课程>/（课件图）
+  //   学习记录：progress/<课程>/、chats/<课程>/、cards/<课程>/
+  // 首页「删除课程」两种口径：
+  //   仅删课件与笔记 = 删内容前缀，学习记录保留（重新导入新版内容包后接着用）
+  //   全部删除       = 内容 + 学习记录，一并清掉
+  function deletePrefix(prefix) {
+    return openDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction('files', 'readwrite');
+        var st = tx.objectStore('files');
+        var range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+        var removed = 0;
+        var bytes = 0;
+        var req = st.openCursor(range);
+        req.onsuccess = function () {
+          var cur = req.result;
+          if (!cur) return;
+          removed++;
+          bytes += Number(cur.value && cur.value.size) || 0;
+          cur.delete();
+          cur.continue();
+        };
+        tx.oncomplete = function () { resolve({ removed: removed, bytes: bytes }); };
+        tx.onerror = function () { reject(tx.error || new Error('删除失败')); };
+        tx.onabort = function () { reject(tx.error || new Error('删除中止')); };
+      });
+    });
+  }
+
+  async function deletePrefixes(prefixes) {
+    var total = { removed: 0, bytes: 0 };
+    for (var i = 0; i < prefixes.length; i++) {
+      var r = await deletePrefix(prefixes[i]);
+      total.removed += r.removed;
+      total.bytes += r.bytes;
+    }
+    return total;
+  }
+
+  // 释放已删除课程占用的 blob URL（内存缓存），避免删除后继续持有图片
+  function revokeBlobsIf(pred) {
+    blobCache.forEach(function (url, key) {
+      var idx = key.indexOf(':');
+      var p = idx >= 0 ? key.slice(idx + 1) : key;
+      if (pred(p)) {
+        try { URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ }
+        blobCache.delete(key);
+      }
+    });
+  }
+
+  function revokeCourseBlobs(name) {
+    var hit = function (p) { return p === name || p.indexOf(name + '/') === 0; };
+    revokeBlobsIf(hit);
+    preloaded.forEach(function (d) { if (hit(d)) preloaded.delete(d); });
+  }
+
+  async function deleteCourse(courseName, opts) {
+    var name = String(courseName || '').trim();
+    if (!name) throw new Error('课程名为空');
+    var prefixes = ['notes/' + name + '/', 'images/' + name + '/'];
+    if (opts && opts.all) {
+      prefixes = prefixes.concat(['cards/' + name + '/', 'chats/' + name + '/', 'progress/' + name + '/']);
+    }
+    var r = await deletePrefixes(prefixes);
+    var catalog = (await getMeta('catalog')) || { courses: [] };
+    var before = (catalog.courses || []).length;
+    catalog.courses = (catalog.courses || []).filter(function (c) { return !c || c.name !== name; });
+    if (catalog.courses.length !== before) await putMeta('catalog', catalog);
+    await putMeta('library-updated', Date.now());
+    revokeCourseBlobs(name);
+    return r;
+  }
+
+  // 本机占用统计：总文件数 / 总字节；并按课程归组（路径第二段）
+  async function storageStats() {
+    var db = await openDB();
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction('files', 'readonly');
+      var st = tx.objectStore('files');
+      var out = { files: 0, bytes: 0, courses: {} };
+      var req = st.openCursor();
+      req.onsuccess = function () {
+        var cur = req.result;
+        if (!cur) return;
+        var rec = cur.value || {};
+        var size = Number(rec.size) || 0;
+        out.files++;
+        out.bytes += size;
+        var m = String(rec.path || '').match(/^(?:notes|images|cards|chats|progress)\/([^/]+)\//);
+        if (m) {
+          var c = out.courses[m[1]] || (out.courses[m[1]] = { files: 0, bytes: 0 });
+          c.files++;
+          c.bytes += size;
+        }
+        cur.continue();
+      };
+      tx.oncomplete = function () { resolve(out); };
+      tx.onerror = function () { reject(tx.error || new Error('统计失败')); };
+      tx.onabort = function () { reject(tx.error || new Error('统计中止')); };
+    });
+  }
+
+  async function clearAllData() {
+    var db = await openDB();
+    var tx = db.transaction(['files', 'meta'], 'readwrite');
+    tx.objectStore('files').clear();
+    tx.objectStore('meta').clear();
+    await done(tx);
+    revokeBlobsIf(function () { return true; });
+    preloaded.clear();
+  }
+
   // ---------- 工具 ----------
   function json(obj, status) {
     return new Response(JSON.stringify(obj), {
@@ -960,12 +1076,9 @@
     getCatalog: function () { return getMeta('catalog').then(cleanCatalog); },
     getMeta: getMeta,
     listFiles: listFiles,
-    clearAll: async function () {
-      var db = await openDB();
-      var tx = db.transaction(['files', 'meta'], 'readwrite');
-      tx.objectStore('files').clear();
-      tx.objectStore('meta').clear();
-      await done(tx);
-    },
+    deleteCourse: deleteCourse,   // (课程名, {all:true}) → 删除课程内容，默认保留学习记录
+    storageStats: storageStats,   // → {files, bytes, courses:{课程名:{files,bytes}}}
+    sheet: showSheet,             // 通用底部面板（首页确认弹层复用同一套样式）
+    clearAll: clearAllData,       // 清空全部数据（含学习记录；localStorage 里的 AI 设置保留）
   };
 })();
