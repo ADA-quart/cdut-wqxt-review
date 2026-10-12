@@ -22,7 +22,7 @@ import {
 } from './mdconvert.mjs';
 import { publicConfig, saveConfig, loadConfig, loadLogin, saveLogin } from './config.mjs';
 import { streamChat } from './chat.mjs';
-import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons } from './kb.mjs';
+import { searchKb, buildGraph, listTags, getPreview, listCourses, listLessons, isAuxLessonMd } from './kb.mjs';
 import { autoParallel } from './gpu.mjs';
 import {
   createReplayJob, listReplayJobs, getReplayJob, cancelReplayJob, replayEvents,
@@ -812,7 +812,7 @@ function readTree(dir, depth) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   // 辅助文件不上树（复核页/去重决策/纠错备份/卡片数据），避免看着一头雾水
-  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math|note)-backup\.md|note\.work(\.vision)?\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json|progress\.json|trans\.json|pages\.json)$/i;
+  const HIDDEN = /\.(dedup\.(json|html)|(ocr|math)-backup\.md|note-backup(\.\w+)?\.md|note\.work(\.vision)?\.md|note\.merge-backup\.md|cards\.json|note\.marks\.json|(audit|points)\.(json|md)|chat\.json|progress\.json|trans\.(json|md)|pages\.json)$/i;
   return entries
     .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_')
       && !(e.isDirectory() && e.name.endsWith('_assets'))   // 转 MD 的图形素材目录，不算课次
@@ -1032,6 +1032,7 @@ app.get('/api/backlinks', asyncRoute(async (req, res) => {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) { walk(full); continue; }
       if (!e.name.toLowerCase().endsWith('.md')) continue;
+      if (isAuxLessonMd(e.name)) continue;   // 笔记/整理稿/备份/讲稿不参与反链
       if (e.name === `${target}.md`) continue;
       scanned++;
       let text = '';
@@ -1228,7 +1229,7 @@ app.post('/api/index-note', asyncRoute(async (req, res) => {
 
   const lessons = fs.readdirSync(notesCourseDir, { withFileTypes: true })
     .filter((e) => e.isFile() && e.name.endsWith('.md')
-      && e.name !== `${courseName}.md` && !e.name.includes('.ocr-backup.'))
+      && e.name !== `${courseName}.md` && !isAuxLessonMd(e.name))
     .map((e) => e.name.replace(/\.md$/i, ''))
     .sort((a, b) => a.localeCompare(b, 'zh'));
   if (lessons.length === 0) {

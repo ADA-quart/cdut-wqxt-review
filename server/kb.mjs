@@ -24,15 +24,21 @@ export function listCourses() {
   return [...names].sort((a, b) => a.localeCompare(b, 'zh'));
 }
 
-/** 辅助文件（笔记/审计/知识点/备份）不算课次 */
-const AUX_LESSON_MD = /\.(note|note\.work|audit|points|ocr-backup|math-backup|note-backup)\.md$/i;
+/**
+ * 辅助 md（不算课次）：笔记 / 整理稿 / 各版本备份 / 审计 / 知识点 / 讲稿。
+ * 踩过的坑（2026-10-12）：旧正则漏了 `.note.work.vision.md`（整理稿）和 `.note-backup.<后缀>.md`
+ * 这些新备份、还有 `.trans.md`——复习页「下一节」会走到这些假课次上（测井一门课被列成 65 个"课次"）。
+ */
+export function isAuxLessonMd(name) {
+  return /\.(note|note\..+|note-backup.*|audit|points|ocr-backup|math-backup|trans)\.md$/i.test(String(name || ''));
+}
 
 /** 某课程下已转 MD 的课次（不含课程索引自身与辅助文件） */
 export function listLessons(course) {
   const dir = path.join(NOTES_DIR, course);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith('.md') && !AUX_LESSON_MD.test(e.name))
+    .filter((e) => e.isFile() && e.name.endsWith('.md') && !isAuxLessonMd(e.name))
     .map((e) => e.name.replace(/\.md$/i, ''))
     .filter((name) => name !== course)
     .sort((a, b) => a.localeCompare(b, 'zh'));
