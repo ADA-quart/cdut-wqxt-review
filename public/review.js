@@ -188,9 +188,13 @@ function transformWikilinks(root) {
       const a = document.createElement('a');
       const target = m[1].trim();
       // 指向 PPT 页码的链接渲染成小角标（笔记里的引用）
-      a.className = /\.pdf#page=\d+/i.test(target) ? 'wikilink pagecite' : 'wikilink';
+      const isPage = /\.pdf#page=\d+/i.test(target);
+      a.className = isPage ? 'wikilink pagecite' : 'wikilink';
       a.dataset.target = target;
-      a.textContent = (m[2] ?? m[1]).trim();
+      // 没写别名（[[x.pdf#page=N]]）时用页码当显示文本，别把整串路径显示出来（实测 287 处）
+      let label = m[2];
+      if (label === undefined && isPage) label = (/\.pdf#page=(\d+)/i.exec(target) || [])[1];
+      a.textContent = (label ?? m[1]).trim();
       a.href = '#';
       frag.appendChild(a);
       last = re.lastIndex;

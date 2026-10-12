@@ -24,6 +24,8 @@ import { checkLogin, pageTimesByTitle, resolveLessonIds, resolveLessonIdsMany } 
 import { mergeNoteDuplicates } from './notemerge.mjs';
 import { resolveFigureRefs } from './figurerefs.mjs';
 import { attachTeacherQuotes } from './talkquotes.mjs';
+import { normalizePageRefs } from './pagerefs.mjs';
+import { trimUnbalancedMath } from './mathguard.mjs';
 import { createReplayJob, getReplayJob, replayEvents } from './replay.mjs';
 
 export const events = new EventEmitter();
@@ -1024,7 +1026,7 @@ async function runNoteVision(job) {
 5) 整理稿里标了【通知】的，用一个独立小节原样收进来（数字、日期、地点不许改写）；
 6) 整理稿里标了【图】的：把它转成一张 Markdown 图片（感叹号+方括号，里面写「第 N 页图」；圆括号里逐字照抄原路径），放在该小节相关要点下面
    （路径原样照抄、同一页只贴一次、纯装饰图不要贴）；**不要保留「【图】」字样、不要只写路径**；
-7) 公式用 LaTeX；不要代码块、不要前言；不要编造整理稿之外的内容。
+7) 公式必须用 LaTeX 且用 $…$ 包裹（**不允许裸写 _ 或 ^**，如 S_w^n 要写 $S_w^n$）；不要代码块、不要前言；不要编造整理稿之外的内容。
 直接输出正文（从 ### 开始），不要写全课总结（后面统一写）。`,
       },
       { role: 'user', content: work.slice(0, 24000) },
@@ -1146,6 +1148,8 @@ async function runNoteVision(job) {
   if (figFix.converted || figFix.dropped) {
     job.log.push(`图片引用：${figFix.converted} 张【图】转成可显示图片${figFix.dropped ? `，清掉 ${figFix.dropped} 条无效引用` : ''}`);
   }
+  const refFix = normalizePageRefs(figFix.text);
+  if (refFix.fixed) job.log.push(`角标规整：${refFix.fixed} 处缺别名的页码引用补上显示文本`);
   const head = `# ${lessonName} · 深度复习笔记
 
 > 由 AI 通读课件截图与课堂讲解后整理：带角标的条目可跳到课件对应页核对，💭 是讲解与补充（AI 生成，注意甄别），🎙 折叠块里是该小节的老师讲解原话（语音转写，可能有同音错字），折叠框里是习题参考答案（先自己想再点开）。
@@ -1158,12 +1162,14 @@ ${front}
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
   // 合并 PPT 分步动画造成的近似条目（同小节内、角标取并集），避免「应用包括…/应用之一…」这类重复
-  const mergeRes = mergeNoteDuplicates(figFix.text, lessonName);
+  const mergeRes = mergeNoteDuplicates(refFix.text, lessonName);
   if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
   // 每个小节后面附折叠的「🎙 老师讲解」原话（只附有讲解的页，幂等）
   const talkRes = attachTeacherQuotes(mergeRes.text, { course: ctx.course, lesson: lessonName });
   if (talkRes.sections) job.log.push(`老师讲解附注：${talkRes.sections} 个小节、共 ${talkRes.pages} 页原话（折叠）`);
-  fs.writeFileSync(notePath, head + talkRes.text + '\n', 'utf8');
+  const safeNote = trimUnbalancedMath(talkRes.text);
+  if (safeNote.trimmed) job.log.push(`公式护栏：清掉 ${safeNote.trimmed} 处没写完的公式尾巴（模型输出截断）`);
+  fs.writeFileSync(notePath, head + safeNote.text + '\n', 'utf8');
 
   // 同步摘要块到原文顶部（与文本链路一致，便于复习页顶部显示重点）
   try {
@@ -1526,7 +1532,7 @@ async function runNote(job) {
 4) 整理稿里标了【题目】的，逐题处理：先原样给出题干和选项，然后紧跟 <details><summary>先自己想，点开看答案</summary>参考答案（AI 推断）+ 解析（为什么选它、其他选项错在哪）</details>；**每道【题目】都必须有一个 details 块**；
 5) 整理稿里标了【通知】的（考试时间/地点/题型、作业截止、提交要求等）：**用一个独立小节收进来，
    数字、日期、地点照原文写，不要改写**——这类信息复习时最要紧，漏了就白搭；
-6) 公式用 LaTeX（$…$）；不要代码块、不要前言；不要编造整理稿之外的知识。
+6) 公式必须用 LaTeX 且用 $…$ 包裹（**不允许裸写 _ 或 ^**）；不要代码块、不要前言；不要编造整理稿之外的知识。
 7) 整理稿里若残留明显听错的词（讲不通的术语）：换成课件里的正确说法，找不到就别写，不要照搬。
 8) **不要输出空小节，也不要在笔记里解释材料缺什么**：「本材料中未出现…故无…」这类说明是给系统的，
    不是给复习的人看的——没有的内容直接不写。
@@ -1654,16 +1660,20 @@ ${front}
   if (figFix.converted || figFix.dropped) {
     job.log.push(`图片引用：${figFix.converted} 张【图】转成可显示图片${figFix.dropped ? `，清掉 ${figFix.dropped} 条无效引用` : ''}`);
   }
+  const refFix = normalizePageRefs(figFix.text);
+  if (refFix.fixed) job.log.push(`角标规整：${refFix.fixed} 处缺别名的页码引用补上显示文本`);
   const notePath = mdPath.replace(/\.md$/i, '.note.md');
   if (fs.existsSync(notePath)) {
     try { fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.md')); } catch { /* 忽略 */ }
   }
   // 同视觉链路：落盘前合并 PPT 分步动画造成的近似条目
-  const mergeRes = mergeNoteDuplicates(figFix.text, lessonName);
+  const mergeRes = mergeNoteDuplicates(refFix.text, lessonName);
   if (mergeRes.groups) job.log.push(`去重合并：${mergeRes.groups} 组近似条目并成一条（删 ${mergeRes.removed} 条，页码角标取并集）`);
   const talkRes = attachTeacherQuotes(mergeRes.text, { course: ctx.course, lesson: lessonName });
   if (talkRes.sections) job.log.push(`老师讲解附注：${talkRes.sections} 个小节、共 ${talkRes.pages} 页原话（折叠）`);
-  fs.writeFileSync(notePath, head + talkRes.text + '\n', 'utf8');
+  const safeNote = trimUnbalancedMath(talkRes.text);
+  if (safeNote.trimmed) job.log.push(`公式护栏：清掉 ${safeNote.trimmed} 处没写完的公式尾巴（模型输出截断）`);
+  fs.writeFileSync(notePath, head + safeNote.text + '\n', 'utf8');
 
   // 把「本课脉络 + 课末必记」同步回原文 md 顶部（upsert llm-summary 块），两处重点保持一致
   try {
@@ -1750,7 +1760,9 @@ async function supplementMissingPoints(job, { notePath, noteText, lessonName, co
   let next = noteText;
   const at = next.indexOf(MARK);
   if (at >= 0) next = next.slice(0, at).trimEnd();
-  fs.writeFileSync(notePath, `${next}\n\n${section}\n`, 'utf8');
+  const safe = trimUnbalancedMath(`${next}\n\n${section}\n`);
+  if (safe.trimmed) job.log.push(`公式护栏：清掉 ${safe.trimmed} 处没写完的公式尾巴（模型输出截断）`);
+  fs.writeFileSync(notePath, safe.text, 'utf8');
   job.log.push(`知识点补全：为 ${targets.length} 条缺失/不完整知识点补写了要点（${section.length} 字）`);
 
   // 小核对：补写后这些点算覆盖了吗（只核对补写的这一批，成本很小）
@@ -2154,7 +2166,9 @@ async function runAudit(job) {
       const bak = mdPath.replace(/\.md$/i, '.note-backup.md');
       if (!fs.existsSync(bak)) fs.copyFileSync(notePath, bak);
       fs.copyFileSync(notePath, mdPath.replace(/\.md$/i, '.note-backup.audit.md'));
-      fs.writeFileSync(notePath, noteText2, 'utf8');
+      const safe2 = trimUnbalancedMath(noteText2);
+      if (safe2.trimmed) job.log.push(`公式护栏：清掉 ${safe2.trimmed} 处没写完的公式尾巴（模型输出截断）`);
+      fs.writeFileSync(notePath, safe2.text, 'utf8');
     } catch (e) {
       job.log.push('修正落盘失败：' + String(e?.message || e).slice(0, 60));
     }
