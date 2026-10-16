@@ -79,6 +79,13 @@ function resolveMdAssets(root) {
     let src = img.getAttribute('src') || '';
     if (!src || /^([a-z][a-z0-9+.-]*:|\/\/|\/|#|data:)/i.test(src)) return;
     try { src = decodeURIComponent(src); } catch { /* 保持原样 */ }
+    const rel = (courseDir ? courseDir + '/' : '') + src.replace(/^\.\//, '');
+    // App 本地图书馆：必须换成 blob URL（<img> 不走 fetch 拦截），
+    // 笔记里的相对图片可能落在 notes/（_assets）或 images/（课件图）两个目录
+    if (window.QingquFiles) {
+      img.src = window.QingquFiles.assetUrl(rel);
+      return;
+    }
     img.src = mdBaseUrl + enc(src.replace(/^\.\//, ''));
   });
 }

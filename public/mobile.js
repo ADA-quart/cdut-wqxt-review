@@ -27,7 +27,8 @@
     }
     var cat = await window.QingquLocal.getCatalog();
     if (!cat || !cat.courses || !cat.courses.length) {
-      box.innerHTML = '<p class="empty">还没有内容。<br>在电脑端「设置 → 导出」里导出「内容包」，把 zip 传到平板上，点右上角「＋ 导入内容包」。</p>';
+      box.innerHTML = '<p class="empty">还没有内容。<br>在电脑端「设置 → 导出」里导出「内容包」，把 zip 传到平板上，点右上角「＋ 导入内容包」。' +
+        '<br><span style="color:var(--ink-3);font-size:12.5px">提示：App 数据存在本机，卸载或系统清理会丢失；电脑端导出的 zip 建议留作备份。</span></p>';
       return;
     }
     box.innerHTML = '';
@@ -165,6 +166,16 @@
       var st = await Q.storageStats();
       var names = Object.keys(st.courses).sort();
       sum.textContent = '共 ' + names.length + ' 门课程 · ' + st.files + ' 个文件 · 约 ' + fmtBytes(st.bytes);
+      var bits = [];
+      if (st.quota) bits.push('系统分配 ' + fmtBytes(st.usage || 0) + ' / ' + fmtBytes(st.quota));
+      if (st.persisted === 'granted') bits.push('存储保护：已开启');
+      else if (st.persisted === 'denied') bits.push('存储保护：未开启（磁盘紧张时系统可能清理数据，请保留电脑端导出的 zip）');
+      if (bits.length) {
+        var extra = document.createElement('p');
+        extra.style.cssText = 'margin:6px 0 0;color:var(--ink-3);font-size:12.5px';
+        extra.textContent = bits.join(' · ');
+        body.insertBefore(extra, note);
+      }
       names.forEach(function (n) {
         var row = document.createElement('div');
         row.className = 'dm-row';

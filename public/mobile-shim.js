@@ -470,16 +470,19 @@
 
   function openDB() {
     if (dbPromise) return dbPromise;
-    dbPromise = new Promise(function (resolve, reject) {
-      var req = indexedDB.open(DB_NAME, 1);
+    var p = new Promise(function (resolve, reject) {
+      var req;
+      try { req = indexedDB.open(DB_NAME, 1); } catch (e) { reject(e); return; }
       req.onupgradeneeded = function () {
         var db = req.result;
         if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'path' });
         if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
       };
       req.onsuccess = function () { resolve(req.result); };
-      req.onerror = function () { reject(req.error); };
+      req.onerror = function () { reject(req.error || new Error('IndexedDB 打开失败')); };
     });
+    // 失败不缓存，允许下次重试（WebView 偶发的打开失败不该让整个会话一直报错）
+    dbPromise = p.catch(function (e) { dbPromise = null; throw e; });
     return dbPromise;
   }
 
@@ -533,6 +536,7 @@
     var tx = db.transaction('meta', 'readwrite');
     tx.objectStore('meta').put({ key: key, value: value });
     await done(tx);
+    if (key === 'catalog') mirrorCatalog(value);
   }
 
   // ---------- 导入 zip ----------
@@ -553,6 +557,15 @@
         });
       }),
     });
+  }
+
+  // ---------- 目录镜像（防丢） ----------
+  // Android WebView 的 IndexedDB 属于 best-effort 存储：系统磁盘紧张或数据损坏时可能整库丢失，
+  // 表现出来就是「导入的课程全部消失」。目录（几 KB）额外写一份 localStorage 镜像，
+  // 丢了能自动恢复；文件仍在时还能直接按 files 存储重建目录。
+  var CATALOG_MIRROR_KEY = 'wqppt_catalog_mirror';
+  function mirrorCatalog(cat) {
+    try { localStorage.setItem(CATALOG_MIRROR_KEY, JSON.stringify(cat)); } catch (e) { /* 超限忽略 */ }
   }
 
   async function importZip(arrayBuffer, pkgName) {
@@ -587,7 +600,7 @@
     }
     // 合并目录（从 manifest.courses 构列表）
     if (manifest && Array.isArray(manifest.courses)) {
-      var catalog = (await getMeta('catalog')) || { courses: [], importedAt: 0, packages: 0 };
+      var catalog = (await getCatalog()) || { courses: [], importedAt: 0, packages: 0 };
       for (var ci = 0; ci < manifest.courses.length; ci++) {
         var c = manifest.courses[ci];
         var pc = catalog.courses.find(function (x) { return x.name === c.name; });
@@ -620,7 +633,9 @@
   var preloaded = new Set();
 
   function joinKey(kind, p) {
-    return kind + ':' + String(p || '').split('/').map(decodeURIComponent).join('/');
+    return kind + ':' + String(p || '').split('/').map(function (s) {
+      try { return decodeURIComponent(s); } catch (e) { return s; }
+    }).join('/');
   }
 
   async function preloadLesson(dir) {
@@ -658,6 +673,17 @@
       if (hit) return hit;
       return '/notes/' + String(p || '').split('/').map(encodeURIComponent).join('/');
     },
+    // md 正文里的相对图片：先按笔记目录（notes/<课程>/…，含 _assets）找 blob，
+    // 再按课件图目录（images/<课程>/<课次>/…）找——桌面端两个目录是同一个，笔记里写的是 <课次>/xxx.jpg。
+    // App 里 <img> 不经过 fetch 拦截，必须拿到 blob URL，否则一定 404。
+    assetUrl: function (p) {
+      var rel = String(p || '').split('/').map(function (s) {
+        try { return decodeURIComponent(s); } catch (e) { return s; }
+      }).join('/');
+      var hit = blobCache.get('notes:' + rel) || blobCache.get('files:' + rel);
+      if (hit) return hit;
+      return '/notes/' + String(p || '').split('/').map(encodeURIComponent).join('/');
+    },
   };
 
   // ---------- 数据管理（删除课程 / 占用统计 / 清空全部） ----------
@@ -667,6 +693,20 @@
   // 首页「删除课程」两种口径：
   //   仅删课件与笔记 = 删内容前缀，学习记录保留（重新导入新版内容包后接着用）
   //   全部删除       = 内容 + 学习记录，一并清掉
+
+  // 请求持久化存储：best-effort 存储（默认）在磁盘紧张时可能被系统整库清理；
+  // 授权后数据不会被自动驱逐。WebView 里可能给出 false/不可用，失败不影响功能。
+  var persistState = 'unknown';
+  (function requestPersist() {
+    try {
+      if (!navigator.storage || !navigator.storage.persist) { persistState = 'unsupported'; return; }
+      var p = navigator.storage.persisted ? navigator.storage.persisted() : Promise.resolve(false);
+      p.then(function (already) { return already ? true : navigator.storage.persist(); })
+        .then(function (ok) { persistState = ok ? 'granted' : 'denied'; })
+        .catch(function () { persistState = 'unknown'; });
+    } catch (e) { persistState = 'unknown'; }
+  })();
+
   function deletePrefix(prefix) {
     return openDB().then(function (db) {
       return new Promise(function (resolve, reject) {
@@ -739,30 +779,39 @@
   // 本机占用统计：总文件数 / 总字节；并按课程归组（路径第二段）
   async function storageStats() {
     var db = await openDB();
-    return new Promise(function (resolve, reject) {
+    var out = await new Promise(function (resolve, reject) {
       var tx = db.transaction('files', 'readonly');
       var st = tx.objectStore('files');
-      var out = { files: 0, bytes: 0, courses: {} };
+      var acc = { files: 0, bytes: 0, courses: {} };
       var req = st.openCursor();
       req.onsuccess = function () {
         var cur = req.result;
         if (!cur) return;
         var rec = cur.value || {};
         var size = Number(rec.size) || 0;
-        out.files++;
-        out.bytes += size;
+        acc.files++;
+        acc.bytes += size;
         var m = String(rec.path || '').match(/^(?:notes|images|cards|chats|progress)\/([^/]+)\//);
         if (m) {
-          var c = out.courses[m[1]] || (out.courses[m[1]] = { files: 0, bytes: 0 });
+          var c = acc.courses[m[1]] || (acc.courses[m[1]] = { files: 0, bytes: 0 });
           c.files++;
           c.bytes += size;
         }
         cur.continue();
       };
-      tx.oncomplete = function () { resolve(out); };
+      tx.oncomplete = function () { resolve(acc); };
       tx.onerror = function () { reject(tx.error || new Error('统计失败')); };
       tx.onabort = function () { reject(tx.error || new Error('统计中止')); };
     });
+    out.persisted = persistState;
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        var est = await navigator.storage.estimate();
+        out.usage = Number(est.usage) || 0;
+        out.quota = Number(est.quota) || 0;
+      }
+    } catch (e) { /* 忽略 */ }
+    return out;
   }
 
   async function clearAllData() {
@@ -771,8 +820,71 @@
     tx.objectStore('files').clear();
     tx.objectStore('meta').clear();
     await done(tx);
+    try { localStorage.removeItem(CATALOG_MIRROR_KEY); } catch (e) { /* 忽略 */ }
     revokeBlobsIf(function () { return true; });
     preloaded.clear();
+  }
+
+  // ---------- 目录自愈：catalog 丢了但文件还在时自动找回课程列表 ----------
+  // 1) localStorage 镜像（保留原 pages / note 标记）
+  // 2) 镜像也没有，就从 files 存储按路径重建（notes/、images/）
+  async function rebuildCatalog() {
+    var notes = await listFiles('notes/');
+    var images = await listFiles('images/');
+    if (!notes.length && !images.length) return null;
+    var map = new Map();
+    var touch = function (course, lesson) {
+      var c = map.get(course);
+      if (!c) { c = new Map(); map.set(course, c); }
+      var l = c.get(lesson);
+      if (!l) { l = { name: lesson, pages: 0, note: false, images: 0 }; c.set(lesson, l); }
+      return l;
+    };
+    notes.forEach(function (rec) {
+      var m = String(rec.path || '').match(/^notes\/([^/]+)\/(.+?)\.(note\.md|note\.pdf|md|pdf)$/);
+      if (!m || isAuxLessonName(m[2])) return;
+      if (m[2] === m[1]) return;   // 课程索引（<课程>/<课程>.md）不是课次
+      var l = touch(m[1], m[2]);
+      if (m[3] === 'note.md') l.note = true;
+      if (m[3] === 'md' && rec.text) l.pages = (rec.text.match(/<!-- page \d+:/g) || []).length;
+    });
+    images.forEach(function (rec) {
+      var m = String(rec.path || '').match(/^images\/([^/]+)\/([^/]+)\//);
+      if (!m || isAuxLessonName(m[2])) return;
+      touch(m[1], m[2]).images++;
+    });
+    if (!map.size) return null;
+    var courses = [];
+    map.forEach(function (lessons, name) {
+      var arr = [];
+      lessons.forEach(function (l) { arr.push(l); });
+      courses.push({ name: name, lessons: arr });
+    });
+    return { courses: courses, importedAt: Date.now(), packages: 0, rebuilt: true };
+  }
+
+  async function healCatalog() {
+    var hasContent = (await listFiles('notes/')).length > 0 || (await listFiles('images/')).length > 0;
+    if (!hasContent) return null;
+    var mirror = null;
+    try { mirror = JSON.parse(localStorage.getItem(CATALOG_MIRROR_KEY) || 'null'); } catch (e) { /* 忽略 */ }
+    var healed = (mirror && Array.isArray(mirror.courses) && mirror.courses.length)
+      ? mirror
+      : await rebuildCatalog();
+    if (!healed) return null;
+    await putMeta('catalog', healed);
+    await putMeta('library-updated', Date.now());
+    return healed;
+  }
+
+  async function getCatalog() {
+    var cat = await getMeta('catalog');
+    if (cat && Array.isArray(cat.courses) && cat.courses.length) return cleanCatalog(cat);
+    try {
+      var healed = await healCatalog();
+      if (healed) return cleanCatalog(healed);
+    } catch (e) { /* 自愈失败：按空处理 */ }
+    return cleanCatalog(cat || null);
   }
 
   // ---------- 工具 ----------
@@ -976,7 +1088,7 @@
 
       // 课次树（课次切换下拉）
       if (p === '/api/courses-tree') {
-        var cat = cleanCatalog(await getMeta('catalog'));
+        var cat = await getCatalog();
         var tree = ((cat && cat.courses) || []).map(function (c) {
           return { name: c.name, lessons: (c.lessons || []).map(function (l) { return l.name; }) };
         });
@@ -1043,6 +1155,8 @@
         var lessonDir = lessonDirOfNotePath(nrel);
         if (lessonDir) await preloadLesson(lessonDir);
         var nrec = await getFileRecord('notes/' + nrel);
+        // 笔记正文里的相对图片（<课次>/0048.jpg）实际存放在课件图目录（桌面端两目录合一）
+        if (!nrec) nrec = await getFileRecord('images/' + nrel);
         if (!nrec) return notFound();
         if (nrec.blob) return new Response(nrec.blob, { status: 200, headers: { 'Content-Type': nrec.blob.type || guessType(nrel) } });
         return new Response(nrec.text, { status: 200, headers: { 'Content-Type': guessType(nrel) } });
@@ -1073,7 +1187,7 @@
     importZip: importZip,
     openAiSettings: showAiSettings,
     aiConfigured: function () { return !!getAiConfig(); },
-    getCatalog: function () { return getMeta('catalog').then(cleanCatalog); },
+    getCatalog: getCatalog,       // 含目录自愈（镜像恢复 / 按 files 重建）
     getMeta: getMeta,
     listFiles: listFiles,
     deleteCourse: deleteCourse,   // (课程名, {all:true}) → 删除课程内容，默认保留学习记录
